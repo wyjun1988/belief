@@ -171,8 +171,11 @@ def main():
     print("== %s  (%s)" % (out["sequence"], out["depth_dir"]))
     print("  물체 노드 %d  에이전트 %d" % (out["n_objects"], out["n_agents"]))
     pe = out["position_err_m"]
-    print("  위치오차 중앙 %.3f m  p90 %.3f m  (정적 %.3f / 동적 %.3f)"
-          % (pe["median"], pe["p90"], pe["static_median"] or -1, pe["dynamic_median"] or -1))
+    _f = lambda v: "  -  " if v is None else "%.3f" % v      # noqa: E731
+    print("  위치오차 중앙 %s m  p90 %s m  (정적 %s / 동적 %s)"
+          % (_f(pe["median"]), _f(pe["p90"]), _f(pe["static_median"]), _f(pe["dynamic_median"])))
+    if pe["median"] is None:
+        print("     (SAM 노드는 GT 인스턴스와 1:1 대응이 없어 매칭 기반 지표가 정의되지 않는다)")
     cd = out["change_detection"]
     print("  변화감지  TP %d  FN %d  FP %d   recall %.2f  precision %.2f"
           % (cd["tp"], cd["fn"], cd["fp"], cd["recall"], cd["precision"]))
