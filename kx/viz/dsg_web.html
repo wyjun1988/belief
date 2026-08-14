@@ -1,0 +1,586 @@
+<meta charset="utf-8">
+<title>4D 씬그래프 — 바닥 도면에서 방까지</title>
+<style>
+:root{
+  --bg:#0c0f11; --panel:rgba(17,21,24,.88); --line:rgba(255,255,255,.11);
+  --ink:#e8ecea; --ink-2:#aab4b8; --muted:#7c878c; --acc:#61b2f2; --hl:#ff5566;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Pretendard","Noto Sans KR",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);overflow:hidden}
+#stage{position:fixed;inset:0}
+canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+canvas.drag{cursor:grabbing}
+.panel{position:fixed;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+#hud{top:16px;left:16px;padding:15px 17px;max-width:320px;display:flex;flex-direction:column;gap:11px}
+#hud h1{margin:0;font-size:15.5px;font-weight:700;letter-spacing:-.01em;line-height:1.35}
+#hud h1 button{all:unset;cursor:pointer;display:block}
+#hud.fold .sub,#hud.fold .kv{display:none}
+#hud .sub{font-size:12px;color:var(--ink-2);line-height:1.62}
+#hud .sub b{color:var(--ink)}
+.kv{display:flex;gap:8px 14px;flex-wrap:wrap;font-family:var(--mono);font-size:10.5px;color:var(--muted);letter-spacing:.05em}
+.kv b{color:var(--ink-2);font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:20px;border:1px solid var(--line);
+  background:rgba(255,255,255,.04);color:var(--ink-2);cursor:pointer;user-select:none;
+  transition:background .14s,color .14s}
+.chip:hover{background:rgba(255,255,255,.09)}
+.chip.on{background:rgba(255,255,255,.94);color:#11161a;border-color:transparent}
+#legend{bottom:16px;left:16px;padding:12px 15px;display:flex;flex-direction:column;gap:8px;font-size:11.5px}
+#legend .row{display:flex;align-items:center;gap:8px;color:var(--ink-2)}
+#legend .dot{width:9px;height:9px;border-radius:50%;flex:none}
+#legend .bar{width:16px;height:2px;border-radius:2px;flex:none}
+#legend .ttl{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+#time{bottom:16px;left:50%;transform:translateX(-50%);padding:11px 17px 13px;
+  width:min(540px,calc(100vw - 32px));display:flex;flex-direction:column;gap:8px}
+#time .top{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+#time .now{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums}
+#time .st{font-size:12.5px;color:var(--ink-2);display:flex;align-items:center;gap:7px;min-width:0}
+#time .st .z{padding:1px 7px;border-radius:3px;color:#0e1214;font-weight:700;font-size:11px;white-space:nowrap}
+#time .st .s{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rowc{display:flex;align-items:center;gap:12px}
+input[type=range]{flex:1;-webkit-appearance:none;appearance:none;background:transparent;height:18px;margin:0}
+input[type=range]::-webkit-slider-runnable-track{height:3px;border-radius:3px;background:rgba(255,255,255,.18)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;
+  background:var(--hl);margin-top:-5.5px;border:2px solid #0c0f11;cursor:pointer}
+input[type=range]::-moz-range-track{height:3px;border-radius:3px;background:rgba(255,255,255,.18)}
+input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--hl);border:2px solid #0c0f11}
+button.play{width:30px;height:30px;flex:none;border-radius:50%;border:1px solid var(--line);
+  background:rgba(255,255,255,.06);color:var(--ink);cursor:pointer;font-size:12px;line-height:1}
+button.play:hover{background:rgba(255,255,255,.13)}
+#tip{position:fixed;pointer-events:none;opacity:0;transition:opacity .1s;z-index:9;
+  background:rgba(11,14,16,.96);border:1px solid var(--line);border-radius:7px;padding:8px 11px;
+  font-size:12px;line-height:1.55;max-width:250px}
+#tip .n{font-weight:700;margin-bottom:2px}
+#tip .m{color:var(--muted);font-family:var(--mono);font-size:10.5px}
+#err{position:fixed;inset:0;display:none;place-items:center;padding:40px;text-align:center;color:var(--ink-2)}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+@media (max-width:720px){ #hud{max-width:calc(100vw - 32px)} #legend{display:none} }
+</style>
+
+<div id="stage"><canvas id="c"></canvas></div>
+<div id="err">이 브라우저에서 WebGL2를 열 수 없어 3D 뷰를 그리지 못했다.</div>
+
+<div class="panel" id="hud">
+  <h1><button id="fold">4D 씬그래프 <span style="color:var(--muted);font-weight:500">· 바닥 도면 → 방</span></button></h1>
+  <div class="sub" id="hsub"></div>
+  <div class="kv" id="hkv"></div>
+  <div class="chips" id="toggles"></div>
+</div>
+
+<div class="panel" id="legend">
+  <div class="ttl">아래에서 위로</div>
+  <div class="row"><span class="dot" style="background:#7e8b91"></span>바닥 도면 — 벽선 + 구역 색</div>
+  <div class="row"><span class="dot" style="background:#cfd8dc"></span>물체 발자국 (바닥에 내린 2D 점)</div>
+  <div class="row"><span class="dot" style="background:#fff"></span>물체 노드 — 중간 점이 실제 높이</div>
+  <div class="row"><span class="dot" style="background:#e3eaee"></span>방 노드 → 건물 노드</div>
+  <div class="ttl" style="margin-top:3px">액자</div>
+  <div class="row"><span class="bar" style="background:var(--hl)"></span>정지 위치 3곳</div>
+  <div class="row"><span class="bar" style="background:#7de3c8"></span>GT 이동 궤적</div>
+</div>
+
+<div class="panel" id="time">
+  <div class="top"><span class="now" id="tnow">0.0 s</span><span class="st" id="tst"></span></div>
+  <div class="rowc">
+    <button class="play" id="play" aria-label="재생">▶</button>
+    <input type="range" id="slider" min="0" max="100" value="0" aria-label="시간">
+  </div>
+</div>
+<div id="tip"></div>
+
+<script>
+const S = __SCENE__;
+
+/* ---------- 잡동사니 ---------- */
+const b64=s=>{const b=atob(s),n=b.length,o=new Uint8Array(n);for(let i=0;i<n;i++)o[i]=b.charCodeAt(i);return o;};
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const add=(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]];
+const scl=(a,s)=>[a[0]*s,a[1]*s,a[2]*s];
+const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const norm=a=>{const l=Math.hypot(...a)||1;return[a[0]/l,a[1]/l,a[2]/l];};
+const lerp3=(a,b,t)=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t];
+const hex=h=>[parseInt(h.slice(1,3),16)/255,parseInt(h.slice(3,5),16)/255,parseInt(h.slice(5,7),16)/255];
+const M4={
+  mul(a,b){const o=new Float32Array(16);
+    for(let i=0;i<4;i++)for(let j=0;j<4;j++){let s=0;for(let k=0;k<4;k++)s+=a[k*4+j]*b[i*4+k];o[i*4+j]=s;}return o;},
+  persp(f,ar,n,fa){const t=1/Math.tan(f/2),o=new Float32Array(16);
+    o[0]=t/ar;o[5]=t;o[10]=(fa+n)/(n-fa);o[11]=-1;o[14]=2*fa*n/(n-fa);return o;},
+  look(e,c,u){const z=norm(sub(e,c)),x=norm(cross(u,z)),y=cross(z,x);
+    return new Float32Array([x[0],y[0],z[0],0,x[1],y[1],z[1],0,x[2],y[2],z[2],0,
+      -dot(x,e),-dot(y,e),-dot(z,e),1]);}
+};
+
+const cv=document.getElementById("c");
+const gl=cv.getContext("webgl2",{antialias:true,alpha:false});
+if(!gl){document.getElementById("stage").style.display="none";document.getElementById("err").style.display="grid";}
+const HEAD="#version 300 es\nprecision highp float;\n";
+function prog(vs,fs){
+  const p=gl.createProgram();
+  for(const [t,src] of [[gl.VERTEX_SHADER,vs],[gl.FRAGMENT_SHADER,fs]]){
+    const s=gl.createShader(t);gl.shaderSource(s,src);gl.compileShader(s);
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));
+    gl.attachShader(p,s);
+  }
+  gl.linkProgram(p);
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+function buf(d,t){const b=gl.createBuffer();gl.bindBuffer(t||gl.ARRAY_BUFFER,b);
+  gl.bufferData(t||gl.ARRAY_BUFFER,d,gl.STATIC_DRAW);return b;}
+function attr(p,n,b,sz,ty,nm){const l=gl.getAttribLocation(p,n);if(l<0)return;
+  gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.enableVertexAttribArray(l);
+  gl.vertexAttribPointer(l,sz,ty||gl.FLOAT,!!nm,0,0);}
+
+/* 바닥 도면 — 구역 래스터를 텍스처로 깐다 */
+const pFloor=prog(HEAD+`
+in vec3 aPos; in vec2 aUv; uniform mat4 uMVP; out vec2 vUv; out vec3 vW;
+void main(){ gl_Position=uMVP*vec4(aPos,1.0); vUv=aUv; vW=aPos; }`,
+HEAD+`
+in vec2 vUv; in vec3 vW; out vec4 o;
+uniform sampler2D uZone; uniform vec3 uZcol[6]; uniform float uAlpha; uniform vec3 uEye;
+void main(){
+  float zi=texture(uZone,vUv).r*255.0;
+  if(zi>5.5) discard;
+  float fog=clamp((distance(vW,uEye)-9.0)/34.0,0.0,0.45);
+  o=vec4(mix(uZcol[int(zi+0.5)],vec3(0.05,0.06,0.07),fog), uAlpha);
+}`);
+
+/* 화면공간 두께를 가진 선 */
+const pRib=prog(HEAD+`
+in vec3 aP; in vec3 aQ; in float aSide; in vec3 aCol; in float aW;
+uniform mat4 uMVP; uniform float uAspect; out vec3 vCol;
+void main(){
+  vec4 a=uMVP*vec4(aP,1.0), b=uMVP*vec4(aQ,1.0);
+  vec2 an=a.xy/a.w, bn=b.xy/b.w, d=bn-an; d.x*=uAspect;
+  d=(length(d)<1e-6)?vec2(1.0,0.0):normalize(d);
+  vec2 n=vec2(-d.y,d.x); n.x/=uAspect;
+  gl_Position=vec4(a.xy+n*aSide*aW*a.w, a.z, a.w); vCol=aCol;
+}`,HEAD+`in vec3 vCol; uniform float uAlpha; out vec4 o;
+void main(){ o=vec4(vCol,uAlpha); }`);
+
+/* 얇은 선 (수직 줄기·그래프 간선) */
+const pLine=prog(HEAD+`
+in vec3 aPos; in vec3 aCol; in float aA; uniform mat4 uMVP; out vec3 vCol; out float vA;
+void main(){ gl_Position=uMVP*vec4(aPos,1.0); vCol=aCol; vA=aA; }`,
+HEAD+`in vec3 vCol; in float vA; uniform float uAlpha; out vec4 o;
+void main(){ o=vec4(vCol,vA*uAlpha); }`);
+
+/* 노드 — 음영 있는 구 */
+const pNode=prog(HEAD+`
+in vec3 aPos; in vec3 aCol; in float aSize;
+uniform mat4 uMVP; uniform vec3 uEye; uniform float uPx; out vec3 vCol;
+void main(){ gl_Position=uMVP*vec4(aPos,1.0);
+  gl_PointSize=clamp(aSize*uPx/distance(aPos,uEye),2.5,150.0); vCol=aCol; }`,
+HEAD+`in vec3 vCol; uniform float uAlpha; out vec4 o;
+void main(){
+  vec2 q=gl_PointCoord*2.0-1.0; float r=length(q); if(r>1.0) discard;
+  float sh=1.0-smoothstep(0.2,1.0,r)*0.6;
+  float hi=pow(max(0.0,1.0-length(q-vec2(-0.34,-0.34))),3.5);
+  o=vec4(vCol*sh+vec3(hi*0.5), uAlpha*(1.0-smoothstep(0.92,1.0,r)));
+}`);
+
+/* 라벨 스프라이트 */
+const pLbl=prog(HEAD+`
+in vec2 aQ; uniform mat4 uMVP; uniform float uAspect;
+uniform vec3 uPos; uniform vec2 uSize; out vec2 vUv;
+void main(){
+  vec4 p=uMVP*vec4(uPos,1.0);
+  vec2 o=aQ*uSize+vec2(0.0,uSize.y); o.x/=uAspect;
+  gl_Position=vec4(p.xy+o*p.w, p.z-0.0007*p.w, p.w);
+  vUv=vec2(aQ.x*0.5+0.5, 0.5-aQ.y*0.5);
+}`,HEAD+`
+in vec2 vUv; uniform sampler2D uTex; uniform vec4 uRect; uniform float uAlpha; out vec4 o;
+void main(){ vec4 t=texture(uTex,uRect.xy+vUv*uRect.zw); if(t.a<0.02) discard; o=vec4(t.rgb,t.a*uAlpha); }`);
+
+/* ---------- 씬 상수 ---------- */
+const ZG=S.zone_grid, FLOOR=S.floor_y;
+let YMAX=-1e9; for(const n of S.nodes) YMAX=Math.max(YMAX,n.pos[1]);
+const Y_OBJ=YMAX+1.35, Y_ZONE=YMAX+2.75, Y_BLD=YMAX+3.95;
+const zColor={}; S.zones.forEach(z=>zColor[z.name]=hex(z.color));
+const GREY=[0.60,0.66,0.69], HL=hex("#ff5566"), GT=hex("#7de3c8");
+
+/* 구역 텍스처 */
+const zoneTex=gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D,zoneTex);
+for(const k of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D,k,gl.NEAREST);
+for(const k of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D,k,gl.CLAMP_TO_EDGE);
+{
+  const g=b64(ZG.data), t=new Uint8Array(ZG.w*ZG.h);
+  for(let i=0;i<ZG.w;i++) for(let j=0;j<ZG.h;j++) t[j*ZG.w+i]=g[i*ZG.h+j];
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT,1);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.R8,ZG.w,ZG.h,0,gl.RED,gl.UNSIGNED_BYTE,t);
+}
+/* 바닥 사각형: 바닥좌표 (u,v) 격자의 네 귀퉁이를 world 로 */
+const floorQuad=(()=>{
+  const u0=ZG.lo[0], v0=ZG.lo[1], u1=u0+ZG.w*ZG.res, v1=v0+ZG.h*ZG.res;
+  const Wf=(u,v)=>[u*ZG.e1[0]+v*ZG.e2[0], FLOOR, u*ZG.e1[2]+v*ZG.e2[2]];
+  const c=[[u0,v0],[u1,v0],[u1,v1],[u0,v1]].map(([u,v])=>Wf(u,v));
+  const uv=[[0,0],[1,0],[1,1],[0,1]];
+  const P=[],T=[];
+  for(const i of [0,1,2,0,2,3]){ P.push(...c[i]); T.push(...uv[i]); }
+  return {p:buf(new Float32Array(P)), t:buf(new Float32Array(T))};
+})();
+
+/* ---------- 리본 헬퍼 ---------- */
+function makeRib(pairs,col,w){
+  const P=[],Q=[],SD=[],C=[],W=[],idx=[];
+  for(const [a,b] of pairs){
+    const base=P.length/3;
+    for(const [pp,qq,sd] of [[a,b,1],[a,b,-1],[b,a,-1],[b,a,1]]){
+      P.push(...pp);Q.push(...qq);SD.push(sd);C.push(...col);W.push(w);
+    }
+    idx.push(base,base+1,base+2,base,base+2,base+3);
+  }
+  return {p:buf(new Float32Array(P)),q:buf(new Float32Array(Q)),s:buf(new Float32Array(SD)),
+          c:buf(new Float32Array(C)),w:buf(new Float32Array(W)),
+          i:buf(new Uint32Array(idx),gl.ELEMENT_ARRAY_BUFFER),n:idx.length};
+}
+const ribbon=(pts,col,w)=>makeRib(pts.slice(0,-1).map((p,i)=>[p,pts[i+1]]),col,w);
+const walls=makeRib(S.floor_outline.map(s=>[[s[0],FLOOR+0.004,s[1]],[s[2],FLOOR+0.004,s[3]]]),
+                    [0.88,0.92,0.94],0.0016);
+
+/* ---------- 그래프 기하 ---------- */
+/* 바닥 발자국 → (실제 높이 점) → 물체 노드 → 방 노드 → 건물 */
+const footP=[],footC=[],footS=[];
+const midP=[],midC=[],midS=[];
+const stemP=[],stemC=[],stemA=[];
+const nodeP=[],nodeC=[],nodeS=[];
+const zedgeP=[],zedgeC=[],zedgeA=[];
+const zonePts={};
+for(const n of S.nodes){
+  const c=n.zone?zColor[n.zone]:GREY, x=n.pos[0], z=n.pos[2];
+  footP.push(x,FLOOR+0.01,z); footC.push(...c); footS.push(n.dyn?30:17);
+  midP.push(x,n.pos[1],z);   midC.push(...c);  midS.push(n.dyn?30:16);
+  nodeP.push(x,Y_OBJ,z);     nodeC.push(...c); nodeS.push(n.dyn?72:44);
+  stemP.push(x,FLOOR+0.01,z, x,Y_OBJ,z);
+  stemC.push(...c,...c); stemA.push(0.18,0.50);
+  if(n.zone) (zonePts[n.zone]=zonePts[n.zone]||[]).push([x,z]);
+}
+const zc={};
+for(const z of S.zones){
+  const pts=zonePts[z.name]||[];
+  if(!pts.length) continue;
+  const cx=pts.reduce((a,p)=>a+p[0],0)/pts.length, cz=pts.reduce((a,p)=>a+p[1],0)/pts.length;
+  zc[z.name]=[cx,cz];
+  const c=zColor[z.name];
+  for(const [x,zz] of pts){ zedgeP.push(x,Y_OBJ,zz, cx,Y_ZONE,cz); zedgeC.push(...c,...c); zedgeA.push(0.38,0.16); }
+}
+const zoneP=[],zoneC=[],zoneS=[],bedgeP=[],bedgeC=[],bedgeA=[];
+let bx=0,bz=0,nz=0;
+for(const z of S.zones){ const c=zc[z.name]; if(!c) continue;
+  zoneP.push(c[0],Y_ZONE,c[1]); zoneC.push(...zColor[z.name]); zoneS.push(150); bx+=c[0]; bz+=c[1]; nz++; }
+bx/=nz; bz/=nz;
+for(const z of S.zones){ const c=zc[z.name]; if(!c) continue;
+  bedgeP.push(c[0],Y_ZONE,c[1], bx,Y_BLD,bz);
+  bedgeC.push(0.55,0.60,0.63, 0.55,0.60,0.63); bedgeA.push(0.45,0.25); }
+
+const F=x=>buf(new Float32Array(x));
+const G={
+  foot:{p:F(footP),c:F(footC),s:F(footS),n:S.nodes.length},
+  mid :{p:F(midP), c:F(midC), s:F(midS), n:S.nodes.length},
+  node:{p:F(nodeP),c:F(nodeC),s:F(nodeS),n:S.nodes.length},
+  stem:{p:F(stemP),c:F(stemC),a:F(stemA),n:S.nodes.length*2},
+  zedge:{p:F(zedgeP),c:F(zedgeC),a:F(zedgeA),n:zedgeA.length},
+  zone:{p:F(zoneP),c:F(zoneC),s:F(zoneS),n:nz},
+  bedge:{p:F(bedgeP),c:F(bedgeC),a:F(bedgeA),n:bedgeA.length},
+  bld:{p:F([bx,Y_BLD,bz]),c:F([0.87,0.91,0.93]),s:F([230]),n:1},
+};
+const trail=ribbon(S.trail.map(p=>[p[0],FLOOR+0.03,p[2]]),[0.40,0.46,0.50],0.0013);
+
+/* 액자 */
+const H=S.highlight;
+let stopBuf=null,stopArc=null,stopStem=null,stopFoot=null,gtPath=null;
+if(H){
+  gtPath=ribbon(H.gt_path,GT,0.0017);
+  const P=[],C=[],SZ=[],FP=[],FC=[],FS=[],SP=[],SC=[],SA=[];
+  for(const s of H.stops){
+    P.push(...s.pos); C.push(...HL); SZ.push(112);
+    FP.push(s.pos[0],FLOOR+0.02,s.pos[2]); FC.push(...HL); FS.push(34);
+    SP.push(s.pos[0],FLOOR+0.02,s.pos[2], s.pos[0],Y_OBJ,s.pos[2]);
+    SC.push(...HL,...HL); SA.push(0.5,0.85);
+  }
+  stopBuf={p:F(P),c:F(C),s:F(SZ),n:H.stops.length};
+  stopFoot={p:F(FP),c:F(FC),s:F(FS),n:H.stops.length};
+  stopStem={p:F(SP),c:F(SC),a:F(SA),n:H.stops.length*2};
+  const arc=[];
+  for(let i=0;i<H.stops.length-1;i++){
+    const a=H.stops[i].pos,b=H.stops[i+1].pos;
+    const h=Math.hypot(b[0]-a[0],b[2]-a[2])*0.28+0.22;
+    for(let k=0;k<=26;k++){ const t=k/26,p=lerp3(a,b,t); p[1]+=Math.sin(Math.PI*t)*h; arc.push(p); }
+  }
+  stopArc=ribbon(arc,HL,0.0021);
+}
+
+/* ---------- 라벨 아틀라스 ---------- */
+const labels=[];
+S.zones.forEach((z,i)=>{ if(!zc[z.name]) return;
+  labels.push({txt:z.ko,sub:z.name+" · 물체 "+z.n,
+    pos:[zc[z.name][0],Y_ZONE+0.5+(i%2)*0.62,zc[z.name][1]],col:z.color,rank:2}); });
+labels.push({txt:"apartment",sub:nz+" rooms",pos:[bx,Y_BLD+0.55,bz],col:"#dfe6e9",rank:1});
+if(H) H.stops.forEach((s,i)=>labels.push({
+  txt:"①②③"[i]+" "+(s.support||"?"),sub:s.zone+" · "+s.t0+"–"+s.t1+"s",
+  pos:[s.pos[0],s.pos[1]+0.34+(i%2)*0.52,s.pos[2]],col:"#ff8b96",rank:0}));
+
+const atlas=document.createElement("canvas");
+{
+  const FF=getComputedStyle(document.body).fontFamily, DPR2=2, pad=8;
+  const mx=atlas.getContext("2d"); let w=0; const rows=[];
+  for(const L of labels){
+    const f1=(L.rank>0)?"700 20px ":"600 15px ", th=(L.rank>0)?52:44;
+    mx.font=f1+FF; const w1=mx.measureText(L.txt).width;
+    mx.font="500 12px "+FF; const w2=mx.measureText(L.sub).width;
+    rows.push({L,tw:Math.ceil(Math.max(w1,w2))+pad*2,th,f1});
+    w=Math.max(w,rows[rows.length-1].tw);
+  }
+  let h=0; for(const r of rows){ r.y=h; h+=r.th; }
+  atlas.width=w*DPR2; atlas.height=h*DPR2;
+  const g2=atlas.getContext("2d"); g2.scale(DPR2,DPR2); g2.textBaseline="top";
+  for(const {L,tw,th,y,f1} of rows){
+    g2.shadowColor="rgba(0,0,0,.95)"; g2.shadowBlur=6;
+    g2.fillStyle=L.col; g2.font=f1+FF; g2.fillText(L.txt,pad,y+(th>48?6:5));
+    g2.fillStyle="rgba(214,224,228,.82)"; g2.font="500 12px "+FF;
+    g2.fillText(L.sub,pad,y+(th>48?32:26)); g2.shadowBlur=0;
+    L.rect=[0,y/h,tw/w,th/h]; L.w=tw; L.h=th;
+  }
+}
+const lblTex=gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D,lblTex);
+for(const k of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D,k,gl.LINEAR);
+for(const k of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D,k,gl.CLAMP_TO_EDGE);
+gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,atlas);
+const quadB=buf(new Float32Array([-1,-1,1,-1,1,1,-1,-1,1,1,-1,1]));
+
+/* ---------- 카메라 ---------- */
+const FB=S.floor_box;
+const B={lo:[FB.lo[0],FLOOR,FB.lo[1]], hi:[FB.hi[0],Y_BLD+0.35,FB.hi[1]]};
+const FOV=0.82;
+const cam={az:2.28,el:0.36,dist:20,tgt:[(B.lo[0]+B.hi[0])/2,(FLOOR+Y_BLD)*0.5,(B.lo[2]+B.hi[2])/2]};
+let userZoom=false, W=1, Hh=1, DPR=1, need=true, lastMVP=null;
+function fitDist(){
+  const tv=Math.tan(FOV/2), th=tv*(W/Hh);
+  const ce=Math.cos(cam.el), se=Math.sin(cam.el);
+  const fwd=[-ce*Math.sin(cam.az),-se,-ce*Math.cos(cam.az)];
+  const right=norm(cross(fwd,[0,1,0])), up=cross(right,fwd);
+  let d=0;
+  for(const X of [B.lo[0],B.hi[0]]) for(const Y of [B.lo[1],B.hi[1]]) for(const Z of [B.lo[2],B.hi[2]]){
+    const v=sub([X,Y,Z],cam.tgt), z=dot(v,fwd);
+    d=Math.max(d, Math.abs(dot(v,right))/th-z, Math.abs(dot(v,up))/tv-z);
+  }
+  return Math.max(d*1.05,3);
+}
+function resize(){
+  DPR=Math.min(devicePixelRatio||1,2);
+  W=cv.clientWidth; Hh=cv.clientHeight;
+  cv.width=Math.floor(W*DPR); cv.height=Math.floor(Hh*DPR);
+  gl.viewport(0,0,cv.width,cv.height);
+  if(!userZoom) cam.dist=fitDist();
+}
+function eye(){const ce=Math.cos(cam.el),se=Math.sin(cam.el);
+  return add(cam.tgt,[cam.dist*ce*Math.sin(cam.az),cam.dist*se,cam.dist*ce*Math.cos(cam.az)]);}
+function mvp(){return M4.mul(M4.persp(FOV,W/Hh,0.06,320),M4.look(eye(),cam.tgt,[0,1,0]));}
+function proj(p){
+  const m=lastMVP; if(!m) return null;
+  const x=m[0]*p[0]+m[4]*p[1]+m[8]*p[2]+m[12], y=m[1]*p[0]+m[5]*p[1]+m[9]*p[2]+m[13];
+  const w=m[3]*p[0]+m[7]*p[1]+m[11]*p[2]+m[15];
+  return w<=0?null:[(x/w*0.5+0.5)*W,(0.5-y/w*0.5)*Hh];
+}
+
+let drag=null;
+cv.addEventListener("pointerdown",e=>{cv.setPointerCapture(e.pointerId);cv.classList.add("drag");
+  drag={x:e.clientX,y:e.clientY,pan:e.shiftKey||e.button===1||e.button===2};});
+cv.addEventListener("pointerup",()=>{drag=null;cv.classList.remove("drag");});
+cv.addEventListener("contextmenu",e=>e.preventDefault());
+cv.addEventListener("pointermove",e=>{
+  if(!drag) return hover(e);
+  const dx=e.clientX-drag.x, dy=e.clientY-drag.y; drag.x=e.clientX; drag.y=e.clientY;
+  if(drag.pan){
+    const ey=eye(), f=norm(sub(cam.tgt,ey)), r=norm(cross(f,[0,1,0])), u=cross(r,f), k=cam.dist*0.0016;
+    cam.tgt=add(cam.tgt,add(scl(r,-dx*k),scl(u,dy*k)));
+  }else{
+    cam.az-=dx*0.006; cam.el=Math.max(-0.15,Math.min(1.45,cam.el+dy*0.005));
+    if(!userZoom) cam.dist=fitDist();
+  }
+  need=true;
+});
+cv.addEventListener("wheel",e=>{e.preventDefault();
+  cam.dist=Math.max(1.5,Math.min(160,cam.dist*Math.exp(e.deltaY*0.0013))); userZoom=true; need=true;
+},{passive:false});
+
+const tip=document.getElementById("tip");
+function hover(e){
+  const r=cv.getBoundingClientRect(); let best=null,bd=16;
+  for(const n of S.nodes){
+    const q=proj([n.pos[0],Y_OBJ,n.pos[2]]); if(!q) continue;
+    const d=Math.hypot(q[0]+r.left-e.clientX,q[1]+r.top-e.clientY);
+    if(d<bd){bd=d;best=n;}
+  }
+  if(!best){tip.style.opacity=0;return;}
+  tip.style.opacity=1;
+  tip.style.left=Math.min(e.clientX+14,innerWidth-266)+"px";
+  tip.style.top=(e.clientY+14)+"px";
+  tip.innerHTML='<div class="n">'+best.name+'</div><div class="m">'+best.cat+(best.dyn?" · 동적":"")+
+    '</div><div class="m" style="margin-top:3px">'+(best.zone||"—")+(best.support?" · "+best.support:"")+
+    ' · '+best.n_obs+'회 관측</div><div class="m">('+best.pos.map(v=>v.toFixed(2)).join(", ")+')</div>';
+}
+
+/* ---------- 토글 ---------- */
+const opt={floor:true,walls:true,graph:true,height:true,frame:true,gtpath:true,trail:false};
+const tg=document.getElementById("toggles");
+for(const [k,l] of [["floor","구역 색"],["walls","벽선"],["graph","그래프 층"],
+                    ["height","실제 높이"],["frame","액자"],["gtpath","GT 궤적"],["trail","관찰자 경로"]]){
+  const b=document.createElement("button");
+  b.className="chip"+(opt[k]?" on":""); b.textContent=l; b.setAttribute("aria-pressed",opt[k]);
+  b.onclick=()=>{opt[k]=!opt[k];b.classList.toggle("on",opt[k]);b.setAttribute("aria-pressed",opt[k]);need=true;};
+  tg.appendChild(b);
+}
+if(H){
+  const b=document.createElement("button");
+  b.className="chip"; b.style.borderColor="rgba(255,85,102,.55)"; b.style.color="#ff8b96";
+  b.textContent="액자로 이동";
+  b.onclick=()=>{
+    const P=H.stops.map(s=>s.pos), c=[0,1,2].map(k=>P.reduce((a,p)=>a+p[k],0)/P.length);
+    cam.tgt=[c[0],c[1]+0.6,c[2]]; cam.az=2.0; cam.el=0.30;
+    let r=0; for(const p of P) r=Math.max(r,Math.hypot(p[0]-c[0],p[1]-c[1],p[2]-c[2]));
+    cam.dist=Math.max(r*3.2,6.5); userZoom=true; need=true;
+  };
+  tg.appendChild(b);
+}
+
+/* ---------- 시간 ---------- */
+const TR=(H&&H.track)?H.track:[];
+const slider=document.getElementById("slider"),tnow=document.getElementById("tnow"),tst=document.getElementById("tst");
+const playBtn=document.getElementById("play");
+slider.max=Math.max(TR.length-1,1);
+let ti=0,playing=false,lastT=0;
+const dynP=gl.createBuffer(),dynC=gl.createBuffer(),dynS=gl.createBuffer();
+const lkP=gl.createBuffer(),lkC=gl.createBuffer(),lkA=gl.createBuffer();
+function setT(i){
+  ti=Math.max(0,Math.min(TR.length-1,i|0)); slider.value=ti;
+  const r=TR[ti]; tnow.textContent=(r?r.t:0).toFixed(1)+" s";
+  if(r&&r.zone){
+    const z=S.zones.find(z=>z.name===r.zone)||{};
+    tst.innerHTML='<span class="z" style="background:'+(z.color||"#98a4a9")+'">'+(z.ko||r.zone)+
+      '</span><span class="s">'+(r.sup?((r.stable?"":"이동 중 · ")+r.sup):"지지면 없음")+'</span>';
+  } else tst.innerHTML='<span class="s" style="color:var(--muted)">아직 관측 전</span>';
+  need=true;
+}
+slider.oninput=e=>{playing=false;playBtn.textContent="▶";setT(+e.target.value);};
+playBtn.onclick=()=>{playing=!playing;playBtn.textContent=playing?"❚❚":"▶";
+  if(playing&&ti>=TR.length-1) setT(0); lastT=performance.now();};
+
+/* ---------- 렌더 ---------- */
+const BG=hex("#0c0f11");
+function draw(){
+  const m=mvp(); lastMVP=m; const e=eye(), aspect=W/Hh, px=Hh*DPR/1000;
+  gl.clearColor(BG[0],BG[1],BG[2],1);
+  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+
+  const U=(p,n)=>gl.getUniformLocation(p,n);
+  function lines(o,a){ gl.useProgram(pLine); gl.uniformMatrix4fv(U(pLine,"uMVP"),false,m);
+    gl.uniform1f(U(pLine,"uAlpha"),a); attr(pLine,"aPos",o.p,3); attr(pLine,"aCol",o.c,3); attr(pLine,"aA",o.a,1);
+    gl.drawArrays(gl.LINES,0,o.n); }
+  function nodes(o,a){ gl.useProgram(pNode); gl.uniformMatrix4fv(U(pNode,"uMVP"),false,m);
+    gl.uniform3fv(U(pNode,"uEye"),e); gl.uniform1f(U(pNode,"uPx"),px);
+    gl.uniform1f(U(pNode,"uAlpha"),a===undefined?1:a);
+    attr(pNode,"aPos",o.p,3); attr(pNode,"aCol",o.c,3); attr(pNode,"aSize",o.s,1);
+    gl.drawArrays(gl.POINTS,0,o.n); }
+  function rib(o,a){ gl.useProgram(pRib); gl.uniformMatrix4fv(U(pRib,"uMVP"),false,m);
+    gl.uniform1f(U(pRib,"uAspect"),aspect); gl.uniform1f(U(pRib,"uAlpha"),a);
+    attr(pRib,"aP",o.p,3); attr(pRib,"aQ",o.q,3); attr(pRib,"aSide",o.s,1);
+    attr(pRib,"aCol",o.c,3); attr(pRib,"aW",o.w,1);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.i); gl.drawElements(gl.TRIANGLES,o.n,gl.UNSIGNED_INT,0); }
+
+  if(opt.floor){
+    gl.useProgram(pFloor);
+    gl.uniformMatrix4fv(U(pFloor,"uMVP"),false,m);
+    gl.uniform3fv(U(pFloor,"uEye"),e);
+    gl.uniform1f(U(pFloor,"uAlpha"),0.50);
+    const zcv=new Float32Array(18);
+    S.zones.forEach((z,i)=>{const c=hex(z.color); zcv[i*3]=c[0]; zcv[i*3+1]=c[1]; zcv[i*3+2]=c[2];});
+    gl.uniform3fv(U(pFloor,"uZcol"),zcv);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,zoneTex);
+    gl.uniform1i(U(pFloor,"uZone"),0);
+    attr(pFloor,"aPos",floorQuad.p,3); attr(pFloor,"aUv",floorQuad.t,2);
+    gl.drawArrays(gl.TRIANGLES,0,6);
+  }
+  if(opt.walls) rib(walls,0.7);
+  if(opt.trail) rib(trail,0.75);
+
+  nodes(G.foot,0.85);
+  if(opt.graph){
+    lines(G.stem,1.0); lines(G.zedge,1.0); lines(G.bedge,1.0);
+    if(opt.height) nodes(G.mid,0.95);
+    nodes(G.node,1.0); nodes(G.zone,1.0); nodes(G.bld,1.0);
+  } else if(opt.height) nodes(G.mid,0.95);
+
+  if(H&&opt.gtpath) rib(gtPath,0.55);
+  if(H&&opt.frame){
+    rib(stopArc,0.9);
+    if(opt.graph) lines(stopStem,1.0);
+    nodes(stopFoot,1.0); nodes(stopBuf,1.0);
+    if(TR.length){
+      const r=TR[ti], P=[...r.gt], C=[...GT], SZ=[88];
+      if(r.sg){ P.push(...r.sg); C.push(...HL); SZ.push(108); }
+      gl.bindBuffer(gl.ARRAY_BUFFER,dynP); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(P),gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER,dynC); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(C),gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER,dynS); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(SZ),gl.DYNAMIC_DRAW);
+      if(r.sg&&r.sup&&H.sup_pos[r.sup]){
+        const q=H.sup_pos[r.sup];
+        gl.bindBuffer(gl.ARRAY_BUFFER,lkP); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([...r.sg,...q]),gl.DYNAMIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER,lkC); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([...HL,...HL]),gl.DYNAMIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER,lkA); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([0.95,0.3]),gl.DYNAMIC_DRAW);
+        lines({p:lkP,c:lkC,a:lkA,n:2},1.0);
+      }
+      nodes({p:dynP,c:dynC,s:dynS,n:SZ.length},1.0);
+    }
+  }
+
+  /* 라벨 — 중요도순, 화면에서 겹치면 버린다 */
+  gl.useProgram(pLbl);
+  gl.uniformMatrix4fv(U(pLbl,"uMVP"),false,m);
+  gl.uniform1f(U(pLbl,"uAspect"),aspect);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,lblTex);
+  gl.uniform1i(U(pLbl,"uTex"),0); gl.uniform1f(U(pLbl,"uAlpha"),1.0);
+  attr(pLbl,"aQ",quadB,2);
+  gl.disable(gl.DEPTH_TEST);
+  const drawn=[], K=Math.max(0.6,Math.min(1.12,Math.min(W,Hh)/780));
+  for(const L of labels.slice().sort((a,b)=>a.rank-b.rank)){
+    if(L.rank===0&&!opt.frame) continue;
+    if(L.rank>0&&!opt.graph) continue;
+    const q=proj(L.pos); if(!q) continue;
+    const w2=L.w*K/2,h2=L.h*K;
+    const r=[q[0]-w2,q[1]-h2,q[0]+w2,q[1]];
+    if(r[2]<0||r[0]>W||r[3]<0||r[1]>Hh) continue;
+    if(drawn.some(d=>!(r[2]<d[0]||r[0]>d[2]||r[3]<d[1]||r[1]>d[3]))) continue;
+    drawn.push(r);
+    gl.uniform4fv(U(pLbl,"uRect"),L.rect);
+    gl.uniform3fv(U(pLbl,"uPos"),L.pos);
+    gl.uniform2f(U(pLbl,"uSize"),L.w/Hh*K,L.h/Hh*K);
+    gl.drawArrays(gl.TRIANGLES,0,6);
+  }
+  gl.enable(gl.DEPTH_TEST);
+}
+function loop(t){
+  if(playing&&TR.length&&t-lastT>70){ lastT=t; setT(ti+1);
+    if(ti>=TR.length-1){playing=false;playBtn.textContent="▶";} }
+  if(need){need=false;draw();}
+  requestAnimationFrame(loop);
+}
+
+document.getElementById("hsub").innerHTML=
+  "바닥은 <b>벽선 + 구역 색만 남긴 도면</b>이고, 물체는 거기 찍힌 <b>2D 발자국</b> 하나다. " +
+  "발자국에서 선이 올라가 물체 노드가 되고, 그 선들이 다시 모여 <b>방 노드</b>가 된다.";
+document.getElementById("hkv").innerHTML=
+  "<span><b>"+S.sequence.replace("Apartment_release_","")+"</b></span>"+
+  "<span>물체 <b>"+S.nodes.length+"</b></span><span>방 <b>"+nz+"</b></span>"+
+  "<span>"+(S.n_frames/10).toFixed(0)+"s</span>";
+document.getElementById("fold").onclick=()=>document.getElementById("hud").classList.toggle("fold");
+if(innerWidth<620) document.getElementById("hud").classList.add("fold");
+addEventListener("resize",()=>{resize();need=true;});
+resize(); setT(0); requestAnimationFrame(loop);
+</script>

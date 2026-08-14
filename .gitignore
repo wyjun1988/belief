@@ -1,0 +1,18 @@
+# ADT 는 Meta 연구 라이선스 데이터다 — 원본도 파생 프레임도 절대 커밋하지 않는다.
+data/adt
+data/seq/
+results/
+vendor/
+checkpoints/
+*.vrs
+*.zip
+*.csv.gz
+
+__pycache__/
+*.pyc
+.venv*/
+.DS_Store
+
+# 점구름 렌더는 ADT RGB 색을 담고 있다 — 파생 프레임 취급
+docs/img/dsg_web_*.jpg
+docs/img/dsg_web_*.png
