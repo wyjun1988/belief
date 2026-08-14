@@ -80,6 +80,17 @@ if ! done_stage build; then
   mark build
 fi
 
+# --- 4.5 파이썬 부가 의존 ------------------------------------------------------
+# ⚠️ pip 는 /usr/local/lib/.../dist-packages 에 깔린다 — **네트워크 볼륨 밖**이라
+# 팟을 내리면 사라진다. 볼륨에 남는 ros2_ws 와 달리 매번 다시 깔아야 한다.
+# open_clip 은 세그 트랙의 외형 임베딩(ReID·제로샷 카테고리)에 쓴다.
+if ! done_stage pydeps; then
+    pip install -q --break-system-packages open_clip_torch || \
+        pip install -q open_clip_torch
+    python3 -c 'import open_clip; print("open_clip", open_clip.__version__)'
+    mark pydeps
+fi
+
 # --- 5. 확인 -------------------------------------------------------------------
 source "$WS/install/setup.bash"
 echo "=== [5/5] 확인 ==="

@@ -10,6 +10,12 @@ DAAAM 스택 전체를 띄우는 것은 낭비이고 실패 지점도 늘어난�
 ⚠️ decoration 과 **완전히 같은 조건**이어야 임베딩이 비교 가능하다:
     모델 open_clip ViT-B-16 / pretrained="openai", bbox 를 8px 확장, L2 정규화, fp16.
 이미 있는 파일은 건너뛰므로 중단된 실행을 이어서 돌릴 수 있다.
+
+⚠️ open_clip 3.3.0 은 "ViT-B-16"+openai 에서 QuickGELU 불일치 경고를 낸다. **모델명을
+바꾸지 말 것** — 기존 임베딩과 실측 대조하면 지금 조합이 코사인 1.0000 으로 일치하고
+"ViT-B-16-quickgelu" 는 0.9748 로 어긋난다.
+
+    pip install --break-system-packages open_clip_torch   # 팟엔 기본 설치 안 됨
 """
 import argparse
 import json
