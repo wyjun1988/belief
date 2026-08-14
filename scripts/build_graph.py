@@ -113,8 +113,10 @@ def main():
     ap.add_argument("--seg-ids", default="gt/seg_ids.json")
     ap.add_argument("--pose", default="pose/poses.txt",
                     help="궤적 파일 (DA3 포즈 실험은 pose/poses_da3.txt)")
-    ap.add_argument("--seed-merge", type=float, default=1.0,
-                    help="같은 카테고리 시드를 이 거리(m) 안에서 하나로 합친다. 0=끄기")
+    ap.add_argument("--seed-merge", type=float, default=0.0,
+                    help="같은 카테고리 시드를 이 거리(m) 안에서 하나로 합친다(FastSAM 조각용). "
+                         "0=끄기. ⚠️ GT 시드에서도 실제 별개 가구(의자 2개, 0.85m)가 합쳐질 수 "
+                         "있어 기본은 끔 — 실험 결과 구역 회복 효과도 없었다(dining 0 그대로)")
     ap.add_argument("--zone-seeds", default=None,
                     help="구역 시드 JSON (clip_rooms.py 산출)")
     ap.add_argument("--zone-seeds-mode", default="replace", choices=["replace", "merge"],

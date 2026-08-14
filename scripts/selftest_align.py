@@ -101,7 +101,7 @@ def main():
         truth.append(gt)
         r = fit_frame(bad, u, v, z, ww, rng)
         if r is not None:
-            A_hat[k], B_hat[k], NI[k], _ = r
+            A_hat[k], B_hat[k], NI[k] = r[0], r[1], r[2]   # fit_frame 은 5-튜플
 
     print("\nB. round-trip (윈도우 %d개 stride %d, scale σ=0.08 shift σ=0.02 주입)"
           % (nwin, stride))
