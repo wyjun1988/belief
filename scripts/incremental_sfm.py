@@ -80,22 +80,37 @@ def pnp(pts3, pts2, K, reproj=8.0):
     return T, len(inl)
 
 
-def local_ba(poses, land, obs, K, fids=None, f_scale=2.0, max_nfev=40):
-    """등록된 프레임(또는 그 부분집합)과 그들이 보는 랜드마크만 재최적화."""
+def local_ba(poses, land, obs, K, fids=None, f_scale=2.0, max_nfev=40,
+             anchor=None, w_scale=1000.0):
+    """등록 프레임(또는 부분집합)과 그들이 보는 랜드마크를 재최적화.
+
+    ② fids 밖의 등록 프레임이 같은 랜드마크를 보면 그 **관측도 잔차에 넣되 포즈는
+       동결**한다. 안 그러면 창 BA 가 돌 때마다 공유 랜드마크가 최근 관측 쪽으로만
+       끌려가 옛 프레임 기준의 지도가 조용히 오염된다.
+    ③ 단안 BA 는 첫 카메라를 고정해도 **스케일이 자유**다. 실측: 앵커 없이는 지도가
+       40~80% 쪼그라든 채 수렴했다(정합스케일 1.56~1.83). anchor=(fa, fb, d0) 로
+       두 카메라 간 거리를 초기값 d0 에 묶는다. 동결 프레임이 있으면 그쪽이
+       게이지·스케일을 이미 잡으므로 앵커·첫카메라 고정 둘 다 쓰지 않는다.
+       w_scale=100 은 huber 선형영역에서 픽셀항에 밀렸다(실측: d0 에서 23% 이탈).
+       1000 이면 1% 이탈이 이미 임계(2px) 밖이라 사실상 강제 구속이 된다.
+    """
     from scipy.optimize import least_squares
     from scipy.sparse import lil_matrix
     fids = sorted(fids if fids is not None else poses)
-    fi = {f: i for i, f in enumerate(fids)}
     used = {l for f in fids for l in obs.get(f, {}) if l in land}
+    frozen = [f for f in sorted(set(poses) - set(fids)) if used & set(obs.get(f, {}))]
+    allf = fids + frozen
+    fi = {f: i for i, f in enumerate(allf)}
+    nF = len(fids)
     lids = sorted(used)
     if len(fids) < 3 or len(lids) < 6:
         return poses, land, None
     li = {l: i for i, l in enumerate(lids)}
-    rows = [(fi[f], li[l], o[0], o[1]) for f in fids
+    rows = [(fi[f], li[l], o[0], o[1]) for f in allf
             for l, o in obs.get(f, {}).items() if l in li]
     if len(rows) < 30:
         return poses, land, None
-    F, L = len(fids), len(lids)
+    F, L = len(allf), len(lids)
 
     x0 = np.zeros(F * 6 + L * 3)
     for f, i in fi.items():
@@ -110,29 +125,52 @@ def local_ba(poses, land, obs, K, fids=None, f_scale=2.0, max_nfev=40):
     uv = np.array([[r[2], r[3]] for r in rows])
     fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
 
+    anc = None                                  # (i_a, i_b, d0) 인덱스로 변환
+    if not frozen and anchor is not None:
+        fa, fb, d0 = anchor
+        if fa in fi and fb in fi and d0 > 1e-3:
+            anc = (fi[fa], fi[fb], d0)
+
+    def center(x, i):
+        R = cv2.Rodrigues(x[i * 6:i * 6 + 3])[0]
+        return -R.T @ x[i * 6 + 3:i * 6 + 6]
+
+    nres = len(rows) * 2 + (1 if anc else 0)
+
     def resid(x):
         P = x[F * 6:].reshape(L, 3)[pi]
-        out = np.empty((len(rows), 2))
+        out = np.empty(nres)
         for c in np.unique(ci):
             m = ci == c
             R = cv2.Rodrigues(x[c * 6:c * 6 + 3])[0]
             X = P[m] @ R.T + x[c * 6 + 3:c * 6 + 6]
             z = np.maximum(X[:, 2], 1e-3)
-            out[m, 0] = fx * X[:, 0] / z + cx - uv[m, 0]
-            out[m, 1] = fy * X[:, 1] / z + cy - uv[m, 1]
-        return out.ravel()
+            idx = np.nonzero(m)[0]
+            out[2 * idx] = fx * X[:, 0] / z + cx - uv[m, 0]
+            out[2 * idx + 1] = fy * X[:, 1] / z + cy - uv[m, 1]
+        if anc:
+            ia, ib, d0 = anc
+            out[-1] = w_scale * (np.linalg.norm(center(x, ia) - center(x, ib)) - d0)
+        return out
 
-    S = lil_matrix((len(rows) * 2, len(x0)), dtype=int)
+    S = lil_matrix((nres, len(x0)), dtype=int)
     for k, (c, p, _, _) in enumerate(rows):
-        S[2 * k:2 * k + 2, c * 6:c * 6 + 6] = 1
+        if c < nF:                              # 동결 카메라 열은 비워 둔다
+            S[2 * k:2 * k + 2, c * 6:c * 6 + 6] = 1
         S[2 * k:2 * k + 2, F * 6 + p * 3:F * 6 + p * 3 + 3] = 1
-    S[:, :6] = 0                                        # 첫 카메라 고정 (게이지)
+    if anc:
+        for i in anc[:2]:
+            S[-1, i * 6:i * 6 + 6] = 1
+    if not frozen:
+        S[:, :6] = 0                            # 게이지: 첫 카메라 고정
 
     res = least_squares(resid, x0, jac_sparsity=S, loss="huber", f_scale=f_scale,
                         method="trf", max_nfev=max_nfev, verbose=0)
     x = res.x
-    x[:6] = x0[:6]
-    for f, i in fi.items():
+    if not frozen:
+        x[:6] = x0[:6]
+    for f in fids:
+        i = fi[f]
         R = cv2.Rodrigues(x[i * 6:i * 6 + 3])[0]
         T = np.eye(4)
         T[:3, :3] = R.T
@@ -140,8 +178,8 @@ def local_ba(poses, land, obs, K, fids=None, f_scale=2.0, max_nfev=40):
         poses[f] = T
     for l, i in li.items():
         land[l] = x[F * 6 + i * 3:F * 6 + i * 3 + 3]
-    return poses, land, float(np.sqrt(np.mean(res.fun ** 2)))
-
+    rms = float(np.sqrt(np.mean(res.fun[:len(rows) * 2] ** 2)))
+    return poses, land, rms
 
 def ate(est, gt):
     v = sorted(est)
@@ -161,6 +199,7 @@ def main():
     ap.add_argument("--seg-ids", default="gt/seg_ids.json")
     ap.add_argument("--every", type=int, default=5)
     ap.add_argument("--max-extent", type=float, default=1.0)
+    ap.add_argument("--min-fill", type=float, default=0.0, help="마스크/bbox 채움비 하한(가림 필터)")
     ap.add_argument("--seed-len", type=int, default=12, help="씨앗에 쓸 프레임 개수")
     ap.add_argument("--seed-span", type=int, default=60, help="씨앗이 걸치는 원본 프레임 수(시간)")
     ap.add_argument("--ba-every", type=int, default=10)
@@ -182,7 +221,10 @@ def main():
         if rec and rec["motion_type"] == "static" and not rec.get("moves") \
                 and rec.get("extent_m") and max(rec["extent_m"]) <= args.max_extent:
             keep.add(int(local))
-    obs = load_obs(sd, args.seg, ids, keep, args.every, W, H, 0.0)
+    # min_fill 기본 0 (= 가림 필터 끔) 은 실측으로 확정한 값이다. 관측이 프레임당
+    # 중앙 7개뿐인 기근 상태라 0.65 를 걸면 씨앗 랜드마크 10→3, 등록 36%→8% 로
+    # 붕괴한다(2026-08-15). refine_bootstrap 의 0.65 는 관측이 풍부할 때 얘기다.
+    obs = load_obs(sd, args.seg, ids, keep, args.every, W, H, args.min_fill)
     frames = sorted(obs)
     print("관측 프레임 %d · 랜드마크 후보 %d · 관측 중앙 %.0f개/프레임"
           % (len(frames), len(keep), np.median([len(v) for v in obs.values()])))
@@ -227,7 +269,11 @@ def main():
         if accept_point(X, views, K):
             land[lid] = X
     print("씨앗 랜드마크 %d개" % len(land))
-    poses, land, rms = local_ba(poses, land, obs, K)
+    # 스케일 앵커: 씨앗 양끝 카메라 간 거리. v1 은 국소적으로는 미터가 맞으므로
+    # 이 거리 하나로 지도 전체의 스케일을 미터에 묶는다.
+    anc = (seed[0], seed[-1],
+           float(np.linalg.norm(init[seed[0]][:3, 3] - init[seed[-1]][:3, 3])))
+    poses, land, rms = local_ba(poses, land, obs, K, anchor=anc)
     print("씨앗 BA RMS %.2f px" % (rms or -1))
 
     # --- ②③④ 등록 → 성장 → 교정 -------------------------------------------------
@@ -237,6 +283,7 @@ def main():
     todo = [f for f in frames if f not in poses]
     tried_at = {}                       # frame → 마지막 시도 시점의 지도 크기
     n_reg, n_loop, n_retry = 0, 0, 0
+    closed = set()
     while todo:
         cand = [(len([l for l in obs[f] if l in land]), f) for f in todo
                 if tried_at.get(f, -1) < len(land)]
@@ -270,11 +317,20 @@ def main():
             if accept_point(X, views, K):
                 land[lid] = X
 
-        # ④ 루프 판정: 시간적으로 먼 프레임과 랜드마크를 공유하는가
+        # ④ 루프 판정: 시간적으로 먼 프레임과 랜드마크를 공유하는가.
+        # 같은 루프(LOOP_GAP 버킷 쌍)는 **처음 닫힐 때 한 번만** 전역 BA 를 돈다 —
+        # 안 그러면 지도가 시퀀스 전체로 퍼진 뒤 거의 매 등록이 전역 BA 가 되어
+        # 비용이 프레임 수 제곱으로 자란다(실측: every 5 에서 66등록 중 39회).
         far = [g for g in poses if abs(g - f) > LOOP_GAP and (set(obs[g]) & set(obs[f]))]
-        if far:
+        keys = {(min(f, g) // LOOP_GAP, max(f, g) // LOOP_GAP) for g in far} - closed
+        if keys:
+            closed |= keys
             n_loop += 1
-            poses, land, rms = local_ba(poses, land, obs, K)      # 전역
+            poses, land, rms = local_ba(poses, land, obs, K, anchor=anc)   # 전역
+        elif n_reg % (3 * args.ba_every) == 0:
+            # 루프 억제(④)로 전역 BA 가 39→4회로 줄자 꼬리 오차가 늘었다
+            # (p90 0.705→0.933). 주기적 전역 1회가 그 중간을 잡는다.
+            poses, land, rms = local_ba(poses, land, obs, K, anchor=anc)
         elif n_reg % args.ba_every == 0:
             recent = sorted(poses)[-3 * args.ba_every:]
             poses, land, rms = local_ba(poses, land, obs, K, fids=recent)
@@ -287,7 +343,7 @@ def main():
         del land[l]
     if bad:
         print("정리: 재투영이 안 맞는 랜드마크 %d개 제거" % len(bad))
-    poses, land, rms = local_ba(poses, land, obs, K, max_nfev=200)
+    poses, land, rms = local_ba(poses, land, obs, K, max_nfev=200, anchor=anc)
     med, p9, sc = ate(poses, gtp)
     if len(poses) < 0.3 * len(frames):
         print("\n⚠️ 등록률이 낮아 ATE 가 무의미하다 — 등록된 프레임이 한쪽에 몰리면"
