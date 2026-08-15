@@ -42,7 +42,7 @@ MIN_TRI_VIEWS = 3
 MIN_PARALLAX = 0.20      # m. 이보다 시차가 작으면 삼각측량하지 않는다
 LOOP_GAP = 200           # 프레임. 이만큼 떨어진 구간과 랜드마크를 공유하면 루프로 본다
 PIECE = 100000           # (c) 이동물체 구간별 가상 id: lid + PIECE*(구간+1)
-MOVE_BUF = 10            # 이동구간 앞뒤 완충 프레임 — GT 구간 경계의 잔여 움직임 흡수
+MOVE_BUF = 10            # 기본 완충. GT 이동구간은 변위 임계 검출이라 경계에 잔여 움직임이 샌다
 
 
 def accept_point(X, views, K, max_reproj=6.0, max_depth=25.0):
@@ -240,6 +240,9 @@ def main():
     ap.add_argument("--still-dynamic", action="store_true",
                     help="motion_type 이 동적이라도 이 시퀀스에서 안 움직였으면(moves=False)"
                          " 랜드마크로 쓴다. 접시·소품류가 늘어 관측 밀도가 오른다")
+    ap.add_argument("--move-buf", type=int, default=MOVE_BUF,
+                    help="이동구간 앞뒤 완충(프레임). every=1 은 경계 오염 관측을 5배 줍므로"
+                         " 넓게 잡아야 한다(실측: buf10 에서 ATE 0.170→0.210 역효과)")
     ap.add_argument("--piecewise", action="store_true",
                     help="(c) 이동물체를 이동구간 기준으로 쪼개 **정지구간마다** 별도"
                          " 랜드마크로 쓴다. 관측 사막이 이동물체 때문에 생겼을 때 뚫린다")
@@ -271,7 +274,7 @@ def main():
         if (rec["motion_type"] == "static" or args.still_dynamic) and not rec.get("moves"):
             keep.add(int(local))
         elif args.piecewise and rec.get("moves"):
-            movers[int(local)] = [(mv["start_idx"] - MOVE_BUF, mv["end_idx"] + MOVE_BUF)
+            movers[int(local)] = [(mv["start_idx"] - args.move_buf, mv["end_idx"] + args.move_buf)
                                   for mv in rec["moves"]]
     keep |= set(movers)
 
@@ -321,11 +324,21 @@ def main():
     # 카메라가 거의 안 움직여 시차가 0 이고, 삼각측량이 **전부 기각**된다(실측: 씨앗
     # 랜드마크 0개, 등록 12/905). 시간 창으로 잡고 그 안에서 성기게 고른다.
     def pick_seed(taken):
+        # ⚠️ 점수만 보고 고르면 씨앗이 기존 아일랜드 옆에 뭉친다(실측: 4개가 전부
+        # f357~551). 탐사를 강제한다 — 기존 등록 구역에서 SEED_SEP 이상 떨어진
+        # 창만 후보로 삼는다.
+        SEED_SEP = 50
+        tsort = sorted(taken)
         best, bseed = -1, None
         for i in range(len(frames)):
             f0 = frames[i]
             if f0 in taken:
                 continue
+            if tsort:
+                k = bisect.bisect_left(tsort, f0)
+                near = min([abs(f0 - tsort[j]) for j in (k - 1, k) if 0 <= j < len(tsort)])
+                if near < SEED_SEP:
+                    continue
             seg = [f for f in frames[i:] if f - f0 <= args.seed_span and f not in taken]
             if len(seg) < 4:
                 continue
