@@ -203,6 +203,15 @@ def main():
     ap.add_argument("--seed-len", type=int, default=12, help="씨앗에 쓸 프레임 개수")
     ap.add_argument("--seed-span", type=int, default=60, help="씨앗이 걸치는 원본 프레임 수(시간)")
     ap.add_argument("--ba-every", type=int, default=10)
+    ap.add_argument("--fuse-emb", default=None,
+                    help="track_emb.npz 경로(시퀀스 상대). FastSAM 트랙은 끊겨서 지도가 못 크는데,"
+                         " 삼각측량된 새 점이 기존 랜드마크와 3D 근접+임베딩 일치+시간 중첩 0 이면"
+                         " 같은 물체로 융합한다(re-ID = 루프 감지의 FastSAM 판)")
+    ap.add_argument("--fuse-dist", type=float, default=0.5)
+    ap.add_argument("--bridge", type=int, default=0,
+                    help="관측 기근으로 PnP 가 멈추면 등록 프레임에서 이 거리(프레임) 이내를"
+                         " v1 상대포즈로 건넌다. 브릿지 포즈도 BA 로 다듬어진다. 0=끔")
+    ap.add_argument("--fuse-cos", type=float, default=0.85)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -226,6 +235,15 @@ def main():
     # 붕괴한다(2026-08-15). refine_bootstrap 의 0.65 는 관측이 풍부할 때 얘기다.
     obs = load_obs(sd, args.seg, ids, keep, args.every, W, H, args.min_fill)
     frames = sorted(obs)
+    emb = None
+    if args.fuse_emb:
+        zz = np.load(os.path.join(sd, args.fuse_emb))
+        E = zz["emb"] / np.linalg.norm(zz["emb"], axis=1, keepdims=True)
+        emb = {int(t): E[i] for i, t in enumerate(zz["ids"])}
+        tframes = defaultdict(set)
+        for _f in frames:
+            for _l in obs[_f]:
+                tframes[_l].add(_f)
     print("관측 프레임 %d · 랜드마크 후보 %d · 관측 중앙 %.0f개/프레임"
           % (len(frames), len(keep), np.median([len(v) for v in obs.values()])))
 
@@ -280,31 +298,70 @@ def main():
     # ⚠️ 실패한 프레임을 todo 에서 빼면 안 된다. 지도가 작을 때 실패한 프레임이
     # 지도가 커진 뒤에는 풀릴 수 있고, 그게 증분 SfM 의 핵심이다. 대신 **직전 시도 이후
     # 지도가 자란 경우에만** 재시도해서 무한 루프를 막는다.
+    n_fuse, n_fuse_ok = 0, 0
+
+    def try_fuse(lid, X):
+        """새 랜드마크 ↔ 기존 랜드마크 융합 게이트. 사전 병합(v1 위치 기반)은 정밀도
+        32~44% 로 못 쓴다(실측) — 지도 3D 는 그보다 정확해서 게이트가 날카로워진다."""
+        if emb is None or lid not in emb:
+            return None
+        best, bl = -1.0, None
+        for l2, X2 in land.items():
+            if l2 == lid or l2 not in emb:
+                continue
+            if np.linalg.norm(X - X2) > args.fuse_dist:
+                continue
+            c = float(emb[lid] @ emb[l2])
+            if c > best:
+                best, bl = c, l2
+        if bl is None or best < args.fuse_cos or (tframes[lid] & tframes[bl]):
+            return None
+        return bl
+
+    import bisect
     todo = [f for f in frames if f not in poses]
     tried_at = {}                       # frame → 마지막 시도 시점의 지도 크기
-    n_reg, n_loop, n_retry = 0, 0, 0
+    n_reg, n_loop, n_retry, n_bridge = 0, 0, 0, 0
+    pnp_frames = set(seed)
     closed = set()
     while todo:
         cand = [(len([l for l in obs[f] if l in land]), f) for f in todo
                 if tried_at.get(f, -1) < len(land)]
-        if not cand:
-            break
         cand.sort(reverse=True)
-        nvis, f = cand[0]
-        if nvis < 5:
+        if cand and cand[0][0] >= 5:
+            nvis, f = cand[0]
+            n_retry += (f in tried_at)
+            tried_at[f] = len(land)
+            r = pnp([land[l] for l in obs[f] if l in land],
+                    [obs[f][l][:2] for l in obs[f] if l in land], K)
+            if r is None:
+                continue
+            poses[f], _ = r
+            pnp_frames.add(f)
+        elif args.bridge:
+            # 프론티어 브릿지 — 삼각측량은 등록을, 등록은 랜드마크를 전제하는
+            # 닭-달걀을 v1 상대포즈 한 걸음으로 끊는다(실측: FastSAM 트랙은 수명이
+            # 짧아 등록이 씨앗 주변 15초에 갇혔다). 국소 v1 은 믿는다는 설계 그대로.
+            regs = sorted(poses)
+            best = None
+            for f2 in todo:
+                k = bisect.bisect_left(regs, f2)
+                for g in regs[max(0, k - 1):k + 1]:
+                    gap = abs(g - f2)
+                    if gap <= args.bridge and (best is None or gap < best[0]):
+                        best = (gap, f2, g)
+            if best is None:
+                break
+            _, f, g = best
+            poses[f] = poses[g] @ np.linalg.inv(init[g]) @ init[f]
+            n_bridge += 1
+        else:
             break
-        n_retry += (f in tried_at)
-        tried_at[f] = len(land)
-        r = pnp([land[l] for l in obs[f] if l in land],
-                [obs[f][l][:2] for l in obs[f] if l in land], K)
-        if r is None:
-            continue
         todo.remove(f)
-        poses[f], _ = r
         n_reg += 1
 
         # ③ 새 프레임 덕에 시차가 생긴 랜드마크를 새로 삼각측량
-        for lid in obs[f]:
+        for lid in list(obs[f]):
             if lid in land:
                 continue
             views = [(poses[g], obs[g][lid][:2]) for g in poses if lid in obs[g]]
@@ -314,8 +371,19 @@ def main():
             if np.linalg.norm(C.max(0) - C.min(0)) < MIN_PARALLAX:
                 continue
             X = triangulate(views, K)
-            if accept_point(X, views, K):
+            if not accept_point(X, views, K):
+                continue
+            tgt = try_fuse(lid, X)
+            if tgt is None:
                 land[lid] = X
+            else:                       # 융합: lid 의 모든 관측(미래 포함)을 tgt 로 이관
+                n_fuse += 1
+                n_fuse_ok += (ids.get(str(lid), {}).get("gt_instance")
+                              == ids.get(str(tgt), {}).get("gt_instance"))
+                for g in tframes[lid]:
+                    if lid in obs[g]:
+                        obs[g][tgt] = obs[g].pop(lid)
+                tframes[tgt] |= tframes[lid]
 
         # ④ 루프 판정: 시간적으로 먼 프레임과 랜드마크를 공유하는가.
         # 같은 루프(LOOP_GAP 버킷 쌍)는 **처음 닫힐 때 한 번만** 전역 BA 를 돈다 —
@@ -348,10 +416,16 @@ def main():
     if len(poses) < 0.3 * len(frames):
         print("\n⚠️ 등록률이 낮아 ATE 가 무의미하다 — 등록된 프레임이 한쪽에 몰리면"
               "\n   sim3 정합이 거의 완벽히 맞아 0.0x m 같은 허상이 나온다.")
-    print("\n등록 %d/%d 프레임 (%.0f%%) · 랜드마크 %d · 재시도 %d · 루프 교정 %d회 · RMS %.2f px"
-          % (len(poses), len(frames), 100 * len(poses) / len(frames), len(land),
-             n_retry, n_loop, rms or -1))
+    print("\n등록 %d/%d 프레임 (%.0f%%, PnP %d + 브릿지 %d) · 랜드마크 %d · 재시도 %d"
+          " · 루프 교정 %d회 · RMS %.2f px"
+          % (len(poses), len(frames), 100 * len(poses) / len(frames),
+             len(pnp_frames), n_bridge, len(land), n_retry, n_loop, rms or -1))
+    if emb is not None:
+        print("융합 %d회 · GT 기준 옳은 융합 %d회" % (n_fuse, n_fuse_ok))
     print("**ATE 중앙 %.3f m · p90 %.3f · 정합스케일 %.3f**" % (med, p9, sc))
+    if n_bridge and len(pnp_frames) > 10:
+        m2, p2, _ = ate({f: poses[f] for f in pnp_frames}, gtp)
+        print("  (PnP 프레임만: ATE 중앙 %.3f · p90 %.3f)" % (m2, p2))
 
     if args.out:
         arr = np.tile(np.eye(4), (len(gtp), 1, 1))
