@@ -9,17 +9,19 @@
 
 여기서는 구조를 바꾼다 — **v1 을 국소적으로만 믿는다**:
 
-    ① 씨앗    공통 랜드마크가 가장 많은 **짧은 구간**만 v1 포즈로 초기화
-              (윈도우 내부는 DA3 가 일관되게 푼다. 드리프트는 윈도우 **사이**에서 생긴다)
+    ① 씨앗    공통 랜드마크가 많고 시차가 충분한 **짧은 구간**만 v1 포즈로 초기화
     ② 등록    지도에 있는 랜드마크를 가장 많이 보는 프레임부터 하나씩 PnP 로 붙인다
     ③ 성장    새로 등록된 프레임 덕에 시차가 생긴 랜드마크를 **새로 삼각측량**
-    ④ 교정    N 개마다 지역 BA. 등록된 프레임이 시간적으로 멀리 떨어진 곳과
-              랜드마크를 공유하면(=루프) **전역 BA** 로 전체를 다시 편다
+    ④ 교정    N 개마다 지역 BA. 루프가 처음 닫히면 **전역 BA**
+    ⑤ 아일랜드 관측 사막에 막히면(--islands) 남은 구간에 새 씨앗을 심어 독립 성장,
+              마지막에 RANSAC sim3 로 병합 — 사막을 v1 오도메트리로 건너지 않는다
 
-데이터에 루프는 충분하다 — 실측: 랜드마크 140개 중 43개가 30초 이상 시간을 가로지르고,
-상위 5개는 span 905~915프레임에 중간 공백 225~375프레임이다.
+FastSAM 트랙 실측(2026-08-16): 연결 구역 PnP-only 0.067 m, 사막을 v1 브릿지로
+건너면 드리프트 수입(0.28~), 별자리 루프병합은 18/18 오병합. 아일랜드 병합은
+접지된 강체 구조끼리의 정합이라 조건이 다르다.
 """
 import argparse
+import bisect
 import json
 import os
 import sys
@@ -39,6 +41,8 @@ from scripts.refine_bootstrap import (BORDER, MIN_PX, load_obs,  # noqa: E402
 MIN_TRI_VIEWS = 3
 MIN_PARALLAX = 0.20      # m. 이보다 시차가 작으면 삼각측량하지 않는다
 LOOP_GAP = 200           # 프레임. 이만큼 떨어진 구간과 랜드마크를 공유하면 루프로 본다
+PIECE = 100000           # (c) 이동물체 구간별 가상 id: lid + PIECE*(구간+1)
+MOVE_BUF = 10            # 이동구간 앞뒤 완충 프레임 — GT 구간 경계의 잔여 움직임 흡수
 
 
 def accept_point(X, views, K, max_reproj=6.0, max_depth=25.0):
@@ -181,6 +185,7 @@ def local_ba(poses, land, obs, K, fids=None, f_scale=2.0, max_nfev=40,
     rms = float(np.sqrt(np.mean(res.fun[:len(rows) * 2] ** 2)))
     return poses, land, rms
 
+
 def ate(est, gt):
     v = sorted(est)
     A = np.array([est[i][:3, 3] for i in v])
@@ -188,6 +193,29 @@ def ate(est, gt):
     s, R, t, _ = robust_umeyama(A, B)
     d = np.linalg.norm((s * (R @ A.T)).T + t - B, axis=1)
     return float(np.median(d)), float(np.percentile(d, 90)), s
+
+
+def umeyama3(A, B):
+    """B ≈ s·R·A + t 를 푸는 최소 구현(표본 3점 이상). RANSAC 내부용."""
+    A, B = np.asarray(A, float), np.asarray(B, float)
+    ca, cb = A.mean(0), B.mean(0)
+    Ac, Bc = A - ca, B - cb
+    U, D, Vt = np.linalg.svd(Bc.T @ Ac)
+    S = np.eye(3)
+    if np.linalg.det(U @ Vt) < 0:
+        S[2, 2] = -1
+    R = U @ S @ Vt
+    s = float((D * S.diagonal()).sum() / max((Ac ** 2).sum(), 1e-12))
+    t = cb - s * R @ ca
+    return s, R, t
+
+
+def sim3_apply_pose(T, s, R, t):
+    """카메라→월드 포즈에 sim3 적용. 회전엔 s 를 곱하지 않는다."""
+    O = np.eye(4)
+    O[:3, :3] = R @ T[:3, :3]
+    O[:3, 3] = s * R @ T[:3, 3] + t
+    return O
 
 
 def main():
@@ -208,20 +236,21 @@ def main():
                          " 삼각측량된 새 점이 기존 랜드마크와 3D 근접+임베딩 일치+시간 중첩 0 이면"
                          " 같은 물체로 융합한다(re-ID = 루프 감지의 FastSAM 판)")
     ap.add_argument("--fuse-dist", type=float, default=0.5)
-    ap.add_argument("--const", action="store_true",
-                    help="별자리 루프병합. 기본 꺼짐 — CLIP 크롭 임베딩은 실내 소품"
-                         " 판별력이 없어 cos0.90+3쌍+0.5m 게이트가 18/18 오병합했다(2026-08-16)")
+    ap.add_argument("--fuse-cos", type=float, default=0.85)
     ap.add_argument("--still-dynamic", action="store_true",
                     help="motion_type 이 동적이라도 이 시퀀스에서 안 움직였으면(moves=False)"
                          " 랜드마크로 쓴다. 접시·소품류가 늘어 관측 밀도가 오른다")
-    ap.add_argument("--const-cos", type=float, default=0.90,
-                    help="별자리 루프 감지의 임베딩 하한 (융합 0.85 보다 높게)")
-    ap.add_argument("--const-tol", type=float, default=0.5,
-                    help="별자리 쌍별 거리 일치 허용(m)")
+    ap.add_argument("--piecewise", action="store_true",
+                    help="(c) 이동물체를 이동구간 기준으로 쪼개 **정지구간마다** 별도"
+                         " 랜드마크로 쓴다. 관측 사막이 이동물체 때문에 생겼을 때 뚫린다")
+    ap.add_argument("--islands", type=int, default=1,
+                    help="(b) 씨앗 수. 1=단일(기존). 2+ 는 사막에 막힐 때마다 남은 구간에"
+                         " 새 씨앗을 심어 독립 성장 후 RANSAC sim3 로 병합한다")
+    ap.add_argument("--merge-cos", type=float, default=0.85, help="아일랜드 병합 임베딩 하한")
+    ap.add_argument("--merge-tol", type=float, default=0.4, help="아일랜드 병합 인라이어 허용(m)")
     ap.add_argument("--bridge", type=int, default=0,
                     help="관측 기근으로 PnP 가 멈추면 등록 프레임에서 이 거리(프레임) 이내를"
                          " v1 상대포즈로 건넌다. 브릿지 포즈도 BA 로 다듬어진다. 0=끔")
-    ap.add_argument("--fuse-cos", type=float, default=0.85)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -234,257 +263,301 @@ def main():
     ids = json.load(open(os.path.join(sd, args.seg_ids)))
     gt = json.load(open(os.path.join(sd, "gt", "objects.json")))["instances"]
 
-    keep = set()
+    keep, movers = set(), {}
     for local, m in ids.items():
         rec = gt.get(str(m.get("gt_instance") or m.get("instance_id")))
-        if rec and (rec["motion_type"] == "static" or args.still_dynamic) \
-                and not rec.get("moves") \
-                and rec.get("extent_m") and max(rec["extent_m"]) <= args.max_extent:
+        if not rec or not rec.get("extent_m") or max(rec["extent_m"]) > args.max_extent:
+            continue
+        if (rec["motion_type"] == "static" or args.still_dynamic) and not rec.get("moves"):
             keep.add(int(local))
+        elif args.piecewise and rec.get("moves"):
+            movers[int(local)] = [(mv["start_idx"] - MOVE_BUF, mv["end_idx"] + MOVE_BUF)
+                                  for mv in rec["moves"]]
+    keep |= set(movers)
+
+    def gid(l):
+        """가상 id(구간별 이동물체 포함) → gt_instance. 순도 진단용."""
+        return ids.get(str(l % PIECE), {}).get("gt_instance")
+
     # min_fill 기본 0 (= 가림 필터 끔) 은 실측으로 확정한 값이다. 관측이 프레임당
     # 중앙 7개뿐인 기근 상태라 0.65 를 걸면 씨앗 랜드마크 10→3, 등록 36%→8% 로
     # 붕괴한다(2026-08-15). refine_bootstrap 의 0.65 는 관측이 풍부할 때 얘기다.
     obs = load_obs(sd, args.seg, ids, keep, args.every, W, H, args.min_fill)
+    if movers:
+        # (c) 이동구간(±완충) 관측은 버리고, 정지구간별로 가상 id 를 부여한다.
+        n_piece = 0
+        for f in list(obs):
+            for l in list(obs[f]):
+                if l not in movers:
+                    continue
+                iv = movers[l]
+                if any(a <= f <= b for a, b in iv):
+                    del obs[f][l]
+                else:
+                    seg_i = sum(f > b for _, b in iv)
+                    obs[f][l + PIECE * (seg_i + 1)] = obs[f].pop(l)
+                    n_piece += 1
+        print("구간별 이동물체 %d개 → 관측 %d개를 정지구간 랜드마크로" % (len(movers), n_piece))
     frames = sorted(obs)
+
     emb = None
     if args.fuse_emb:
         zz = np.load(os.path.join(sd, args.fuse_emb))
         E = zz["emb"] / np.linalg.norm(zz["emb"], axis=1, keepdims=True)
         emb = {int(t): E[i] for i, t in enumerate(zz["ids"])}
-        tframes = defaultdict(set)
-        for _f in frames:
-            for _l in obs[_f]:
-                tframes[_l].add(_f)
+        for l in {l for f in frames for l in obs[f] if l >= PIECE}:
+            if l % PIECE in emb:
+                emb[l] = emb[l % PIECE]
+    tframes = defaultdict(set)
+    for _f in frames:
+        for _l in obs[_f]:
+            tframes[_l].add(_f)
     print("관측 프레임 %d · 랜드마크 후보 %d · 관측 중앙 %.0f개/프레임"
-          % (len(frames), len(keep), np.median([len(v) for v in obs.values()])))
+          % (len(frames), len(keep - set(movers)) + sum(len(v) + 1 for v in movers.values()),
+             np.median([len(v) for v in obs.values()])))
 
     # --- ① 씨앗: 공통 랜드마크가 많으면서 **시차가 충분한** 구간 -----------------
     # ⚠️ 씨앗을 '연속 N 프레임' 으로 잡으면 안 된다. every=1 에서 12프레임은 1.2초라
     # 카메라가 거의 안 움직여 시차가 0 이고, 삼각측량이 **전부 기각**된다(실측: 씨앗
     # 랜드마크 0개, 등록 12/905). 시간 창으로 잡고 그 안에서 성기게 고른다.
-    span = args.seed_span
-    best, bseed = -1, None
-    for i in range(len(frames)):
-        seg = [f for f in frames[i:] if f - frames[i] <= span]
-        if len(seg) < 4:
-            continue
-        seg = seg[::max(1, len(seg) // args.seed_len)][:args.seed_len]
-        C = np.array([init[f][:3, 3] for f in seg])
-        base = float(np.linalg.norm(C.max(0) - C.min(0)))
-        if base < MIN_PARALLAX * 2:
-            continue
-        sets = [set(obs[f]) for f in seg]
-        sc = len(set.intersection(*sets)) * 10 + sum(len(a & b) for a, b in zip(sets, sets[1:]))
-        if sc > best:
-            best, bseed = sc, seg
-    if bseed is None:
-        sys.exit("씨앗 구간을 못 찾았다 — seed-span 을 늘려라")
-    seed = bseed
-    poses = {f: init[f].copy() for f in seed}
-    _C = np.array([init[f][:3, 3] for f in seed])
-    print("씨앗 %d프레임 f%d~f%d · 기준선 %.2f m · 점수 %d"
-          % (len(seed), seed[0], seed[-1],
-             float(np.linalg.norm(_C.max(0) - _C.min(0))), best))
-
-    land = {}
-    for lid in keep:
-        views = [(poses[f], obs[f][lid][:2]) for f in seed if lid in obs[f]]
-        if len(views) < MIN_TRI_VIEWS:
-            continue
-        C = np.array([T[:3, 3] for T, _ in views])
-        if np.linalg.norm(C.max(0) - C.min(0)) < MIN_PARALLAX:
-            continue
-        X = triangulate(views, K)
-        if accept_point(X, views, K):
-            land[lid] = X
-    print("씨앗 랜드마크 %d개" % len(land))
-    # 스케일 앵커: 씨앗 양끝 카메라 간 거리. v1 은 국소적으로는 미터가 맞으므로
-    # 이 거리 하나로 지도 전체의 스케일을 미터에 묶는다.
-    anc = (seed[0], seed[-1],
-           float(np.linalg.norm(init[seed[0]][:3, 3] - init[seed[-1]][:3, 3])))
-    poses, land, rms = local_ba(poses, land, obs, K, anchor=anc)
-    print("씨앗 BA RMS %.2f px" % (rms or -1))
-
-    # --- ②③④ 등록 → 성장 → 교정 -------------------------------------------------
-    # ⚠️ 실패한 프레임을 todo 에서 빼면 안 된다. 지도가 작을 때 실패한 프레임이
-    # 지도가 커진 뒤에는 풀릴 수 있고, 그게 증분 SfM 의 핵심이다. 대신 **직전 시도 이후
-    # 지도가 자란 경우에만** 재시도해서 무한 루프를 막는다.
-    n_fuse, n_fuse_ok = 0, 0
-    grounded = set(land)                # PnP 뷰 ≥3 으로 삼각측량된 랜드마크 (씨앗 포함)
-
-    def try_fuse(lid, X):
-        """새 랜드마크 ↔ 기존 랜드마크 융합 게이트. 사전 병합(v1 위치 기반)은 정밀도
-        32~44% 로 못 쓴다(실측) — 지도 3D 는 그보다 정확해서 게이트가 날카로워진다."""
-        # ⚠️ 융합은 identity 결정이다 — 브릿지(v1 복사) 포즈로 삼각측량된 점은
-        # 위치가 v1 드리프트만큼 틀어져 있어 3D 게이트가 다른 물체를 병합한다
-        # (실측: bridge 100 에서 순도 10/10 → 13/26 붕괴, 가짜 루프가 전역 BA 로
-        # PnP 구역까지 오염 0.067→0.214). PnP 접지된 점끼리만 융합한다.
-        if emb is None or lid not in emb or lid not in grounded:
-            return None
-        best, bl = -1.0, None
-        for l2, X2 in land.items():
-            if l2 == lid or l2 not in emb or l2 not in grounded:
+    def pick_seed(taken):
+        best, bseed = -1, None
+        for i in range(len(frames)):
+            f0 = frames[i]
+            if f0 in taken:
                 continue
-            if np.linalg.norm(X - X2) > args.fuse_dist:
+            seg = [f for f in frames[i:] if f - f0 <= args.seed_span and f not in taken]
+            if len(seg) < 4:
                 continue
-            c = float(emb[lid] @ emb[l2])
-            if c > best:
-                best, bl = c, l2
-        if bl is None or best < args.fuse_cos or (tframes[lid] & tframes[bl]):
-            return None
-        return bl
-
-    n_const, n_const_ok = 0, 0
-
-    def merge_into(l, o):
-        """l 의 관측 전부(미래 포함)를 o 로 이관."""
-        for g in tframes[l]:
-            if l in obs[g]:
-                obs[g][o] = obs[g].pop(l)
-        tframes[o] |= tframes[l]
-        land.pop(l, None)
-
-    def constellation(f):
-        """드리프트 불변 루프 감지 — 절대좌표 융합 게이트는 재방문 구역이 1m 쯤
-        드리프트되면 침묵한다(실측: bridge 100 에서 루프 0회). 랜드마크 **쌍별 상대
-        거리**는 국소 포즈만 맞으면 유효하므로, 임베딩 후보쌍들 가운데 상호 거리가
-        일치하는 ≥3쌍을 별자리로 보고 통째로 병합한다. 병합이 곧 루프 간선이 되어
-        기존 far/전역 BA 경로가 발화한다."""
-        import itertools
-        cur = [l for l in obs[f] if l in land and l in emb and l not in grounded]
-        cand = []
-        for l in cur:
-            for o in grounded:
-                if o not in land or o not in emb or o in obs[f]:
-                    continue
-                if float(emb[l] @ emb[o]) < args.const_cos or (tframes[l] & tframes[o]):
-                    continue
-                cand.append((l, o))
-        if len(cand) < 3:
-            return 0
-        con = {i: set() for i in range(len(cand))}
-        for (i, (l1, o1)), (j, (l2, o2)) in itertools.combinations(enumerate(cand), 2):
-            if l1 == l2 or o1 == o2:
+            seg = seg[::max(1, len(seg) // args.seed_len)][:args.seed_len]
+            C = np.array([init[f][:3, 3] for f in seg])
+            if float(np.linalg.norm(C.max(0) - C.min(0))) < MIN_PARALLAX * 2:
                 continue
-            dn = np.linalg.norm(land[l1] - land[l2])
-            do = np.linalg.norm(land[o1] - land[o2])
-            if abs(dn - do) <= args.const_tol:
-                con[i].add(j)
-                con[j].add(i)
-        best = max(con, key=lambda i: len(con[i]))
-        group = {best}
-        for j in sorted(con[best], key=lambda j: -len(con[j])):
-            if all(j in con[g] or g in con[j] for g in group):
-                lg = [cand[g][0] for g in group] + [cand[j][0]]
-                og = [cand[g][1] for g in group] + [cand[j][1]]
-                if len(set(lg)) == len(lg) and len(set(og)) == len(og):
-                    group.add(j)
-        if len(group) < 3:
-            return 0
-        nonlocal n_const, n_const_ok
-        for gI in group:
-            l, o = cand[gI]
-            n_const += 1
-            n_const_ok += (ids.get(str(l), {}).get("gt_instance")
-                           == ids.get(str(o), {}).get("gt_instance"))
-            merge_into(l, o)
-        return len(group)
+            sets = [set(obs[f]) for f in seg]
+            sc = len(set.intersection(*sets)) * 10 \
+                + sum(len(a & b) for a, b in zip(sets, sets[1:]))
+            if sc > best:
+                best, bseed = sc, seg
+        return bseed, best
 
-    import bisect
-    todo = [f for f in frames if f not in poses]
-    tried_at = {}                       # frame → 마지막 시도 시점의 지도 크기
-    n_reg, n_loop, n_retry, n_bridge = 0, 0, 0, 0
-    pnp_frames = set(seed)
-    closed = set()
-    while todo:
-        cand = [(len([l for l in obs[f] if l in land]), f) for f in todo
-                if tried_at.get(f, -1) < len(land)]
-        cand.sort(reverse=True)
-        if cand and cand[0][0] >= 5:
-            nvis, f = cand[0]
-            n_retry += (f in tried_at)
-            tried_at[f] = len(land)
-            r = pnp([land[l] for l in obs[f] if l in land],
-                    [obs[f][l][:2] for l in obs[f] if l in land], K)
-            if r is None:
-                continue
-            poses[f], _ = r
-            pnp_frames.add(f)
-            for lid in obs[f]:
-                if lid in land and lid not in grounded:
-                    if sum(g in pnp_frames for g in poses if lid in obs[g]) >= MIN_TRI_VIEWS:
-                        grounded.add(lid)
-        elif args.bridge:
-            # 프론티어 브릿지 — 삼각측량은 등록을, 등록은 랜드마크를 전제하는
-            # 닭-달걀을 v1 상대포즈 한 걸음으로 끊는다(실측: FastSAM 트랙은 수명이
-            # 짧아 등록이 씨앗 주변 15초에 갇혔다). 국소 v1 은 믿는다는 설계 그대로.
-            regs = sorted(poses)
-            best = None
-            for f2 in todo:
-                k = bisect.bisect_left(regs, f2)
-                for g in regs[max(0, k - 1):k + 1]:
-                    gap = abs(g - f2)
-                    if gap <= args.bridge and (best is None or gap < best[0]):
-                        best = (gap, f2, g)
-            if best is None:
-                break
-            _, f, g = best
-            poses[f] = poses[g] @ np.linalg.inv(init[g]) @ init[f]
-            n_bridge += 1
-        else:
-            break
-        todo.remove(f)
-        n_reg += 1
+    stats = dict(fuse=0, fuse_ok=0, retry=0, loop=0, bridge=0)
 
-        # ③ 새 프레임 덕에 시차가 생긴 랜드마크를 새로 삼각측량
-        for lid in list(obs[f]):
-            if lid in land:
-                continue
-            vf = [g for g in poses if lid in obs[g]]
-            views = [(poses[g], obs[g][lid][:2]) for g in vf]
+    def grow_island(seed, taken):
+        """씨앗 하나에서 ②③④ 로 아일랜드를 키운다. taken 프레임은 건드리지 않는다."""
+        poses = {f: init[f].copy() for f in seed}
+        pnp_frames = set(seed)
+        land, grounded = {}, set()
+        anc = (seed[0], seed[-1],
+               float(np.linalg.norm(init[seed[0]][:3, 3] - init[seed[-1]][:3, 3])))
+        for lid in {l for f in seed for l in obs[f]}:
+            views = [(poses[f], obs[f][lid][:2]) for f in seed if lid in obs[f]]
             if len(views) < MIN_TRI_VIEWS:
                 continue
             C = np.array([T[:3, 3] for T, _ in views])
             if np.linalg.norm(C.max(0) - C.min(0)) < MIN_PARALLAX:
                 continue
             X = triangulate(views, K)
-            if not accept_point(X, views, K):
-                continue
-            if sum(g in pnp_frames for g in vf) >= MIN_TRI_VIEWS:
-                grounded.add(lid)
-            tgt = try_fuse(lid, X)
-            if tgt is None:
+            if accept_point(X, views, K):
                 land[lid] = X
-            else:                       # 융합: lid 의 모든 관측(미래 포함)을 tgt 로 이관
-                n_fuse += 1
-                n_fuse_ok += (ids.get(str(lid), {}).get("gt_instance")
-                              == ids.get(str(tgt), {}).get("gt_instance"))
-                for g in tframes[lid]:
-                    if lid in obs[g]:
-                        obs[g][tgt] = obs[g].pop(lid)
-                tframes[tgt] |= tframes[lid]
+        grounded |= set(land)
+        local_ba(poses, land, obs, K, anchor=anc)
 
-        if emb is not None and args.const:
-            constellation(f)
+        def try_fuse(lid, X):
+            """융합은 identity 결정 — 브릿지(v1 복사) 포즈 유래의 점은 위치가 드리프트
+            만큼 틀어져 오병합을 만든다(실측: 순도 10/10→13/26). PnP 접지끼리만."""
+            if emb is None or lid not in emb or lid not in grounded:
+                return None
+            best_c, bl = -1.0, None
+            for l2, X2 in land.items():
+                if l2 == lid or l2 not in emb or l2 not in grounded:
+                    continue
+                if np.linalg.norm(X - X2) > args.fuse_dist:
+                    continue
+                c = float(emb[lid] @ emb[l2])
+                if c > best_c:
+                    best_c, bl = c, l2
+            if bl is None or best_c < args.fuse_cos or (tframes[lid] & tframes[bl]):
+                return None
+            return bl
 
-        # ④ 루프 판정: 시간적으로 먼 프레임과 랜드마크를 공유하는가.
-        # 같은 루프(LOOP_GAP 버킷 쌍)는 **처음 닫힐 때 한 번만** 전역 BA 를 돈다 —
-        # 안 그러면 지도가 시퀀스 전체로 퍼진 뒤 거의 매 등록이 전역 BA 가 되어
-        # 비용이 프레임 수 제곱으로 자란다(실측: every 5 에서 66등록 중 39회).
-        far = [g for g in poses if abs(g - f) > LOOP_GAP and (set(obs[g]) & set(obs[f]))]
-        keys = {(min(f, g) // LOOP_GAP, max(f, g) // LOOP_GAP) for g in far} - closed
-        if keys:
-            closed |= keys
-            n_loop += 1
-            poses, land, rms = local_ba(poses, land, obs, K, anchor=anc)   # 전역
-        elif n_reg % (3 * args.ba_every) == 0:
-            # 루프 억제(④)로 전역 BA 가 39→4회로 줄자 꼬리 오차가 늘었다
-            # (p90 0.705→0.933). 주기적 전역 1회가 그 중간을 잡는다.
-            poses, land, rms = local_ba(poses, land, obs, K, anchor=anc)
-        elif n_reg % args.ba_every == 0:
-            recent = sorted(poses)[-3 * args.ba_every:]
-            poses, land, rms = local_ba(poses, land, obs, K, fids=recent)
+        todo = [f for f in frames if f not in poses and f not in taken]
+        tried_at = {}
+        n_reg = 0
+        closed = set()
+        while todo:
+            cand = [(len([l for l in obs[f] if l in land]), f) for f in todo
+                    if tried_at.get(f, -1) < len(land)]
+            cand.sort(reverse=True)
+            if cand and cand[0][0] >= 5:
+                nvis, f = cand[0]
+                stats["retry"] += (f in tried_at)
+                tried_at[f] = len(land)
+                r = pnp([land[l] for l in obs[f] if l in land],
+                        [obs[f][l][:2] for l in obs[f] if l in land], K)
+                if r is None:
+                    continue
+                poses[f], _ = r
+                pnp_frames.add(f)
+                for lid in obs[f]:
+                    if lid in land and lid not in grounded and \
+                            sum(g in pnp_frames for g in poses if lid in obs[g]) >= MIN_TRI_VIEWS:
+                        grounded.add(lid)
+            elif args.bridge:
+                # 프론티어 브릿지 — 닭-달걀(삼각측량↔등록)을 v1 한 걸음으로 끊는다.
+                # 아일랜드 모드에선 짧게(≤15) 두고, 긴 사막은 새 씨앗이 맡는다.
+                regs = sorted(poses)
+                best_b = None
+                for f2 in todo:
+                    k = bisect.bisect_left(regs, f2)
+                    for g in regs[max(0, k - 1):k + 1]:
+                        gap = abs(g - f2)
+                        if gap <= args.bridge and (best_b is None or gap < best_b[0]):
+                            best_b = (gap, f2, g)
+                if best_b is None:
+                    break
+                _, f, g = best_b
+                poses[f] = poses[g] @ np.linalg.inv(init[g]) @ init[f]
+                stats["bridge"] += 1
+            else:
+                break
+            todo.remove(f)
+            n_reg += 1
 
+            # ③ 새 프레임 덕에 시차가 생긴 랜드마크를 새로 삼각측량
+            for lid in list(obs[f]):
+                if lid in land:
+                    continue
+                vf = [g for g in poses if lid in obs[g]]
+                views = [(poses[g], obs[g][lid][:2]) for g in vf]
+                if len(views) < MIN_TRI_VIEWS:
+                    continue
+                C = np.array([T[:3, 3] for T, _ in views])
+                if np.linalg.norm(C.max(0) - C.min(0)) < MIN_PARALLAX:
+                    continue
+                X = triangulate(views, K)
+                if not accept_point(X, views, K):
+                    continue
+                if sum(g in pnp_frames for g in vf) >= MIN_TRI_VIEWS:
+                    grounded.add(lid)
+                tgt = try_fuse(lid, X)
+                if tgt is None:
+                    land[lid] = X
+                else:
+                    stats["fuse"] += 1
+                    stats["fuse_ok"] += (gid(lid) == gid(tgt))
+                    for g in tframes[lid]:
+                        if lid in obs[g]:
+                            obs[g][tgt] = obs[g].pop(lid)
+                    tframes[tgt] |= tframes[lid]
+
+            # ④ 루프: 같은 버킷 쌍은 처음 닫힐 때 한 번만 전역 BA (비용 제곱 방지)
+            far = [g for g in poses if abs(g - f) > LOOP_GAP and (set(obs[g]) & set(obs[f]))]
+            keys = {(min(f, g) // LOOP_GAP, max(f, g) // LOOP_GAP) for g in far} - closed
+            if keys:
+                closed |= keys
+                stats["loop"] += 1
+                local_ba(poses, land, obs, K, anchor=anc)
+            elif n_reg % (3 * args.ba_every) == 0:
+                local_ba(poses, land, obs, K, anchor=anc)
+            elif n_reg % args.ba_every == 0:
+                recent = sorted(poses)[-3 * args.ba_every:]
+                local_ba(poses, land, obs, K, fids=recent)
+        return dict(poses=poses, land=land, pnp=pnp_frames, anc=anc,
+                    grounded=grounded, seed=seed)
+
+    # --- ⑤ 아일랜드 성장 ---------------------------------------------------------
+    islands, taken = [], set()
+    for k in range(max(1, args.islands)):
+        seed, score = pick_seed(taken)
+        if seed is None:
+            break
+        isl = grow_island(seed, taken)
+        taken |= set(isl["poses"])
+        r0, r1 = min(isl["poses"]), max(isl["poses"])
+        print("아일랜드 %d: 씨앗 f%d~f%d(점수 %d) → 등록 %d (f%d~f%d) · 랜드마크 %d"
+              % (k, seed[0], seed[-1], score, len(isl["poses"]), r0, r1, len(isl["land"])))
+        islands.append(isl)
+        if len(taken) >= 0.95 * len(frames):
+            break
+    islands.sort(key=lambda I: -len(I["poses"]))
+
+    # --- 아일랜드 병합: 공유 트랙 + 임베딩 후보쌍 위 RANSAC sim3 -------------------
+    # 별자리(프레임 단위 3쌍, 18/18 오병합)와 달리 여기는 **접지된 강체 구조 전체**를
+    # 놓고 하나의 sim3 를 검증한다. sim3 는 아일랜드별 v1 스케일 차이를 흡수한다.
+    A = islands[0]
+    n_merged, n_inl_ok, n_inl_all = 0, 0, 0
+    unmerged = []
+    for B in islands[1:]:
+        pairs = [(l, l) for l in set(A["land"]) & set(B["land"])]
+        if emb is not None:
+            for lb, Xb in B["land"].items():
+                if lb not in emb or lb not in B["grounded"]:
+                    continue
+                for la, Xa in A["land"].items():
+                    if la in (p[1] for p in pairs) or la not in emb \
+                            or la not in A["grounded"]:
+                        continue
+                    if float(emb[lb] @ emb[la]) >= args.merge_cos \
+                            and not (tframes[lb] & tframes[la]):
+                        pairs.append((lb, la))
+        if len(pairs) < 3:
+            print("병합 실패(후보 %d<3): 아일랜드 f%d~ 는 v1 사전으로 합류"
+                  % (len(pairs), min(B["poses"])))
+            unmerged.append(B)
+            continue
+        PB = np.array([B["land"][lb] for lb, _ in pairs])
+        PA = np.array([A["land"][la] for _, la in pairs])
+        rng = np.random.default_rng(0)
+        best_inl, best_T = [], None
+        for _ in range(min(2000, len(pairs) ** 3)):
+            i3 = rng.choice(len(pairs), 3, replace=False)
+            if len({pairs[i][0] for i in i3}) < 3 or len({pairs[i][1] for i in i3}) < 3:
+                continue
+            s, R, t = umeyama3(PB[i3], PA[i3])
+            if not (0.5 <= s <= 2.0):
+                continue
+            d = np.linalg.norm((s * (R @ PB.T)).T + t - PA, axis=1)
+            inl = np.nonzero(d <= args.merge_tol)[0]
+            # 인라이어는 일대일이어야 한다
+            seen_l, seen_r, uniq = set(), set(), []
+            for i in inl[np.argsort(d[inl])]:
+                lb, la = pairs[i]
+                if lb in seen_l or la in seen_r:
+                    continue
+                seen_l.add(lb)
+                seen_r.add(la)
+                uniq.append(i)
+            if len(uniq) > len(best_inl):
+                best_inl, best_T = uniq, (s, R, t)
+        if len(best_inl) < 4:
+            print("병합 실패(인라이어 %d<4): 아일랜드 f%d~ 는 v1 사전으로 합류"
+                  % (len(best_inl), min(B["poses"])))
+            unmerged.append(B)
+            continue
+        s, R, t = umeyama3(PB[best_inl], PA[best_inl])
+        ok = sum(gid(pairs[i][0]) == gid(pairs[i][1]) for i in best_inl)
+        n_inl_ok += ok
+        n_inl_all += len(best_inl)
+        print("병합: f%d~ 아일랜드, 후보 %d → 인라이어 %d (GT 일치 %d) · 스케일 %.3f"
+              % (min(B["poses"]), len(pairs), len(best_inl), ok, s))
+        for f, T in B["poses"].items():
+            A["poses"][f] = sim3_apply_pose(T, s, R, t)
+        A["pnp"] |= B["pnp"]
+        for lb, Xb in B["land"].items():
+            A["land"].setdefault(lb, s * R @ Xb + t)
+        A["grounded"] |= B["grounded"]
+        for i in best_inl:
+            lb, la = pairs[i]
+            if lb == la:
+                continue
+            for g in tframes[lb]:
+                if lb in obs[g]:
+                    obs[g][la] = obs[g].pop(lb)
+            tframes[la] |= tframes[lb]
+            A["land"].pop(lb, None)
+        n_merged += 1
+
+    poses, land, anc = A["poses"], A["land"], A["anc"]
     # BA 로 움직인 뒤 여전히 설명 안 되는 랜드마크는 지도에서 뺀다
     bad = [l for l, X in land.items()
            if not accept_point(X, [(poses[f], obs[f][l][:2]) for f in poses if l in obs[f]],
@@ -494,20 +567,32 @@ def main():
     if bad:
         print("정리: 재투영이 안 맞는 랜드마크 %d개 제거" % len(bad))
     poses, land, rms = local_ba(poses, land, obs, K, max_nfev=200, anchor=anc)
+    core = dict(poses)
+    # 병합 실패 아일랜드는 **최종 BA 뒤에** 항등으로 합류한다 — 전부 같은 v1 세계좌표에
+    # 씨앗-앵커돼 있어 항등이 1차 근사고, BA 에 넣으면 비연결 성분이 게이지를 흔든다.
+    for B in unmerged:
+        for f, T in B["poses"].items():
+            poses.setdefault(f, T)
+        A["pnp"] |= B["pnp"]
     med, p9, sc = ate(poses, gtp)
     if len(poses) < 0.3 * len(frames):
         print("\n⚠️ 등록률이 낮아 ATE 가 무의미하다 — 등록된 프레임이 한쪽에 몰리면"
               "\n   sim3 정합이 거의 완벽히 맞아 0.0x m 같은 허상이 나온다.")
     print("\n등록 %d/%d 프레임 (%.0f%%, PnP %d + 브릿지 %d) · 랜드마크 %d · 재시도 %d"
-          " · 루프 교정 %d회 · RMS %.2f px"
+          " · 루프 교정 %d회 · 아일랜드 %d(병합 %d) · RMS %.2f px"
           % (len(poses), len(frames), 100 * len(poses) / len(frames),
-             len(pnp_frames), n_bridge, len(land), n_retry, n_loop, rms or -1))
+             len(A["pnp"]), stats["bridge"], len(land), stats["retry"],
+             stats["loop"], len(islands), n_merged, rms or -1))
     if emb is not None:
-        print("융합 %d회 (옳음 %d) · 별자리 루프병합 %d회 (옳음 %d)"
-              % (n_fuse, n_fuse_ok, n_const, n_const_ok))
+        print("융합 %d회 (옳음 %d) · 병합 인라이어 %d (옳음 %d)"
+              % (stats["fuse"], stats["fuse_ok"], n_inl_all, n_inl_ok))
     print("**ATE 중앙 %.3f m · p90 %.3f · 정합스케일 %.3f**" % (med, p9, sc))
-    if n_bridge and len(pnp_frames) > 10:
-        m2, p2, _ = ate({f: poses[f] for f in pnp_frames}, gtp)
+    if unmerged and len(core) > 10:
+        m3, p3, _ = ate(core, gtp)
+        print("  (병합핵만 %d프레임: ATE 중앙 %.3f · p90 %.3f — 합집합에는 v1 사전"
+              " 합류분 %d프레임 포함)" % (len(core), m3, p3, len(poses) - len(core)))
+    if stats["bridge"] and len(A["pnp"]) > 10:
+        m2, p2, _ = ate({f: poses[f] for f in A["pnp"]}, gtp)
         print("  (PnP 프레임만: ATE 중앙 %.3f · p90 %.3f)" % (m2, p2))
 
     if args.out:
