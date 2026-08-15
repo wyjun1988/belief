@@ -40,9 +40,14 @@ BORDER = 4
 MAX_EXTENT = 1.0
 MIN_VIEWS = 4              # 삼각측량에 필요한 최소 관측 수
 MIN_BASELINE = 0.25        # m. 시차가 없으면 삼각측량이 불안정하다
+# 채움비 = 마스크 면적 / bbox 면적. **가림의 대용 지표**이고 마스크만으로 구해진다.
+# 실측(GT 포즈·랜드마크): 필터 없음 2.1px → ≥0.50 1.4px → ≥0.65 **1.1px(p90 7.9)**.
+# ⚠️ 마스크 '면적'으로 거르면 반대로 나빠진다(8000px↑ 에서 12.0px) — 크게 보이는 것은
+# 가까이 있어 부분만 보이고, 보이는 면의 중심이 3D 중심에서 멀기 때문이다.
+MIN_FILL = 0.65
 
 
-def load_obs(sd, seg_sub, ids, keep, every, W, H):
+def load_obs(sd, seg_sub, ids, keep, every, W, H, min_fill=MIN_FILL):
     """[frame][local_id] = (u, v) — 마스크 중심. 잘린 것은 뺀다."""
     obs = defaultdict(dict)
     seg_dir = os.path.join(sd, seg_sub)
@@ -60,7 +65,10 @@ def load_obs(sd, seg_sub, ids, keep, every, W, H):
             if xs.min() < BORDER or ys.min() < BORDER \
                     or xs.max() > W - 1 - BORDER or ys.max() > H - 1 - BORDER:
                 continue
-            obs[i][a] = (float(xs.mean()), float(ys.mean()))
+            bw = (xs.max() - xs.min() + 1) * (ys.max() - ys.min() + 1)
+            if n / bw < min_fill:                          # 가려진 것은 중심이 밀린다
+                continue                                   # (기본 0 = 필터 대신 가중치)
+            obs[i][a] = (float(xs.mean()), float(ys.mean()), float(n / bw))
     return obs
 
 
@@ -101,7 +109,7 @@ def pnp(pts3, pts2, K, reproj=25.0):
     return T, len(inl)
 
 
-def bundle_adjust(poses, land, obs, K, f_scale=2.5, max_nfev=120):
+def bundle_adjust(poses, land, obs, K, f_scale=2.5, max_nfev=120, w_pow=1.0):
     """**번들조정** — 포즈와 랜드마크를 재투영 오차로 동시에 줄인다.
 
     번갈아 푸는 방식(PnP ↔ 삼각측량)은 각 단계가 상대를 고정하므로 수렴이 오르내린다
@@ -119,7 +127,11 @@ def bundle_adjust(poses, land, obs, K, f_scale=2.5, max_nfev=120):
     fi = {f: i for i, f in enumerate(fids)}
     li = {l: i for i, l in enumerate(lids)}
 
-    rows = [(fi[f], li[l], u, v) for f in fids for l, (u, v) in obs[f].items() if l in li]
+        # ⚠️ 채움비를 **하드 필터 대신 가중치**로 쓴다. 실측: 필터로 자르면 p90 은
+    # 1.340 → 0.944 로 좋아지지만 관측이 1468 → 782 로 줄어 랜드마크가 반토막 나고
+    # 중앙값이 0.357 → 0.389 로 나빠졌다. 가중치는 관측 수를 유지하면서 편향만 누른다.
+    rows = [(fi[f], li[l], o[0], o[1], o[2] if len(o) > 2 else 1.0)
+            for f in fids for l, o in obs[f].items() if l in li]
     if len(rows) < 50:
         return poses, land, None
     F, L = len(fids), len(lids)
@@ -136,6 +148,8 @@ def bundle_adjust(poses, land, obs, K, f_scale=2.5, max_nfev=120):
     ci = np.array([r[0] for r in rows])
     pi = np.array([r[1] for r in rows])
     uv = np.array([[r[2], r[3]] for r in rows])
+    fill = np.array([r[4] for r in rows])
+    wt = np.clip(fill / max(fill.max(), 1e-6), 0.15, 1.0) ** w_pow    # 잔차 가중
     fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
 
     def resid(x):
@@ -146,12 +160,12 @@ def bundle_adjust(poses, land, obs, K, f_scale=2.5, max_nfev=120):
             R = cv2.Rodrigues(x[c * 6:c * 6 + 3])[0]
             X = P[m] @ R.T + x[c * 6 + 3:c * 6 + 6]
             z = np.maximum(X[:, 2], 1e-3)
-            out[m, 0] = fx * X[:, 0] / z + cx - uv[m, 0]
-            out[m, 1] = fy * X[:, 1] / z + cy - uv[m, 1]
+            out[m, 0] = (fx * X[:, 0] / z + cx - uv[m, 0]) * wt[m]
+            out[m, 1] = (fy * X[:, 1] / z + cy - uv[m, 1]) * wt[m]
         return out.ravel()
 
     S = lil_matrix((len(rows) * 2, len(x0)), dtype=int)
-    for k, (c, p, _, _) in enumerate(rows):
+    for k, (c, p, *_rest) in enumerate(rows):
         S[2 * k:2 * k + 2, c * 6:c * 6 + 6] = 1
         S[2 * k:2 * k + 2, F * 6 + p * 3:F * 6 + p * 3 + 3] = 1
     S[:, :6] = 0                                          # 첫 카메라 고정
@@ -173,6 +187,119 @@ def bundle_adjust(poses, land, obs, K, f_scale=2.5, max_nfev=120):
     info = dict(n_obs=len(rows), n_pose=F, n_land=L,
                 rms0=float(np.sqrt(np.mean(r0 ** 2))),
                 rms1=float(np.sqrt(np.mean(res.fun ** 2))))
+    return newp, newl, info
+
+
+def pose_graph(init, odo, land, obs, K, w_rot=30.0, w_tra=3.0, f_scale=2.5,
+               max_nfev=150, w_pow=0.0):
+    """**포즈그래프 + 랜드마크** — 루프클로저처럼 전역 제약으로 쓴다.
+
+    프레임별 PnP 는 시간적 연속성을 버린다. 실측에서 관측이 4개 미만인 **75/182 프레임이
+    그냥 탈락**했고, 그게 남은 오차의 큰 몫이었다. 순차 추정의 **상대 운동은 국소적으로
+    정확**하므로(윈도우 내부는 DA3 가 일관되게 푼다) 그것을 간선으로 남긴다:
+
+        오도메트리 간선   이웃 프레임 상대 포즈  — 국소 정확, 전역 드리프트
+        랜드마크 간선     재투영                — 전역 정확, 국소 잡음
+
+    둘을 한 번에 최소화하면 관측이 없는 프레임도 포즈를 받고, 랜드마크가 드리프트를 잡는다.
+
+    ⚠️ 초기 포즈의 **전역 스케일이 틀려 있다**(DA3 경로는 약 2배). 오도메트리 평행이동을
+    그대로 제약으로 쓰면 틀린 스케일을 강제하게 되므로, 전역 스케일 s 를 **자유 변수**로
+    두고 같이 푼다. 회전은 스케일과 무관하므로 강하게 묶는다.
+
+    ⚠️ `init`(초기화)과 `odo`(오도메트리 측정)는 **반드시 분리**한다. 정제된 포즈와 원본
+    포즈를 섞어 하나로 쓰면 게이지가 섞여 측정값이 오염된다 — 실제로 그렇게 했다가
+    ATE 가 0.365 → 0.937 로 무너졌다. odo 는 항상 **원본 순차 추정**에서 온다.
+    """
+    from scipy.optimize import least_squares
+    from scipy.sparse import lil_matrix
+
+    fids = sorted(init)
+    lids = sorted(land)
+    fi = {f: i for i, f in enumerate(fids)}
+    li = {l: i for i, l in enumerate(lids)}
+    F, L = len(fids), len(lids)
+
+    rows = [(fi[f], li[l], o[0], o[1], o[2] if len(o) > 2 else 1.0)
+            for f in fids if f in obs for l, o in obs[f].items() if l in li]
+    pairs = [(fi[fids[k]], fi[fids[k + 1]]) for k in range(F - 1)]
+
+    x0 = np.zeros(F * 6 + L * 3 + 1)
+    Rm, Cm = {}, {}
+    for f, i in fi.items():
+        T = init[f]
+        R = T[:3, :3].T
+        Rm[i], Cm[i] = R, T[:3, 3]
+        x0[i * 6:i * 6 + 3] = cv2.Rodrigues(R)[0].ravel()
+        x0[i * 6 + 3:i * 6 + 6] = -R @ T[:3, 3]
+    for l, i in li.items():
+        x0[F * 6 + i * 3:F * 6 + i * 3 + 3] = land[l]
+    x0[-1] = 1.0                                    # 오도메트리 전역 스케일
+
+    # 측정된 상대 운동 — **원본 순차 추정**에서만 뽑는다 (게이지 오염 방지)
+    Ro = {fi[f]: odo[f][:3, :3].T for f in fids if f in odo}
+    Co = {fi[f]: odo[f][:3, 3] for f in fids if f in odo}
+    pairs = [(a, b) for a, b in pairs if a in Ro and b in Ro]
+    dmeas = np.array([Ro[a] @ (Co[b] - Co[a]) for a, b in pairs])
+    Rrel = [Ro[b] @ Ro[a].T for a, b in pairs]
+
+    ci = np.array([r[0] for r in rows])
+    pi = np.array([r[1] for r in rows])
+    uv = np.array([[r[2], r[3]] for r in rows])
+    fill = np.array([r[4] for r in rows])
+    wt = np.clip(fill / max(fill.max(), 1e-6), 0.15, 1.0) ** w_pow
+    fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+    NR = len(rows) * 2
+
+    def resid(x):
+        out = np.empty(NR + len(pairs) * 6)
+        P = x[F * 6:F * 6 + L * 3].reshape(L, 3)[pi]
+        for c in np.unique(ci):
+            m = ci == c
+            R = cv2.Rodrigues(x[c * 6:c * 6 + 3])[0]
+            X = P[m] @ R.T + x[c * 6 + 3:c * 6 + 6]
+            z = np.maximum(X[:, 2], 1e-3)
+            idx = np.nonzero(m)[0]
+            out[2 * idx] = (fx * X[:, 0] / z + cx - uv[m, 0]) * wt[m]
+            out[2 * idx + 1] = (fy * X[:, 1] / z + cy - uv[m, 1]) * wt[m]
+        s = x[-1]
+        for k, (a, b) in enumerate(pairs):
+            Ra = cv2.Rodrigues(x[a * 6:a * 6 + 3])[0]
+            Rb = cv2.Rodrigues(x[b * 6:b * 6 + 3])[0]
+            Ca = -Ra.T @ x[a * 6 + 3:a * 6 + 6]
+            Cb = -Rb.T @ x[b * 6 + 3:b * 6 + 6]
+            er = cv2.Rodrigues((Rb @ Ra.T) @ Rrel[k].T)[0].ravel()
+            et = Ra @ (Cb - Ca) - s * dmeas[k]
+            out[NR + k * 6:NR + k * 6 + 3] = er * w_rot
+            out[NR + k * 6 + 3:NR + k * 6 + 6] = et * w_tra
+        return out
+
+    S = lil_matrix((NR + len(pairs) * 6, len(x0)), dtype=int)
+    for k, (c, p, *_r) in enumerate(rows):
+        S[2 * k:2 * k + 2, c * 6:c * 6 + 6] = 1
+        S[2 * k:2 * k + 2, F * 6 + p * 3:F * 6 + p * 3 + 3] = 1
+    for k, (a, b) in enumerate(pairs):
+        S[NR + k * 6:NR + k * 6 + 6, a * 6:a * 6 + 6] = 1
+        S[NR + k * 6:NR + k * 6 + 6, b * 6:b * 6 + 6] = 1
+        S[NR + k * 6 + 3:NR + k * 6 + 6, -1] = 1
+    S[:, :6] = 0
+
+    r0 = resid(x0)
+    res = least_squares(resid, x0, jac_sparsity=S, loss="huber", f_scale=f_scale,
+                        method="trf", max_nfev=max_nfev, verbose=0)
+    x = res.x
+    x[:6] = x0[:6]
+    newp = {}
+    for f, i in fi.items():
+        R = cv2.Rodrigues(x[i * 6:i * 6 + 3])[0]
+        T = np.eye(4)
+        T[:3, :3] = R.T
+        T[:3, 3] = -R.T @ x[i * 6 + 3:i * 6 + 6]
+        newp[f] = T
+    newl = {l: x[F * 6 + i * 3:F * 6 + i * 3 + 3] for l, i in li.items()}
+    info = dict(n_obs=len(rows), n_pose=F, n_land=L, n_edge=len(pairs),
+                rms0=float(np.sqrt(np.mean(r0[:NR] ** 2))),
+                rms1=float(np.sqrt(np.mean(res.fun[:NR] ** 2))), odo_scale=float(x[-1]))
     return newp, newl, info
 
 
@@ -199,6 +326,11 @@ def main():
     ap.add_argument("--ba-iters", type=int, default=120)
     ap.add_argument("--max-extent", type=float, default=None, help="랜드마크 최대 크기(m)")
     ap.add_argument("--f-scale", type=float, default=2.5, help="Huber 문턱(px). 관측 하한에 맞춘다")
+    ap.add_argument("--min-fill", type=float, default=0.0, help="채움비 하한 (0=가중치만)")
+    ap.add_argument("--w-pow", type=float, default=0.0, help="채움비 가중 지수 (0=가중 없음)")
+    ap.add_argument("--pose-graph", action="store_true", help="오도메트리 간선 + 랜드마크 동시 최적화")
+    ap.add_argument("--w-rot", type=float, default=30.0, help="오도메트리 회전 가중")
+    ap.add_argument("--w-tra", type=float, default=3.0, help="오도메트리 평행이동 가중")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -226,7 +358,7 @@ def main():
         land[int(local)] = np.array(o["placements"][0]["position"], float)
     print("초기 랜드마크 %d개 (출처 %s)" % (len(land), args.graph))
 
-    obs = load_obs(sd, args.seg, ids, set(land), args.every, W, H)
+    obs = load_obs(sd, args.seg, ids, set(land), args.every, W, H, args.min_fill)
     print("관측 프레임 %d · 관측 중앙 %.0f개/프레임"
           % (len(obs), np.median([len(v) for v in obs.values()])))
 
@@ -240,7 +372,7 @@ def main():
         # ① 삼각측량 — 뎁스 모델을 쓰지 않는다
         new_land, n_tri = {}, 0
         for lid in land:
-            views = [(poses[i], obs[i][lid]) for i in sorted(obs)
+            views = [(poses[i], obs[i][lid][:2]) for i in sorted(obs)
                      if lid in obs[i] and i in poses]
             X = triangulate(views, K)
             if X is not None and np.all(np.isfinite(X)):
@@ -254,7 +386,7 @@ def main():
         newp, n_ok, inls = {}, 0, []
         for i in sorted(obs):
             pts3 = [land[l] for l in obs[i] if l in land]
-            pts2 = [obs[i][l] for l in obs[i] if l in land]
+            pts2 = [obs[i][l][:2] for l in obs[i] if l in land]
             r = pnp(pts3, pts2, K)
             if r is None:
                 continue
@@ -271,8 +403,37 @@ def main():
               "ATE 중앙 **%.3f m** · p90 %.3f · 정합스케일 %.3f"
               % (it, n_tri, n_ok, len(obs), np.median(inls), med, p9, s))
 
+    if args.pose_graph:
+        # 관측이 없는 프레임도 포함해 전체 궤적을 함께 푼다
+        # 관측 없는 프레임은 원본 포즈를 **정제 게이지로 sim3 정렬**해 채운다
+        raw = {i: init[i].copy() for i in range(len(init)) if i % args.every == 0}
+        common = sorted(set(raw) & set(poses))
+        A = np.array([raw[i][:3, 3] for i in common])
+        B = np.array([poses[i][:3, 3] for i in common])
+        sc_, R_, t_, _ = robust_umeyama(A, B)
+        allp = {}
+        for i, T in raw.items():
+            if i in poses:
+                allp[i] = poses[i]
+                continue
+            T2 = np.eye(4)
+            T2[:3, :3] = R_ @ T[:3, :3]
+            T2[:3, 3] = sc_ * (R_ @ T[:3, 3]) + t_
+            allp[i] = T2
+        poses, land, info = pose_graph(allp, raw, land, obs, K, w_rot=args.w_rot,
+                                       w_tra=args.w_tra, f_scale=args.f_scale,
+                                       max_nfev=args.ba_iters, w_pow=args.w_pow)
+        v = sorted(poses)
+        med, p9, sc = ate(poses, gtp, v)
+        print("\n**포즈그래프+랜드마크** 관측 %d · 포즈 %d(전체) · 랜드마크 %d · 간선 %d"
+              % (info["n_obs"], info["n_pose"], info["n_land"], info["n_edge"]))
+        print("  재투영 RMS %.2f → **%.2f px** · 오도메트리 스케일 %.3f"
+              % (info["rms0"], info["rms1"], info["odo_scale"]))
+        print("  ATE 중앙 **%.3f m** · p90 %.3f · 정합스케일 %.3f" % (med, p9, sc))
+
     if args.ba:
-        poses, land, info = bundle_adjust(poses, land, obs, K, f_scale=args.f_scale, max_nfev=args.ba_iters)
+        poses, land, info = bundle_adjust(poses, land, obs, K, f_scale=args.f_scale, max_nfev=args.ba_iters,
+                                          w_pow=args.w_pow)
         if info:
             v = sorted(poses)
             med, p9, s = ate(poses, gtp, v)
