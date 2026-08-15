@@ -208,6 +208,10 @@ def main():
                          " 삼각측량된 새 점이 기존 랜드마크와 3D 근접+임베딩 일치+시간 중첩 0 이면"
                          " 같은 물체로 융합한다(re-ID = 루프 감지의 FastSAM 판)")
     ap.add_argument("--fuse-dist", type=float, default=0.5)
+    ap.add_argument("--const-cos", type=float, default=0.90,
+                    help="별자리 루프 감지의 임베딩 하한 (융합 0.85 보다 높게)")
+    ap.add_argument("--const-tol", type=float, default=0.5,
+                    help="별자리 쌍별 거리 일치 허용(m)")
     ap.add_argument("--bridge", type=int, default=0,
                     help="관측 기근으로 PnP 가 멈추면 등록 프레임에서 이 거리(프레임) 이내를"
                          " v1 상대포즈로 건넌다. 브릿지 포즈도 BA 로 다듬어진다. 0=끔")
@@ -299,15 +303,20 @@ def main():
     # 지도가 커진 뒤에는 풀릴 수 있고, 그게 증분 SfM 의 핵심이다. 대신 **직전 시도 이후
     # 지도가 자란 경우에만** 재시도해서 무한 루프를 막는다.
     n_fuse, n_fuse_ok = 0, 0
+    grounded = set(land)                # PnP 뷰 ≥3 으로 삼각측량된 랜드마크 (씨앗 포함)
 
     def try_fuse(lid, X):
         """새 랜드마크 ↔ 기존 랜드마크 융합 게이트. 사전 병합(v1 위치 기반)은 정밀도
         32~44% 로 못 쓴다(실측) — 지도 3D 는 그보다 정확해서 게이트가 날카로워진다."""
-        if emb is None or lid not in emb:
+        # ⚠️ 융합은 identity 결정이다 — 브릿지(v1 복사) 포즈로 삼각측량된 점은
+        # 위치가 v1 드리프트만큼 틀어져 있어 3D 게이트가 다른 물체를 병합한다
+        # (실측: bridge 100 에서 순도 10/10 → 13/26 붕괴, 가짜 루프가 전역 BA 로
+        # PnP 구역까지 오염 0.067→0.214). PnP 접지된 점끼리만 융합한다.
+        if emb is None or lid not in emb or lid not in grounded:
             return None
         best, bl = -1.0, None
         for l2, X2 in land.items():
-            if l2 == lid or l2 not in emb:
+            if l2 == lid or l2 not in emb or l2 not in grounded:
                 continue
             if np.linalg.norm(X - X2) > args.fuse_dist:
                 continue
@@ -317,6 +326,62 @@ def main():
         if bl is None or best < args.fuse_cos or (tframes[lid] & tframes[bl]):
             return None
         return bl
+
+    n_const, n_const_ok = 0, 0
+
+    def merge_into(l, o):
+        """l 의 관측 전부(미래 포함)를 o 로 이관."""
+        for g in tframes[l]:
+            if l in obs[g]:
+                obs[g][o] = obs[g].pop(l)
+        tframes[o] |= tframes[l]
+        land.pop(l, None)
+
+    def constellation(f):
+        """드리프트 불변 루프 감지 — 절대좌표 융합 게이트는 재방문 구역이 1m 쯤
+        드리프트되면 침묵한다(실측: bridge 100 에서 루프 0회). 랜드마크 **쌍별 상대
+        거리**는 국소 포즈만 맞으면 유효하므로, 임베딩 후보쌍들 가운데 상호 거리가
+        일치하는 ≥3쌍을 별자리로 보고 통째로 병합한다. 병합이 곧 루프 간선이 되어
+        기존 far/전역 BA 경로가 발화한다."""
+        import itertools
+        cur = [l for l in obs[f] if l in land and l in emb and l not in grounded]
+        cand = []
+        for l in cur:
+            for o in grounded:
+                if o not in land or o not in emb or o in obs[f]:
+                    continue
+                if float(emb[l] @ emb[o]) < args.const_cos or (tframes[l] & tframes[o]):
+                    continue
+                cand.append((l, o))
+        if len(cand) < 3:
+            return 0
+        con = {i: set() for i in range(len(cand))}
+        for (i, (l1, o1)), (j, (l2, o2)) in itertools.combinations(enumerate(cand), 2):
+            if l1 == l2 or o1 == o2:
+                continue
+            dn = np.linalg.norm(land[l1] - land[l2])
+            do = np.linalg.norm(land[o1] - land[o2])
+            if abs(dn - do) <= args.const_tol:
+                con[i].add(j)
+                con[j].add(i)
+        best = max(con, key=lambda i: len(con[i]))
+        group = {best}
+        for j in sorted(con[best], key=lambda j: -len(con[j])):
+            if all(j in con[g] or g in con[j] for g in group):
+                lg = [cand[g][0] for g in group] + [cand[j][0]]
+                og = [cand[g][1] for g in group] + [cand[j][1]]
+                if len(set(lg)) == len(lg) and len(set(og)) == len(og):
+                    group.add(j)
+        if len(group) < 3:
+            return 0
+        nonlocal n_const, n_const_ok
+        for gI in group:
+            l, o = cand[gI]
+            n_const += 1
+            n_const_ok += (ids.get(str(l), {}).get("gt_instance")
+                           == ids.get(str(o), {}).get("gt_instance"))
+            merge_into(l, o)
+        return len(group)
 
     import bisect
     todo = [f for f in frames if f not in poses]
@@ -338,6 +403,10 @@ def main():
                 continue
             poses[f], _ = r
             pnp_frames.add(f)
+            for lid in obs[f]:
+                if lid in land and lid not in grounded:
+                    if sum(g in pnp_frames for g in poses if lid in obs[g]) >= MIN_TRI_VIEWS:
+                        grounded.add(lid)
         elif args.bridge:
             # 프론티어 브릿지 — 삼각측량은 등록을, 등록은 랜드마크를 전제하는
             # 닭-달걀을 v1 상대포즈 한 걸음으로 끊는다(실측: FastSAM 트랙은 수명이
@@ -364,7 +433,8 @@ def main():
         for lid in list(obs[f]):
             if lid in land:
                 continue
-            views = [(poses[g], obs[g][lid][:2]) for g in poses if lid in obs[g]]
+            vf = [g for g in poses if lid in obs[g]]
+            views = [(poses[g], obs[g][lid][:2]) for g in vf]
             if len(views) < MIN_TRI_VIEWS:
                 continue
             C = np.array([T[:3, 3] for T, _ in views])
@@ -373,6 +443,8 @@ def main():
             X = triangulate(views, K)
             if not accept_point(X, views, K):
                 continue
+            if sum(g in pnp_frames for g in vf) >= MIN_TRI_VIEWS:
+                grounded.add(lid)
             tgt = try_fuse(lid, X)
             if tgt is None:
                 land[lid] = X
@@ -384,6 +456,9 @@ def main():
                     if lid in obs[g]:
                         obs[g][tgt] = obs[g].pop(lid)
                 tframes[tgt] |= tframes[lid]
+
+        if emb is not None:
+            constellation(f)
 
         # ④ 루프 판정: 시간적으로 먼 프레임과 랜드마크를 공유하는가.
         # 같은 루프(LOOP_GAP 버킷 쌍)는 **처음 닫힐 때 한 번만** 전역 BA 를 돈다 —
@@ -421,7 +496,8 @@ def main():
           % (len(poses), len(frames), 100 * len(poses) / len(frames),
              len(pnp_frames), n_bridge, len(land), n_retry, n_loop, rms or -1))
     if emb is not None:
-        print("융합 %d회 · GT 기준 옳은 융합 %d회" % (n_fuse, n_fuse_ok))
+        print("융합 %d회 (옳음 %d) · 별자리 루프병합 %d회 (옳음 %d)"
+              % (n_fuse, n_fuse_ok, n_const, n_const_ok))
     print("**ATE 중앙 %.3f m · p90 %.3f · 정합스케일 %.3f**" % (med, p9, sc))
     if n_bridge and len(pnp_frames) > 10:
         m2, p2, _ = ate({f: poses[f] for f in pnp_frames}, gtp)
