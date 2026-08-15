@@ -208,6 +208,12 @@ def main():
                          " 삼각측량된 새 점이 기존 랜드마크와 3D 근접+임베딩 일치+시간 중첩 0 이면"
                          " 같은 물체로 융합한다(re-ID = 루프 감지의 FastSAM 판)")
     ap.add_argument("--fuse-dist", type=float, default=0.5)
+    ap.add_argument("--const", action="store_true",
+                    help="별자리 루프병합. 기본 꺼짐 — CLIP 크롭 임베딩은 실내 소품"
+                         " 판별력이 없어 cos0.90+3쌍+0.5m 게이트가 18/18 오병합했다(2026-08-16)")
+    ap.add_argument("--still-dynamic", action="store_true",
+                    help="motion_type 이 동적이라도 이 시퀀스에서 안 움직였으면(moves=False)"
+                         " 랜드마크로 쓴다. 접시·소품류가 늘어 관측 밀도가 오른다")
     ap.add_argument("--const-cos", type=float, default=0.90,
                     help="별자리 루프 감지의 임베딩 하한 (융합 0.85 보다 높게)")
     ap.add_argument("--const-tol", type=float, default=0.5,
@@ -231,7 +237,8 @@ def main():
     keep = set()
     for local, m in ids.items():
         rec = gt.get(str(m.get("gt_instance") or m.get("instance_id")))
-        if rec and rec["motion_type"] == "static" and not rec.get("moves") \
+        if rec and (rec["motion_type"] == "static" or args.still_dynamic) \
+                and not rec.get("moves") \
                 and rec.get("extent_m") and max(rec["extent_m"]) <= args.max_extent:
             keep.add(int(local))
     # min_fill 기본 0 (= 가림 필터 끔) 은 실측으로 확정한 값이다. 관측이 프레임당
@@ -457,7 +464,7 @@ def main():
                         obs[g][tgt] = obs[g].pop(lid)
                 tframes[tgt] |= tframes[lid]
 
-        if emb is not None:
+        if emb is not None and args.const:
             constellation(f)
 
         # ④ 루프 판정: 시간적으로 먼 프레임과 랜드마크를 공유하는가.
