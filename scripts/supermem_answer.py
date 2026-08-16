@@ -51,7 +51,7 @@ def questions(ts_by_sess=None):
     return out
 
 
-def grab_frame(vid, sec):
+def grab_frame(vid, sec, res=448, crop=None):
     cap = cv2.VideoCapture(os.path.join(D, SESS[vid], "video.mp4"))
     fps = cap.get(cv2.CAP_PROP_FPS)
     cap.set(cv2.CAP_PROP_POS_FRAMES, int(sec * fps))
@@ -59,7 +59,13 @@ def grab_frame(vid, sec):
     cap.release()
     if not ok:
         return None
-    fr = cv2.resize(fr, (448, 448))
+    if crop:
+        # 중앙 크롭 후 확대 — 원본 1408² 를 448 로 줄이면 "어느 서랍" 같은 세부가 사라진다
+        h, w = fr.shape[:2]
+        c = int(min(h, w) * crop)
+        y0, x0 = (h - c) // 2, (w - c) // 2
+        fr = fr[y0:y0 + c, x0:x0 + c]
+    fr = cv2.resize(fr, (res, res))
     ok, buf = cv2.imencode(".jpg", fr, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return base64.b64encode(buf.tobytes()).decode()
 
@@ -91,6 +97,11 @@ def main():
     ap.add_argument("--mode", default="vlm", choices=["vlm", "text"])
     ap.add_argument("--topk", type=int, default=4, help="VLM 에 줄 프레임 수")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--res", type=int, default=448,
+                    help="VLM 에 주는 프레임 해상도. 원본 1408² — 448 축소가 판독 병목일 수"
+                         " 있다(실측: 검색이 맞아도 물체위치 정답률 0.45)")
+    ap.add_argument("--crop", type=float, default=None,
+                    help="중앙 크롭 비율(0.6 = 가운데 60%%). 시선 방향 세부를 키운다")
     ap.add_argument("--answer-aware", action="store_true",
                     help="선택지를 검색 질의에 결합(answer-aware retrieval). 실측: 물체위치"
                          " hit@5 0.55→0.70. **개방형에서는 선택지가 없으므로, 그 자리를"
@@ -107,7 +118,9 @@ def main():
                                         args.mode,
                                         ("_fg" if args.force_guess else "")
                                         + ("_t" if args.temporal else "")
-                                        + ("_aa" if args.answer_aware else "")))
+                                        + ("_aa" if args.answer_aware else "")
+                                        + ("_r%d" % args.res if args.res != 448 else "")
+                                        + ("_c%g" % args.crop if args.crop else "")))
     done = {}
     if os.path.exists(out_p):
         for ln in open(out_p):
@@ -189,7 +202,8 @@ def main():
         choices = "\n".join("%s. %s" % (letters[i], c) for i, c in enumerate(x["choices"]))
         if args.mode == "vlm":
             frames = picked_frames[qid]
-            images = [im for im in (grab_frame(v, s) for v, s in frames) if im]
+            images = [im for im in (grab_frame(v, s, args.res, args.crop)
+                                    for v, s in frames) if im]
             fg = ("Even if the frames are not conclusive, you MUST pick the "
                   "single most plausible concrete option; avoid the 'can not be "
                   "answered' option unless every other option contradicts the frames. "
