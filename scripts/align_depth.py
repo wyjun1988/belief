@@ -49,11 +49,14 @@ def main():
     ap.add_argument("--mode", default="t23", choices=["none", "t2", "t23"])
     ap.add_argument("--lam", type=float, default=1.0, help="T3 평활 강도")
     ap.add_argument("--no-dyn-mask", action="store_true")
+    ap.add_argument("--pose", default="pose/poses.txt",
+                    help="앵커 투영에 쓸 포즈. 모델 포즈로 정합하려면 여기를 바꾼다 —"
+                         " 앵커는 이 포즈로 프레임에 투영되므로 포즈가 곧 정합 품질이다")
     args = ap.parse_args()
 
     seq_dir = args.seq if os.path.isdir(args.seq) else os.path.join(args.root, args.seq)
     cam = json.load(open(os.path.join(seq_dir, "camera_info.json")))
-    poses = np.loadtxt(os.path.join(seq_dir, "pose", "poses.txt")).reshape(-1, 4, 4)
+    poses = np.loadtxt(os.path.join(seq_dir, args.pose)).reshape(-1, 4, 4)
     K = np.array(cam["intrinsics"])
     W, H = cam["width"], cam["height"]
     raw_dir = os.path.join(seq_dir, args.raw)
