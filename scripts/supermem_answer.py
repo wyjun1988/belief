@@ -97,6 +97,9 @@ def main():
     ap.add_argument("--mode", default="vlm", choices=["vlm", "text"])
     ap.add_argument("--topk", type=int, default=4, help="VLM 에 줄 프레임 수")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--oracle", action="store_true",
+                    help="검색 GT(answer_evidence.time_spans)를 그대로 프레임으로 준다."
+                         " '검색이 완벽하면' 의 상한 — 판독 병목의 크기를 확정한다")
     ap.add_argument("--res", type=int, default=448,
                     help="VLM 에 주는 프레임 해상도. 원본 1408² — 448 축소가 판독 병목일 수"
                          " 있다(실측: 검색이 맞아도 물체위치 정답률 0.45)")
@@ -120,7 +123,8 @@ def main():
                                         + ("_t" if args.temporal else "")
                                         + ("_aa" if args.answer_aware else "")
                                         + ("_r%d" % args.res if args.res != 448 else "")
-                                        + ("_c%g" % args.crop if args.crop else "")))
+                                        + ("_c%g" % args.crop if args.crop else "")
+                                        + ("_oracle" if args.oracle else "")))
     done = {}
     if os.path.exists(out_p):
         for ln in open(out_p):
@@ -133,7 +137,16 @@ def main():
 
     # 검색 점수 (supermem_pilot 과 동일 조합)
     picked_frames = {}
-    if args.mode == "vlm":
+    if args.mode == "vlm" and args.oracle:
+        # 오라클: 근거 구간을 균등 표집 — 검색 성능을 100% 로 고정한 대조군
+        for x, ev in Q:
+            fr = []
+            per = max(1, args.topk // max(len(ev), 1))
+            for v, a, b in ev:
+                for k in range(per):
+                    fr.append((v, a + (b - a) * (k + 0.5) / per))
+            picked_frames[x["question_id"]] = fr[:args.topk]
+    elif args.mode == "vlm":
         import torch
         from transformers import CLIPTextModelWithProjection, CLIPTokenizer
         E, ts, sid = load_index()
