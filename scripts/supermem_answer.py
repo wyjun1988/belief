@@ -91,10 +91,13 @@ def main():
     ap.add_argument("--mode", default="vlm", choices=["vlm", "text"])
     ap.add_argument("--topk", type=int, default=4, help="VLM 에 줄 프레임 수")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--force-guess", action="store_true",
+                    help="기권 금지 — 실측: text 모드에서 73문항 중 70회 '답불가' 기권 → 0.11")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
-    out_p = args.out or os.path.join(D, "answers_%s_%s.jsonl"
-                                     % (args.model.replace(":", "_").replace("/", "_"), args.mode))
+    out_p = args.out or os.path.join(D, "answers_%s_%s%s.jsonl"
+                                     % (args.model.replace(":", "_").replace("/", "_"),
+                                        args.mode, "_fg" if args.force_guess else ""))
     done = {}
     if os.path.exists(out_p):
         for ln in open(out_p):
@@ -148,16 +151,23 @@ def main():
         if args.mode == "vlm":
             frames = picked_frames[qid]
             images = [im for im in (grab_frame(v, s) for v, s in frames) if im]
+            fg = ("Even if the frames are not conclusive, you MUST pick the "
+                  "single most plausible concrete option; avoid the 'can not be "
+                  "answered' option unless every other option contradicts the frames. "
+                  if args.force_guess else "")
             prompt = ("These are frames retrieved from my past egocentric video "
                       "(my first-person view at home).\n"
-                      "Question: %s\n%s\n"
+                      "Question: %s\n%s\n%s"
                       "Answer with the single letter of the best choice."
-                      % (x["question"], choices))
+                      % (x["question"], choices, fg))
         else:
             images = []
-            prompt = ("Question about my past activities at home: %s\n%s\n"
+            fg = ("You MUST pick the single most plausible concrete option even "
+                  "if unsure; do not pick 'can not be answered'. "
+                  if args.force_guess else "")
+            prompt = ("Question about my past activities at home: %s\n%s\n%s"
                       "Answer with the single letter of the best choice."
-                      % (x["question"], choices))
+                      % (x["question"], choices, fg))
         try:
             resp = ask(args.model, prompt, images)
         except Exception as e:
