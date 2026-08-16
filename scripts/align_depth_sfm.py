@@ -22,6 +22,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from kx.depth.align import apply_affine, smooth_sequence      # noqa: E402
+from kx.depth.pose_stitch import metric_scale, up_from_trajectory  # noqa: E402
 from scripts.incremental_sfm import (MIN_PARALLAX, MIN_TRI_VIEWS,  # noqa: E402
                                      accept_point)
 from scripts.refine_bootstrap import load_obs, triangulate    # noqa: E402
@@ -123,16 +124,44 @@ def main():
     fit = int((NI > 0).sum())
     print("아핀 적합 %d/%d 프레임 (중앙 앵커 %d점)"
           % (fit, n, int(np.median(NI[NI > 0])) if fit else 0))
-    A, B = smooth_sequence(A, B, NI, lam=args.lam, min_inliers=args.min_pts)
+    A, B, _ = smooth_sequence(A, B, NI, lam=args.lam, min_inliers=args.min_pts)
+
+    # 전역 미터 스케일 — SfM 지도는 v1 의 스케일을 물려받아 미터가 아니다
+    # (실측: 배율 1.81 하나로 δ<1.25 가 0.036→0.765). 바닥-머리높이(1.55m) 사전으로
+    # 지도에 미터를 박는다. 뎁스와 포즈를 **같은 배율로** 내보내야 기하가 유지된다.
+    centers = np.array([poses[i][:3, 3] for i in reg])
+    up = up_from_trajectory(centers)
+    fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+    pts = []
+    for i in reg[::10]:
+        raw = np.load(os.path.join(raw_dir, "%06d.npy" % i)).astype(np.float32)
+        d = apply_affine(raw, A[i], B[i])[::16, ::16]
+        v, u = np.mgrid[0:d.shape[0], 0:d.shape[1]]
+        u, v, dd = u.ravel() * 16.0, v.ravel() * 16.0, d.ravel()
+        m = (dd > 0.1) & (dd < 12)
+        ray = np.stack([(u[m] - cx) / fx, (v[m] - cy) / fy, np.ones(m.sum())], 1)
+        T = poses[i]
+        pts.append((ray * dd[m, None]) @ T[:3, :3].T + T[:3, 3])
+    pts = np.concatenate(pts)
+    if up @ (centers.mean(0) - pts.mean(0)) < 0:
+        up = -up                               # 연직 부호: 카메라는 점구름 위에 있다
+    sc, span, cam_h = metric_scale(centers, pts, up)
+    print("미터 스케일 %.3f (지도 카메라높이 %.2f → 1.55m)" % (sc, cam_h))
 
     have = sorted(int(f.split(".")[0]) for f in os.listdir(raw_dir) if f.endswith(".npy"))
     for i in have:
         raw = np.load(os.path.join(raw_dir, "%06d.npy" % i)).astype(np.float32)
-        _write(out_dir, i, apply_affine(raw, A[i], B[i]))
+        _write(out_dir, i, sc * apply_affine(raw, A[i], B[i]))
+    mp = np.tile(np.eye(4), (n, 1, 1))
+    for i in reg:
+        mp[i] = poses[i].copy()
+        mp[i][:3, 3] *= sc
+    pout = os.path.join(sd, "pose", os.path.basename(args.out) + "_poses.txt")
+    np.savetxt(pout, mp.reshape(n, 16))
     json.dump({"mode": "sfm_landmark", "pose": args.pose, "fit": fit,
-               "landmarks": len(land)},
+               "landmarks": len(land), "metric_scale": sc},
               open(os.path.join(sd, args.out + "_align.json"), "w"))
-    print("→ %s" % out_dir)
+    print("→ %s · 포즈(미터) %s" % (out_dir, pout))
 
 
 if __name__ == "__main__":
