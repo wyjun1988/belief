@@ -91,13 +91,23 @@ def main():
     ap.add_argument("--mode", default="vlm", choices=["vlm", "text"])
     ap.add_argument("--topk", type=int, default=4, help="VLM 에 줄 프레임 수")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--answer-aware", action="store_true",
+                    help="선택지를 검색 질의에 결합(answer-aware retrieval). 실측: 물체위치"
+                         " hit@5 0.55→0.70. **개방형에서는 선택지가 없으므로, 그 자리를"
+                         " 씬그래프의 후보 위치가 맡는다** — v2 설계의 근거가 되는 실측이다")
+    ap.add_argument("--temporal", action="store_true",
+                    help="시간 논리 — 근거는 항상 질의보다 앞선다(실측 98/98). 인과"
+                         " 마스크로 미래 프레임 제거: 전체 hit@5 0.34→0.47")
     ap.add_argument("--force-guess", action="store_true",
                     help="기권 금지 — 실측: text 모드에서 73문항 중 70회 '답불가' 기권 → 0.11")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     out_p = args.out or os.path.join(D, "answers_%s_%s%s.jsonl"
                                      % (args.model.replace(":", "_").replace("/", "_"),
-                                        args.mode, "_fg" if args.force_guess else ""))
+                                        args.mode,
+                                        ("_fg" if args.force_guess else "")
+                                        + ("_t" if args.temporal else "")
+                                        + ("_aa" if args.answer_aware else "")))
     done = {}
     if os.path.exists(out_p):
         for ln in open(out_p):
@@ -119,18 +129,47 @@ def main():
         tok = CLIPTokenizer.from_pretrained(name)
         txt = CLIPTextModelWithProjection.from_pretrained(
             name, use_safetensors=True).eval().to(dev)
+        import re as _re
+        _stop = set("the a an i my me you he she it they them his her their of to in on "
+                    "at was were is are am did do does done what where who when why how "
+                    "that this these those after before with for and or as from left "
+                    "right just thinking about need want get got take took put place "
+                    "placed leave store stored".split())
+
+        def _kp(t):
+            ws = [w for w in _re.findall(r"[a-z]+", t.lower())
+                  if w not in _stop and len(w) > 2]
+            return " ".join(ws[-4:]) if ws else t
+
+        def _qtext(x):
+            if not args.answer_aware:
+                return "a photo of " + x["question"]
+            ch = " ".join(c for c in x["choices"] if not c.startswith("This"))
+            return "a photo of " + _kp(x["question"]) + ", " + _kp(ch)
+
         with torch.no_grad():
-            tt = tok(["a photo of " + x["question"] for x, _ in Q],
+            tt = tok([_qtext(x) for x, _ in Q],
                      padding=True, truncation=True, return_tensors="pt").to(dev)
             te = torch.nn.functional.normalize(txt(**tt).text_embeds, dim=-1).cpu().numpy()
         S = te @ E.T
         S = S - S.mean(0, keepdims=True)
         k15 = np.ones(15) / 15
         S = np.apply_along_axis(lambda r: np.convolve(r, k15, mode="same"), 1, S)
+        if args.temporal:
+            starts = json.load(open(os.path.join(D, "session_starts.json")))
+            abst = np.array([starts[v] + t for v, t in zip(sid, ts)], float)
+            qabs = []
+            for x, _ in Q:
+                qe = (x.get("question_evidence") or {}).get("time_spans") or []
+                qabs.append(x["metadata"]["primary_video_start_time"]
+                            + (qe[0]["start_time"] if qe else 0))
+            S = np.where(abst[None, :] <= np.array(qabs)[:, None], S, -np.inf)
         for i, (x, _) in enumerate(Q):
             order = np.argsort(-S[i])
             picked = []
             for j in order:
+                if not np.isfinite(S[i][j]):
+                    break
                 if all(abs(ts[j] - ts[p]) > 30 or sid[j] != sid[p] for p in picked):
                     picked.append(j)
                 if len(picked) >= args.topk:
