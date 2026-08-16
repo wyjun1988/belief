@@ -129,17 +129,20 @@ def local_ba(poses, land, obs, K, fids=None, f_scale=2.0, max_nfev=40,
     uv = np.array([[r[2], r[3]] for r in rows])
     fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
 
-    anc = None                                  # (i_a, i_b, d0) 인덱스로 변환
+    # anchor: (fa,fb,d0) 하나 또는 그 리스트. 다중 앵커는 구간별 스케일 구속 —
+    # v1 유래 불균일 스케일은 앵커 하나(씨앗)로는 못 편다(실측: 전역 ATE 0.76 정체).
+    anc = []
     if not frozen and anchor is not None:
-        fa, fb, d0 = anchor
-        if fa in fi and fb in fi and d0 > 1e-3:
-            anc = (fi[fa], fi[fb], d0)
+        alist = anchor if isinstance(anchor, list) else [anchor]
+        for fa, fb, d0 in alist:
+            if fa in fi and fb in fi and d0 > 1e-3:
+                anc.append((fi[fa], fi[fb], d0))
 
     def center(x, i):
         R = cv2.Rodrigues(x[i * 6:i * 6 + 3])[0]
         return -R.T @ x[i * 6 + 3:i * 6 + 6]
 
-    nres = len(rows) * 2 + (1 if anc else 0)
+    nres = len(rows) * 2 + len(anc)
 
     def resid(x):
         P = x[F * 6:].reshape(L, 3)[pi]
@@ -152,9 +155,9 @@ def local_ba(poses, land, obs, K, fids=None, f_scale=2.0, max_nfev=40,
             idx = np.nonzero(m)[0]
             out[2 * idx] = fx * X[:, 0] / z + cx - uv[m, 0]
             out[2 * idx + 1] = fy * X[:, 1] / z + cy - uv[m, 1]
-        if anc:
-            ia, ib, d0 = anc
-            out[-1] = w_scale * (np.linalg.norm(center(x, ia) - center(x, ib)) - d0)
+        for kk, (ia, ib, d0) in enumerate(anc):
+            out[len(rows) * 2 + kk] = w_scale * (
+                np.linalg.norm(center(x, ia) - center(x, ib)) - d0)
         return out
 
     S = lil_matrix((nres, len(x0)), dtype=int)
@@ -162,9 +165,9 @@ def local_ba(poses, land, obs, K, fids=None, f_scale=2.0, max_nfev=40,
         if c < nF:                              # 동결 카메라 열은 비워 둔다
             S[2 * k:2 * k + 2, c * 6:c * 6 + 6] = 1
         S[2 * k:2 * k + 2, F * 6 + p * 3:F * 6 + p * 3 + 3] = 1
-    if anc:
-        for i in anc[:2]:
-            S[-1, i * 6:i * 6 + 6] = 1
+    for kk, (ia, ib, _) in enumerate(anc):
+        for i in (ia, ib):
+            S[len(rows) * 2 + kk, i * 6:i * 6 + 6] = 1
     if not frozen:
         S[:, :6] = 0                            # 게이지: 첫 카메라 고정
 
