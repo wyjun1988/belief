@@ -26,7 +26,9 @@ SESS = {
     "Person_1_session_8_03102026_glasses_1264": "s8",
     "Person_1_session_14_03152026_glasses_1266": "s14",
 }
+# 기본은 ollama(CPU). --llama-server 로 llama.cpp Vulkan 서버(GPU, 4.6×)를 쓴다.
 OLLAMA = "http://localhost:11434/api/chat"
+LLAMA_SERVER = "http://localhost:8080/v1/chat/completions"
 
 
 def load_index():
@@ -70,7 +72,24 @@ def grab_frame(vid, sec, res=448, crop=None):
     return base64.b64encode(buf.tobytes()).decode()
 
 
+def ask_server(prompt, images, timeout=900):
+    """llama.cpp 서버(OpenAI 호환) — 이미지는 data URL 로 넣는다."""
+    content = [{"type": "text", "text": prompt}]
+    for im in images:
+        content.append({"type": "image_url",
+                        "image_url": {"url": "data:image/jpeg;base64," + im}})
+    body = json.dumps({"messages": [{"role": "user", "content": content}],
+                       "temperature": 0, "max_tokens": 200,
+                       "chat_template_kwargs": {"enable_thinking": False}}).encode()
+    req = urllib.request.Request(LLAMA_SERVER, data=body,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())["choices"][0]["message"]["content"]
+
+
 def ask(model, prompt, images, timeout=600):
+    if model == "server":
+        return ask_server(prompt, images, timeout)
     msg = {"role": "user", "content": prompt}
     if images:
         msg["images"] = images
