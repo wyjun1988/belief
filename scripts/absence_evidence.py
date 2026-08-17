@@ -102,10 +102,27 @@ def absence_score(Z, P, G, vocab, k_idx, frames_a, frames_b, topm=4, topf=12,
         csel = Z[ctx][:, ok].max(0)
         sel = ok[np.argsort(-csel)[:min(topf, len(ok))]]
         return float(np.median(Z[k_idx, sel]))
+    def side_ctx(fr):
+        """같은 프레임 집합에서 **문맥 자체의** 존재도 — 장면 전체가 어두워진 것과
+        물건만 사라진 것을 가른다. 이 정규화 없이 블라인드로 돌리면 착용자가 방을
+        옮긴 것이 부재로 오판돼 정밀도 0.09 였다(실측)."""
+        fr = np.array(fr)
+        cs = Z[ctx][:, fr].max(0)
+        ok = fr[cs >= ctx_gate]
+        if len(ok) < min_frames:
+            return None
+        csel = Z[ctx][:, ok].max(0)
+        sel = ok[np.argsort(-csel)[:min(topf, len(ok))]]
+        return float(np.median(Z[ctx][:, sel].max(0)))
+
     za, zb = side(frames_a), side(frames_b)
     if za is None or zb is None:
         return None
-    return dict(ctx=[vocab[j] for j in ctx], z_before=za, z_after=zb, drop=za - zb)
+    ca, cb = side_ctx(frames_a), side_ctx(frames_b)
+    drop = za - zb
+    ndrop = drop - ((ca - cb) if (ca is not None and cb is not None) else 0.0)
+    return dict(ctx=[vocab[j] for j in ctx], z_before=za, z_after=zb, drop=drop,
+                ctx_before=ca, ctx_after=cb, ndrop=ndrop)
 
 
 def main():
@@ -118,6 +135,9 @@ def main():
     ap.add_argument("--ctx-gate", type=float, default=1.0,
                     help="문맥 z 문턱 — 이 값 이상인 프레임만 '그 장소를 봤다' 로 인정."
                          " 부재 주장의 전제조건(없으면 판정 보류)")
+    ap.add_argument("--norm", action="store_true",
+                    help="문맥 하락으로 정규화 — 장면 전체가 안 보이게 된 것과 물건만"
+                         " 사라진 것을 가른다")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -171,8 +191,9 @@ def main():
             r.update(obj=c, kind="정적", span=None)
             rows.append(r)
 
-    mv = [r["drop"] for r in rows if r["kind"] == "이동"]
-    st = [r["drop"] for r in rows if r["kind"] == "정적"]
+    key = "ndrop" if args.norm else "drop"
+    mv = [r[key] for r in rows if r["kind"] == "이동"]
+    st = [r[key] for r in rows if r["kind"] == "정적"]
     print("\n부재 신호(z 하락) — 이동 %d개 중앙 %+.2f · 정적 %d개 중앙 %+.2f"
           % (len(mv), np.median(mv) if mv else 0, len(st), np.median(st) if st else 0))
     if mv and st:
@@ -184,9 +205,9 @@ def main():
         det = float(np.mean([a > thr for a in mv]))
         print("정적 오탐 10%% 문턱(%.2f) 에서 이동 검출률 **%.2f**" % (thr, det))
     print("\n물체별:")
-    for r in sorted(rows, key=lambda r: -r["drop"])[:12]:
-        print("  %-18s %s z %+.2f→%+.2f (하락 %+.2f) 문맥=%s"
-              % (r["obj"], r["kind"], r["z_before"], r["z_after"], r["drop"],
+    for r in sorted(rows, key=lambda r: -r[key])[:12]:
+        print("  %-18s %s z %+.2f→%+.2f (하락 %+.2f · 정규화 %+.2f) 문맥=%s"
+              % (r["obj"], r["kind"], r["z_before"], r["z_after"], r["drop"], r["ndrop"],
                  ",".join(r["ctx"][:3])))
     if args.out:
         json.dump(rows, open(args.out, "w"), ensure_ascii=False, indent=1)
