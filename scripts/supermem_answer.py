@@ -79,7 +79,7 @@ def ask_server(prompt, images, timeout=900):
         content.append({"type": "image_url",
                         "image_url": {"url": "data:image/jpeg;base64," + im}})
     body = json.dumps({"messages": [{"role": "user", "content": content}],
-                       "temperature": 0, "max_tokens": 200,
+                       "temperature": 0, "max_tokens": 400,
                        "chat_template_kwargs": {"enable_thinking": False}}).encode()
     req = urllib.request.Request(LLAMA_SERVER, data=body,
                                  headers={"Content-Type": "application/json"})
@@ -96,7 +96,7 @@ def ask(model, prompt, images, timeout=600):
     # think=False 필수 — 켜두면 내용이 사고 토큰으로 빠져 content 가 빈다(실측)
     body = json.dumps({"model": model, "messages": [msg], "stream": False,
                        "think": False,
-                       "options": {"temperature": 0, "num_predict": 200}}).encode()
+                       "options": {"temperature": 0, "num_predict": 400}}).encode()
     req = urllib.request.Request(OLLAMA, data=body,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -104,9 +104,21 @@ def ask(model, prompt, images, timeout=600):
 
 
 def parse_choice(text):
-    """응답에서 A~D 를 뽑는다 — 마지막에 나온 단독 대문자를 우선."""
+    """'Answer: X' 를 최우선으로 찾는다.
+
+    ⚠️ 이전 판은 '마지막 단독 대문자' 를 답으로 봤는데, 모델이 추론 중에 선택지를
+    열거하면("- C. This option is...") 그게 답으로 잡히고, 게다가 토큰 한도(200)에
+    걸려 최종 답 전에 잘렸다. 실측 증상: GPU 판 선택 분포가 A 47% 로 편중.
+    """
     import re
-    m = re.findall(r"\b([ABCD])\b", text.upper())
+    up = text.upper()
+    m = re.findall(r"ANSWER\s*[:\-]?\s*\(?([ABCD])\b", up)
+    if m:
+        return m[-1]
+    m = re.findall(r"^\s*\(?([ABCD])[\.\)]?\s*$", up, re.M)   # 단독 줄
+    if m:
+        return m[-1]
+    m = re.findall(r"\b([ABCD])\b", up)
     return m[-1] if m else None
 
 
@@ -243,7 +255,8 @@ def main():
             prompt = ("These are frames retrieved from my past egocentric video "
                       "(my first-person view at home).\n"
                       "Question: %s\n%s\n%s"
-                      "Answer with the single letter of the best choice."
+                      "Answer with the single letter of the best choice, and end your "
+                      "response with a final line: Answer: <letter>"
                       % (x["question"], choices, fg))
         else:
             images = []
@@ -251,7 +264,8 @@ def main():
                   "if unsure; do not pick 'can not be answered'. "
                   if args.force_guess else "")
             prompt = ("Question about my past activities at home: %s\n%s\n%s"
-                      "Answer with the single letter of the best choice."
+                      "Answer with the single letter of the best choice, and end your "
+                      "response with a final line: Answer: <letter>"
                       % (x["question"], choices, fg))
         try:
             resp = ask(args.model, prompt, images)
