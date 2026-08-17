@@ -72,24 +72,29 @@ def grab_frame(vid, sec, res=448, crop=None):
     return base64.b64encode(buf.tobytes()).decode()
 
 
-def ask_server(prompt, images, timeout=900):
+def ask_server(prompt, images, timeout=900, grammar=None, max_tokens=400):
     """llama.cpp 서버(OpenAI 호환) — 이미지는 data URL 로 넣는다."""
     content = [{"type": "text", "text": prompt}]
     for im in images:
         content.append({"type": "image_url",
                         "image_url": {"url": "data:image/jpeg;base64," + im}})
-    body = json.dumps({"messages": [{"role": "user", "content": content}],
-                       "temperature": 0, "max_tokens": 400,
-                       "chat_template_kwargs": {"enable_thinking": False}}).encode()
+    payload = {"messages": [{"role": "user", "content": content}],
+               "temperature": 0, "max_tokens": max_tokens,
+               "chat_template_kwargs": {"enable_thinking": False}}
+    if grammar:
+        # 문법 제약 디코딩 — 출력 토큰을 문법이 허용하는 것으로 강제한다.
+        # 기권·장황한 추론·파싱 실패를 원천 차단(실측: 기권 59%, 파싱 사고 다수).
+        payload["grammar"] = grammar
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(LLAMA_SERVER, data=body,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())["choices"][0]["message"]["content"]
 
 
-def ask(model, prompt, images, timeout=600):
+def ask(model, prompt, images, timeout=600, grammar=None, max_tokens=400):
     if model == "server":
-        return ask_server(prompt, images, timeout)
+        return ask_server(prompt, images, timeout, grammar, max_tokens)
     msg = {"role": "user", "content": prompt}
     if images:
         msg["images"] = images
@@ -128,6 +133,10 @@ def main():
     ap.add_argument("--mode", default="vlm", choices=["vlm", "text"])
     ap.add_argument("--topk", type=int, default=4, help="VLM 에 줄 프레임 수")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--strict", action="store_true",
+                    help="① '답할 수 없음' 선택지를 제시에서 제거(그 답이 정답인 문항은 제외)"
+                         " ② 문법 제약으로 출력을 한 글자로 강제. 실측 배경: 모델이 73문항 중"
+                         " 43~44회 기권해 정답률이 무작위 아래로 떨어졌다")
     ap.add_argument("--oracle", action="store_true",
                     help="검색 GT(answer_evidence.time_spans)를 그대로 프레임으로 준다."
                          " '검색이 완벽하면' 의 상한 — 판독 병목의 크기를 확정한다")
@@ -155,7 +164,8 @@ def main():
                                         + ("_aa" if args.answer_aware else "")
                                         + ("_r%d" % args.res if args.res != 448 else "")
                                         + ("_c%g" % args.crop if args.crop else "")
-                                        + ("_oracle" if args.oracle else "")))
+                                        + ("_oracle" if args.oracle else "")
+                                        + ("_strict" if args.strict else "")))
     done = {}
     if os.path.exists(out_p):
         for ln in open(out_p):
@@ -163,6 +173,23 @@ def main():
             done[r["question_id"]] = r
 
     Q = questions()
+    # strict: 기권 선택지를 제거하고 인덱스를 다시 매긴다. 기권이 정답인 문항은 제외
+    # (그 문항은 '못 맞히는 게 정답' 이라 강제추측과 양립하지 않는다 — 73→66).
+    if args.strict:
+        keep = []
+        for x, ev in Q:
+            ci = x["correct_option_index"]
+            if x["choices"][ci].startswith("This question can not"):
+                continue
+            idx = [i for i, c in enumerate(x["choices"])
+                   if not c.startswith("This question can not")]
+            y = dict(x)
+            y["choices"] = [x["choices"][i] for i in idx]
+            y["correct_option_index"] = idx.index(ci)
+            keep.append((y, ev))
+        print("strict: 기권 선택지 제거 · 문항 %d → %d (무작위 기준선 %.2f)"
+              % (len(Q), len(keep), 1.0 / len(keep[0][0]["choices"])))
+        Q = keep
     if args.limit:
         Q = Q[:args.limit]
 
@@ -248,10 +275,9 @@ def main():
             frames = picked_frames[qid]
             images = [im for im in (grab_frame(v, s, args.res, args.crop)
                                     for v, s in frames) if im]
-            fg = ("Even if the frames are not conclusive, you MUST pick the "
-                  "single most plausible concrete option; avoid the 'can not be "
-                  "answered' option unless every other option contradicts the frames. "
-                  if args.force_guess else "")
+            fg = ("You MUST choose the single most plausible option even if the "
+                  "frames are inconclusive. Guessing is required; there is no "
+                  "option to decline. " if (args.force_guess or args.strict) else "")
             prompt = ("These are frames retrieved from my past egocentric video "
                       "(my first-person view at home).\n"
                       "Question: %s\n%s\n%s"
@@ -267,8 +293,13 @@ def main():
                       "Answer with the single letter of the best choice, and end your "
                       "response with a final line: Answer: <letter>"
                       % (x["question"], choices, fg))
+        gram = None
+        if args.strict:
+            letters_ok = "".join(letters[:len(x["choices"])])
+            gram = 'root ::= [%s]' % letters_ok
         try:
-            resp = ask(args.model, prompt, images)
+            resp = ask(args.model, prompt, images, grammar=gram,
+                       max_tokens=4 if args.strict else 400)
         except Exception as e:
             print("[%d] 오류: %s" % (qid, e))
             continue
@@ -297,8 +328,10 @@ def main():
         by[r["skill"]][1] += 1
     tot_ok = sum(h for h, _ in by.values())
     tot = sum(t for _, t in by.values())
-    print("\n[%s · %s] 전체 정답률 **%.2f** (%d/%d) · 무작위 ≈0.25"
-          % (args.model, args.mode, tot_ok / max(tot, 1), tot_ok, tot))
+    base = 1.0 / len(Q[0][0]["choices"]) if Q else 0.25
+    print("\n[%s · %s%s] 전체 정답률 **%.2f** (%d/%d) · 무작위 ≈%.2f"
+          % (args.model, args.mode, " strict" if args.strict else "",
+             tot_ok / max(tot, 1), tot_ok, tot, base))
     for sk, (h, t) in sorted(by.items()):
         print("  %-24s %.2f (%d)" % (sk, h / t, t))
 
