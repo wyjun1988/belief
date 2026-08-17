@@ -165,7 +165,8 @@ def main():
                                         + ("_r%d" % args.res if args.res != 448 else "")
                                         + ("_c%g" % args.crop if args.crop else "")
                                         + ("_oracle" if args.oracle else "")
-                                        + ("_strict" if args.strict else "")))
+                                        + ("_strict" if args.strict else "")
+                                        + ("_k%d" % args.topk if args.topk != 4 else "")))
     done = {}
     if os.path.exists(out_p):
         for ln in open(out_p):
