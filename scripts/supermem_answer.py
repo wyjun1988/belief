@@ -138,6 +138,10 @@ def main():
                     help="① '답할 수 없음' 선택지를 제시에서 제거(그 답이 정답인 문항은 제외)"
                          " ② 문법 제약으로 출력을 한 글자로 강제. 실측 배경: 모델이 73문항 중"
                          " 43~44회 기권해 정답률이 무작위 아래로 떨어졌다")
+    ap.add_argument("--absence", action="store_true",
+                    help="부재 증거 필터 — 씬그래프 문맥으로 각 선택지 장소를 찾고(keyword 제거)"
+                         " 그 장소 프레임에서 keyword 존재도를 잰다. 관측된 적 없는 선택지는"
+                         " 프롬프트에 '증거 없음' 으로 표시해 VLM 판단을 돕는다")
     ap.add_argument("--oracle", action="store_true",
                     help="검색 GT(answer_evidence.time_spans)를 그대로 프레임으로 준다."
                          " '검색이 완벽하면' 의 상한 — 판독 병목의 크기를 확정한다")
@@ -167,7 +171,8 @@ def main():
                                         + ("_c%g" % args.crop if args.crop else "")
                                         + ("_oracle" if args.oracle else "")
                                         + ("_strict" if args.strict else "")
-                                        + ("_k%d" % args.topk if args.topk != 4 else "")))
+                                        + ("_k%d" % args.topk if args.topk != 4 else "")
+                                        + ("_abs" if args.absence else "")))
     done = {}
     if os.path.exists(out_p):
         for ln in open(out_p):
@@ -262,6 +267,42 @@ def main():
                     break
             picked_frames[x["question_id"]] = [(sid[j], float(ts[j])) for j in picked]
 
+    # 부재 증거: 선택지별 (장소 관측 여부, keyword 존재도) 사전 계산
+    absinfo = {}
+    if args.absence:
+        import re as _re2
+        from scripts.absence_evidence import PLACES, pmi_graph, presence
+        E2, ts2, sid2 = load_index()
+        starts2 = json.load(open(os.path.join(D, "session_starts.json")))
+        abst2 = np.array([starts2[v] + t for v, t in zip(sid2, ts2)], float)
+        words = set(PLACES)
+        for x, _ in Q:
+            for t in [x["question"]] + list(x["choices"]):
+                words |= {w for w in _re2.findall(r"[a-z]+", t.lower()) if len(w) > 3}
+        voc = sorted(words)
+        Z2, P2 = presence(E2, voc, "mps")
+        G2 = pmi_graph(P2, voc)
+        vi2 = {w: i for i, w in enumerate(voc)}
+        for x, _ in Q:
+            qa = x["metadata"]["primary_video_start_time"] + \
+                (((x.get("question_evidence") or {}).get("time_spans") or [{}])[0]
+                 .get("start_time") or 0)
+            past = np.nonzero(abst2 <= qa)[0]
+            kws = [vi2[w] for w in _re2.findall(r"[a-z]+", x["question"].lower()) if w in vi2]
+            marks = []
+            for ch in x["choices"]:
+                lw = [vi2[w] for w in _re2.findall(r"[a-z]+", ch.lower()) if w in vi2]
+                if not lw or not kws or len(past) < 10:
+                    marks.append(""); continue
+                cs = Z2[lw][:, past].max(0)
+                ok = past[cs >= 1.0]
+                if len(ok) < 5:
+                    marks.append(" [no observation of this place]"); continue
+                sel = ok[np.argsort(-Z2[lw][:, ok].max(0))[:10]]
+                pk = float(np.median(Z2[kws][:, sel].max(0)))
+                marks.append(" [object NOT seen at this place]" if pk < 0.3 else "")
+            absinfo[x["question_id"]] = marks
+
     letters = "ABCD"
     n_ok = n = 0
     fout = open(out_p, "a")
@@ -272,7 +313,9 @@ def main():
             n += 1
             n_ok += r["correct"]
             continue
-        choices = "\n".join("%s. %s" % (letters[i], c) for i, c in enumerate(x["choices"]))
+        mk = absinfo.get(qid) or [""] * len(x["choices"])
+        choices = "\n".join("%s. %s%s" % (letters[i], c, mk[i] if i < len(mk) else "")
+                            for i, c in enumerate(x["choices"]))
         if args.mode == "vlm":
             frames = picked_frames[qid]
             images = [im for im in (grab_frame(v, s, args.res, args.crop)
