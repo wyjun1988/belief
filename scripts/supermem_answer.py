@@ -28,7 +28,8 @@ SESS = {
 }
 # 기본은 ollama(CPU). --llama-server 로 llama.cpp Vulkan 서버(GPU, 4.6×)를 쓴다.
 OLLAMA = "http://localhost:11434/api/chat"
-LLAMA_SERVER = "http://localhost:8080/v1/chat/completions"
+LLAMA_SERVER = os.environ.get("LLAMA_SERVER",
+                              "http://localhost:8080/v1/chat/completions")
 
 
 def load_index():
@@ -93,7 +94,7 @@ def ask_server(prompt, images, timeout=900, grammar=None, max_tokens=400):
 
 
 def ask(model, prompt, images, timeout=600, grammar=None, max_tokens=400):
-    if model == "server":
+    if model.startswith("server"):      # server / server9b — 이름은 결과 파일 구분용
         return ask_server(prompt, images, timeout, grammar, max_tokens)
     msg = {"role": "user", "content": prompt}
     if images:
