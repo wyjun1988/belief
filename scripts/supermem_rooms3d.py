@@ -76,7 +76,13 @@ def main():
         if not os.path.exists(f):
             print("%s: MPS 궤적 없음 — 건너뜀" % sd)
             continue
-        sec, P = load_traj(sd)
+        try:
+            sec, P = load_traj(sd)
+        except Exception as e:
+            # 깨진/빈 CSV 는 건너뛴다 — 예전엔 여기서 죽어 **저장 전에 중단**됐고,
+            # 결과적으로 3D 방이 일부 세션에만 적용된 채 실험이 무효가 됐다.
+            print("%s: 궤적 읽기 실패(%s) — 건너뜀" % (sd, str(e)[:60]))
+            continue
         g = gravity(P)
         e1, e2 = floor_basis(g)
         uv = np.stack([P @ e1, P @ e2], 1)

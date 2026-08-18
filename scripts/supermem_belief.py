@@ -88,6 +88,9 @@ def main():
     ap.add_argument("--model", default="supervised_two_head_v5")
     ap.add_argument("--z-obj", type=float, default=1.5, help="물체 검출 z 문턱")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--rooms3d", action="store_true",
+                    help="프레임 방을 CLIP 한장분류 대신 **MPS 3D 군집**으로 결정."
+                         " 실측: 방 분류 0.49 → 0.93(1.9배). belief 의 선결조건")
     args = ap.parse_args()
 
     import torch
@@ -125,7 +128,30 @@ def main():
     RS = RV @ E.T
     RSz = (RS - RS.mean(1, keepdims=True)) / (RS.std(1, keepdims=True) + 1e-9)
     frame_room = np.argmax(RSz, 0)
-    print("① 프레임 방 분류: %s" % dict(Counter(ROOMS[i] for i in frame_room)))
+    if args.rooms3d:
+        # 3D 군집 → 방 이름: 군집 안 프레임들의 CLIP 방 점수 합으로 명명한다
+        # (GT 를 쓰지 않는다 — 군집이 공간을 가르고, CLIP 은 이름만 붙인다)
+        r3 = json.load(open(os.path.join(D, "rooms3d.json")))
+        fr3 = np.full(len(E), -1)
+        keep = np.zeros(len(E), bool)
+        for vid, sd in SESS5.items():
+            if sd not in r3:
+                continue
+            lab = np.array(r3[sd]["frame_room"])
+            m = sid == vid
+            idx = np.nonzero(m)[0]
+            tt = ts[m].astype(int)
+            good = tt < len(lab)
+            fr3[idx[good]] = lab[tt[good]] + 100 * list(SESS5).index(vid)
+            keep[idx[good]] = True
+        newr = np.array(frame_room)
+        for c in np.unique(fr3[fr3 >= 0]):
+            m = fr3 == c
+            newr[m] = int(np.argmax(RSz[:, m].sum(1)))     # 군집 전체로 투표
+        frame_room = newr
+        print("① 프레임 방: **3D 군집 %d개** → CLIP 투표 명명 (커버 %d/%d프레임)"
+              % (len(np.unique(fr3[fr3 >= 0])), int(keep.sum()), len(E)))
+    print("   방 분포: %s" % dict(Counter(ROOMS[i] for i in frame_room)))
 
     # ② 장소 어휘 → 수용체 노드 (방 소속 고정)
     plist, prooms, ptypes = [], [], []
