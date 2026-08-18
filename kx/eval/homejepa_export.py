@@ -25,7 +25,9 @@ if HJ not in sys.path:
     sys.path.insert(0, HJ)
 
 from homejepa.adt import CLS_MAP, FURN_CATS, HYST, NEAR_MAX, SIZE   # noqa: E402
-from homejepa.model import MAX_LOC                                   # noqa: E402
+from homejepa.model import CLASS_NAMES, MAX_LOC                      # noqa: E402
+
+CLASS_NAMES_FALLBACK = CLASS_NAMES[0]      # 이름표만 빌린다(cls_unknown 로 표시)
 from homejepa.world import ROOM_TYPES                                # noqa: E402
 
 TICK_FRAMES = 50            # 5초 = home-jepa 의 틱
@@ -39,7 +41,7 @@ def _zone_room_type(z):
 
 
 def build_episode(graph, gt, assign_zone, ep_id=900000, tick_frames=TICK_FRAMES,
-                  poses=None, cap=MAX_LOC, extra_cls=None):
+                  poses=None, cap=MAX_LOC, extra_cls=None, open_vocab=False):
     """씬그래프 → 에피소드 dict.
 
     graph        : 우리 4D 씬그래프 (placements/zone/support 포함)
@@ -123,22 +125,30 @@ def build_episode(graph, gt, assign_zone, ep_id=900000, tick_frames=TICK_FRAMES,
     objects, oid_of, ccount = [], {}, Counter()
     for iid, o in objs.items():
         cat = (o.get("category") or "").lower()
-        if cat not in cls_map:
+        if cat not in cls_map and not open_vocab:
             continue
         rec = gt.get(str(o.get("gt_instance", o.get("instance_id"))))
         if rec is None or rec["motion_type"] != "dynamic":
             continue
-        cls = cls_map[cat]
+        # 열린 어휘: 사상 실패해도 버리지 않는다. 모델에는 **미지 클래스 슬롯**이 있고,
+        # 실측상 클래스를 미지로 돌려도 belief 성능이 그대로였다(party top-1 0.67 동일).
+        # 클래스는 물체의 한 속성일 뿐, 주력 신호는 last-known·관측·루틴이다.
+        # 열린 어휘: 사상 실패 물체는 **첫 클래스 이름표를 빌리되** cls_unknown 로
+        # 표시한다. EpTensors 는 CLASS_NAMES.index() 를 요구해 None 을 못 받는다 —
+        # 태그를 보고 상위(belief_engine)에서 cls 축을 미지 슬롯으로 되돌린다.
+        cls_unknown = cat not in cls_map
+        cls = cls_map.get(cat, CLASS_NAMES_FALLBACK)
         oid = len(objects)
         oid_of[iid] = oid
         p0 = o["placements"][0]["position"]
         home_rec = nearest(p0)
         objects.append(dict(id=oid, cls=cls, cidx=ccount[cls], owner=1,
-                            size=SIZE.get(cls, "s"),
+                            size=SIZE.get(cls, "s") if cls else "s",
                             home_recept=home_rec if home_rec is not None else 0,
                             src_instance=str(iid), gt_instance=o.get("gt_instance"),
-                            src_category=cat, substituted=bool(extra_cls and cat in
-                                                              {k.lower() for k in extra_cls})))
+                            src_category=cat, cls_unknown=cls_unknown,
+                            substituted=bool(extra_cls and cat in
+                                             {k.lower() for k in extra_cls})))
         ccount[cls] += 1
 
     # --- 이벤트: **지각이 본 것만** ---------------------------------------------

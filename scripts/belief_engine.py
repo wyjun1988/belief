@@ -74,6 +74,46 @@ def absence_gate(Z, fidx, kw_i, ctx_i, t_frame, win_s=60, gate=1.0, topf=8,
     return (1 if pk >= present_z else -1), pk
 
 
+def extend_class_vocab(model, new_names, device):
+    """**열린 어휘의 정공법** — CLIP 임베딩을 클래스 속성으로 주입한다.
+
+    home-jepa 의 e_cls 는 10클래스+미지의 룩업 테이블이라 새 물체가 오면 사전을
+    잃는다(미지 슬롯). 여기서는 CLIP 텍스트 공간 → 모델 클래스 임베딩 공간의
+    선형 사상 W 를 **알려진 10클래스를 앵커로** 최소자승으로 맞추고, 새 이름에
+    W·clip(name) 을 계산해 임베딩 행을 **덧붙인다**. 재학습 없이 어휘가 열린다.
+
+    반환: {새 이름: 새 클래스 인덱스}
+    """
+    from homejepa.model import CLASS_NAMES
+    from transformers import CLIPTextModelWithProjection, CLIPTokenizer
+    W_old = model.e_cls.weight.data                       # (NCLS+1, d)
+    d = W_old.shape[1]
+    nm = "openai/clip-vit-base-patch16"
+    tok = CLIPTokenizer.from_pretrained(nm)
+    txt = CLIPTextModelWithProjection.from_pretrained(nm, use_safetensors=True).eval()
+    def clip_emb(names):
+        with torch.no_grad():
+            tt = tok(["a photo of a " + n.replace("_", " ") for n in names],
+                     padding=True, truncation=True, return_tensors="pt")
+            e = txt(**tt).text_embeds
+            return torch.nn.functional.normalize(e, dim=-1)
+    A = clip_emb(list(CLASS_NAMES)).to(torch.float32)     # (NCLS, 512)
+    B = W_old[:len(CLASS_NAMES)].to(torch.float32).cpu()  # (NCLS, d)
+    # 릿지 최소자승: A W ≈ B  (앵커가 10개뿐이라 정칙화 필수)
+    lam = 1e-2
+    AtA = A.T @ A + lam * torch.eye(A.shape[1])
+    Wmap = torch.linalg.solve(AtA, A.T @ B)               # (512, d)
+    new = clip_emb(new_names).to(torch.float32) @ Wmap    # (M, d)
+    # 스케일 정합 — 기존 행들의 노름에 맞춘다
+    new = new / (new.norm(dim=1, keepdim=True) + 1e-9) * B.norm(dim=1).mean()
+    W_new = torch.cat([W_old.cpu(), new], 0)
+    emb = torch.nn.Embedding(W_new.shape[0], d)
+    emb.weight.data = W_new
+    model.e_cls = emb.to(device)
+    base = W_old.shape[0]
+    return {n: base + i for i, n in enumerate(new_names)}
+
+
 def load_model(model_name, device):
     from reeval import build_jepa_probe, build_supervised
     ck = torch.load(os.path.join(HJ, "results", model_name + ".pt"),
@@ -123,16 +163,35 @@ def rank_for(ep, E_t, model, dev, oid, qi_sel, Z, fidx, kw_text, gamma=0.3,
 
 
 def prepare(seq_dir, args):
-    from homejepa.model import EpTensors
+    from homejepa.model import CLASS_NAMES, EpTensors
     gt = json.load(open(os.path.join(seq_dir, "gt", "objects.json")))["instances"]
     meta = json.load(open(os.path.join(seq_dir, "graph_%s.json" % args.ref)))["regions"]
     ref = load_regions(np.load(os.path.join(seq_dir, "regions_%s.npz" % args.ref)),
                        meta["zone_names"], meta["up"])
     g = json.load(open(os.path.join(seq_dir, args.graph + ".json")))
     poses = np.loadtxt(os.path.join(seq_dir, "pose", "poses.txt")).reshape(-1, 4, 4)
-    ep = build_episode(g, gt, lambda p: assign(ref, p)[1], poses=poses, extra_cls={})
+    ep = build_episode(g, gt, lambda p: assign(ref, p)[1], poses=poses, extra_cls={},
+                       open_vocab=getattr(args, "open_vocab", False))
     E_t = EpTensors(ep, 256, noid=True)
-    return ep, E_t, g, gt
+    unk_cat = {}
+    NC = len(CLASS_NAMES)
+    if getattr(args, "open_vocab", False):
+        # 어휘 밖 물체는 이름표만 빌렸으므로 cls 축을 미지 슬롯으로 되돌린다.
+        # (--clip-class 가 켜지면 상위에서 CLIP 사상 인덱스로 다시 덮어쓴다)
+        unk_cat = {o["id"]: (o.get("src_category") or "object")
+                   for o in ep["home"]["objects"] if o.get("cls_unknown")}
+        for i in range(len(E_t.cls)):
+            if int(E_t.ev_obj[i]) in unk_cat:
+                E_t.cls[i] = NC
+        for q in E_t.queries:
+            if q["meta"]["obj"] in unk_cat:
+                q["qcls"] = NC
+    if getattr(args, "unknown_class", False):
+        # 새 물체 모사: 클래스 축을 전부 미지로
+        E_t.cls[:] = NC
+        for q in E_t.queries:
+            q["qcls"] = NC
+    return ep, E_t, g, gt, unk_cat
 
 
 def build_Z(seq_dir, ep, E_t, kw_text, device):
@@ -162,12 +221,34 @@ def main():
     ap.add_argument("--eval", action="store_true", help="이동물체 전체 채점")
     ap.add_argument("--gamma", type=float, default=0.3)
     ap.add_argument("--gate", type=float, default=1.0)
+    ap.add_argument("--clip-class", action="store_true",
+                    help="미지 대신 **CLIP 임베딩을 클래스 속성으로** 주입(열린 어휘 정공법)."
+                         " 알려진 10클래스를 앵커로 CLIP→클래스공간 선형사상을 맞춘 뒤"
+                         " 새 물체 이름의 임베딩 행을 덧붙인다. 재학습 불필요")
+    ap.add_argument("--open-vocab", action="store_true",
+                    help="어휘 밖 물체를 버리지 않고 **미지 클래스로 통과**시킨다."
+                         " 실측 근거: 클래스를 미지로 돌려도 belief 성능 동일(0.67/1.00)")
+    ap.add_argument("--unknown-class", action="store_true",
+                    help="질의 물체의 클래스를 **미지**로 돌린다 — '학습 어휘에 없는 새 물건이"
+                         " 왔을 때' 를 모사한다. home-jepa 는 NCLS 슬롯(미지)을 갖고 있어"
+                         " 동작은 하되 클래스 사전을 잃는다. 그 손실 크기를 재는 스위치")
     args = ap.parse_args()
 
     seq_dir = args.seq if os.path.isdir(args.seq) else os.path.join(args.root, args.seq)
-    ep, E_t, g, gt = prepare(seq_dir, args)
+    ep, E_t, g, gt, unk_cat = prepare(seq_dir, args)
     dev = torch.device(args.device)
     model = load_model(args.model, dev)
+    if args.clip_class and unk_cat:
+        names = sorted(set(unk_cat.values()))
+        idx_of = extend_class_vocab(model, names, dev)
+        for i in range(len(E_t.cls)):
+            oid = int(E_t.ev_obj[i])
+            if oid in unk_cat:
+                E_t.cls[i] = idx_of[unk_cat[oid]]
+        for q in E_t.queries:
+            if q["meta"]["obj"] in unk_cat:
+                q["qcls"] = idx_of[unk_cat[q["meta"]["obj"]]]
+        print("CLIP 클래스 주입: 새 어휘 %d개 (%s...)" % (len(names), ", ".join(names[:4])))
     rec = {r["id"]: r for r in ep["home"]["recepts"]}
 
     name2oid = {}
