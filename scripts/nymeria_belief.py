@@ -67,10 +67,13 @@ def main():
                     help="검출 점수 문턱 — 근접 관측만 남겨 방 배정 오염을 막는다")
     ap.add_argument("--min-obs", type=int, default=3,
                     help="세션 내 관측 수가 이보다 적은 클래스는 채점에서 뺀다(잡음)")
+    ap.add_argument("--det", default="owl_det.json",
+                    help="지각층 검출 파일. clip_det.json 을 주면 **같은 프레임의 CLIP**"
+                         " 대조군이 된다 (점수 척도가 z 라 문턱 의미가 다르다)")
     ap.add_argument("--out", default=os.path.join(D, "belief.json"))
     args = ap.parse_args()
 
-    det = json.load(open(os.path.join(D, "owl_det.json")))
+    det = json.load(open(os.path.join(D, args.det)))
     seqs = {}
     import glob
     for sd in sorted(glob.glob(os.path.join(D, "loc49", "*"))):
