@@ -49,10 +49,17 @@ def main():
     ap.add_argument("--topf", type=int, default=10)
     ap.add_argument("--ctx-gate", type=float, default=1.0)
     ap.add_argument("--skill", default="object_location_memory")
+    ap.add_argument("--owl", action="store_true",
+                    help="지각층을 CLIP → OWLv2 로 교체 (data/supermem/owl_sm_*.json)")
     ap.add_argument("--update-graph", default=None)
     args = ap.parse_args()
 
     E, ts, sid = load_index()
+    from scripts.supermem_answer import SESS
+    order = []
+    for vid, sd in SESS.items():
+        z = np.load(os.path.join(D, sd, "index.npz"))
+        order += [(sd, i) for i in range(len(z["ts"]))]
     starts = json.load(open(os.path.join(D, "session_starts.json")))
     abst = np.array([starts[s] + t for s, t in zip(sid, ts)], float)
     Q = [(x, ev) for x, ev in questions()
@@ -69,7 +76,16 @@ def main():
                 if w not in STOP and len(w) > 3:
                     words.add(w)
     vocab = sorted(words)
-    Z, P = presence(E, vocab, args.device)
+    if args.owl:
+        from scripts.owl_presence import load_owl, owl_z, report_src
+        owl = load_owl({sd: os.path.join(D, "owl_sm_%s.json" % sd) for sd in SESS.values()})
+        print("OWLv2 지각층: 세션 %d · 검출프레임 %d"
+              % (len(owl), sum(len(v) for v in owl.values())))
+        Z, src = owl_z(owl, order, vocab, E=E, device=args.device)
+        report_src(src, "부재QA")
+        P = Z > 1.5
+    else:
+        Z, P = presence(E, vocab, args.device)
     G = pmi_graph(P, vocab)
     vi = {w: i for i, w in enumerate(vocab)}
     print("   어휘 %d · 존재판정 %.1f개/프레임" % (len(vocab), P.sum(0).mean()))

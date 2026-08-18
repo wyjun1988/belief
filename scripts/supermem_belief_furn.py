@@ -58,11 +58,14 @@ def main():
     ap.add_argument("--gate", type=float, default=1.0)
     ap.add_argument("--gamma", type=float, default=0.3)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--owl", action="store_true",
+                    help="지각층을 CLIP → OWLv2 로 교체 (data/supermem/owl_sm_*.json)."
+                         " 어휘 밖 단어는 CLIP 폴백하고 비율을 보고한다")
     args = ap.parse_args()
 
     from scripts.absence_evidence import clip_text
 
-    Es, tss, sids = [], [], []
+    Es, tss, sids, order = [], [], [], []
     for vid, sd in SESS5.items():
         f = os.path.join(D, sd, "index.npz")
         if not os.path.exists(f):
@@ -71,16 +74,28 @@ def main():
         Es.append(z["emb"].astype(np.float32))
         tss.extend(z["ts"])
         sids.extend([vid] * len(z["ts"]))
+        order += [(sd, i) for i in range(len(z["ts"]))]      # OWLv2 프레임 키와 정렬
     E = np.concatenate(Es)
     ts, sid = np.array(tss), np.array(sids)
     starts = json.load(open(os.path.join(D, "session_starts.json")))
     abst = np.array([starts[v] + t for v, t in zip(sid, ts)], float)
     kwj = json.load(open(os.path.join(D, "v3_keywords.json")))
 
+    owl = None
+    if args.owl:
+        from scripts.owl_presence import load_owl, owl_z, report_src
+        owl = load_owl({sd: os.path.join(D, "owl_sm_%s.json" % sd) for sd in SESS5.values()})
+        print("OWLv2 지각층: 세션 %d · 검출프레임 %d"
+              % (len(owl), sum(len(v) for v in owl.values())))
+
     # 가구 후보 검출
-    FV = clip_text(["a photo of a " + f for f in FURN], args.device)
-    FS = FV @ E.T
-    FZ = (FS - FS.mean(1, keepdims=True)) / (FS.std(1, keepdims=True) + 1e-9)
+    if owl:
+        FZ, fsrc = owl_z(owl, order, FURN, E=E, device=args.device)
+        report_src(fsrc, "가구")
+    else:
+        FV = clip_text(["a photo of a " + f for f in FURN], args.device)
+        FS = FV @ E.T
+        FZ = (FS - FS.mean(1, keepdims=True)) / (FS.std(1, keepdims=True) + 1e-9)
 
     q = json.load(open(os.path.join(D, "qa_person_1.json")))
     Q = []
@@ -96,9 +111,17 @@ def main():
           % (len(Q), dict(Counter(g for _, g in Q).most_common(8))))
 
     kws = [kwj[str(x["question_id"])]["keyword"] for x, _ in Q]
-    KV = clip_text(["a photo of a " + k for k in kws], args.device)
-    KS = KV @ E.T
-    KZ = (KS - KS.mean(1, keepdims=True)) / (KS.std(1, keepdims=True) + 1e-9)
+    if owl:
+        import re as _re
+        def _norm(w):
+            t = [x for x in _re.findall(r"[a-z]+", w.lower()) if len(x) > 1]
+            return " ".join(t[-2:]) if t else w.lower()
+        KZ, ksrc = owl_z(owl, order, [_norm(k) for k in kws], E=E, device=args.device)
+        report_src(ksrc, "키워드")
+    else:
+        KV = clip_text(["a photo of a " + k for k in kws], args.device)
+        KS = KV @ E.T
+        KZ = (KS - KS.mean(1, keepdims=True)) / (KS.std(1, keepdims=True) + 1e-9)
 
     r_lk = r_ab = r_pop = 0
     n = 0

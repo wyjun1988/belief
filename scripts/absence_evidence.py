@@ -138,6 +138,9 @@ def main():
     ap.add_argument("--norm", action="store_true",
                     help="문맥 하락으로 정규화 — 장면 전체가 안 보이게 된 것과 물건만"
                          " 사라진 것을 가른다")
+    ap.add_argument("--owl", default=None,
+                    help="OWLv2 검출 JSON — 지각층을 CLIP 에서 갈아끼운다. 어휘 밖"
+                         " 단어는 CLIP 으로 폴백하고 그 비율을 보고한다")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -150,7 +153,15 @@ def main():
     cats = sorted({(r.get("category") or "").strip() for r in gt.values() if r.get("category")})
     vocab = sorted(set([c for c in cats if c and len(c) > 2]) | set(PLACES))
     print("① 씬그래프: 프레임 %d · 어휘 %d개" % (len(E), len(vocab)))
-    Z, P = presence(E, vocab, args.device)
+    if args.owl:
+        from scripts.owl_presence import owl_z, report_src
+        raw = json.load(open(args.owl))
+        owl = {"_": {int(os.path.splitext(k)[0]): v for k, v in raw.items()}}
+        Z, src = owl_z(owl, [("_", int(f)) for f in fidx], vocab, E=E, device=args.device)
+        report_src(src, "부재증거")
+        P = Z > 1.5
+    else:
+        Z, P = presence(E, vocab, args.device)
     print("   존재판정 밀도 %.1f개/프레임" % P.sum(0).mean())
     G = pmi_graph(P, vocab)
     vi = {w: i for i, w in enumerate(vocab)}

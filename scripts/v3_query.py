@@ -129,6 +129,28 @@ def stage_eval(args):
                 ol[1] += 1
         return tot / len(Q), ol[0] / max(ol[1], 1)
 
+    owlZ = None
+    if getattr(args, "owl", False):
+        # OWLv2 재순위 — CLIP 유사도 대신 **키워드가 실제로 검출된 프레임**을 올린다.
+        # CLIP 은 "비슷해 보이는" 프레임을, OWLv2 는 "그 물건이 있는" 프레임을 고른다.
+        import re as _re
+        from scripts.supermem_answer import SESS
+        from scripts.owl_presence import load_owl, owl_z, report_src
+        order = []
+        for vid, sd in SESS.items():
+            z2 = np.load(os.path.join(D, sd, "index.npz"))
+            order += [(sd, i) for i in range(len(z2["ts"]))]
+        owl = load_owl({sd: os.path.join(D, "owl_sm_%s.json" % sd) for sd in SESS.values()})
+        print("OWLv2 지각층: 세션 %d · 검출프레임 %d"
+              % (len(owl), sum(len(v) for v in owl.values())))
+        def _norm(w):
+            t = [y for y in _re.findall(r"[a-z]+", w.lower()) if len(y) > 1]
+            return " ".join(t[-2:]) if t else w.lower()
+        kwl = [_norm(kw[str(x["question_id"])]["keyword"]) for x, _ in Q]
+        owlZ, osrc = owl_z(owl, order, kwl, E=E, device="mps")
+        report_src(osrc, "검색 키워드")
+        owlZ = np.apply_along_axis(lambda r: np.convolve(r, k15, mode="same"), 1, owlZ)
+
     base = score(["a photo of " + x["question"] for x, _ in Q])
     print("기준(원문 질문):      전체 %.2f · 물체위치 %.2f" % hits(base))
     ext = score(["a photo of " + kw[str(x["question_id"])]["keyword"] + ", "
@@ -136,11 +158,19 @@ def stage_eval(args):
     print("확장 질의(자동 추출): 전체 %.2f · 물체위치 %.2f" % hits(ext))
     both = np.maximum(base, ext)
     print("원문+확장 최대결합:   전체 %.2f · 물체위치 %.2f" % hits(both))
+    if owlZ is not None:
+        ow = np.where(M, owlZ, -np.inf)
+        print("**OWLv2 단독**:       전체 %.2f · 물체위치 %.2f" % hits(ow))
+        for a in (0.3, 0.5, 1.0):
+            print("**확장+OWLv2 (a=%.1f)**: 전체 %.2f · 물체위치 %.2f"
+                  % ((a,) + hits(np.where(M, ext + a * owlZ, -np.inf))))
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True, choices=["extract", "eval"])
+    ap.add_argument("--owl", action="store_true",
+                    help="검색에 OWLv2 재순위를 얹는다 (data/supermem/owl_sm_*.json)")
     args = ap.parse_args()
     (stage_extract if args.stage == "extract" else stage_eval)(args)
 

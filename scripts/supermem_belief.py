@@ -88,6 +88,10 @@ def main():
     ap.add_argument("--model", default="supervised_two_head_v5")
     ap.add_argument("--z-obj", type=float, default=1.5, help="물체 검출 z 문턱")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--owl", action="store_true",
+                    help="수용체·키워드 지각층을 CLIP → OWLv2 로 교체. **방 이름은 CLIP**"
+                         " 그대로 둔다 — OWLv2 는 물체 검출기라 'a photo of a kitchen'"
+                         " 같은 장면 질의를 못 한다")
     ap.add_argument("--rooms3d", action="store_true",
                     help="프레임 방을 CLIP 한장분류 대신 **MPS 3D 군집**으로 결정."
                          " 실측: 방 분류 0.49 → 0.93(1.9배). belief 의 선결조건")
@@ -107,7 +111,7 @@ def main():
         "Person_1_session_19_03292026_glasses_1266sm": "s19",
         "Person_1_session_20_03292026_glasses_1284": "s20",
     }
-    Es, tss, sids = [], [], []
+    Es, tss, sids, order = [], [], [], []
     for vid, sd in SESS5.items():
         f = os.path.join(D, sd, "index.npz")
         if not os.path.exists(f):
@@ -116,7 +120,14 @@ def main():
         Es.append(z["emb"].astype(np.float32))
         tss.extend(z["ts"])
         sids.extend([vid] * len(z["ts"]))
+        order += [(sd, i) for i in range(len(z["ts"]))]     # OWLv2 프레임 키와 정렬
     E = np.concatenate(Es)
+    owl = None
+    if args.owl:
+        from scripts.owl_presence import load_owl, owl_z, report_src
+        owl = load_owl({sd: os.path.join(D, "owl_sm_%s.json" % sd) for sd in SESS5.values()})
+        print("OWLv2 지각층: 세션 %d · 검출프레임 %d"
+              % (len(owl), sum(len(v) for v in owl.values())))
     ts, sid = np.array(tss), np.array(sids)
     print("세션 %d개 · 프레임 %d" % (len(Es), len(E)))
     starts = json.load(open(os.path.join(D, "session_starts.json")))
@@ -160,9 +171,13 @@ def main():
             plist.append(p)
             prooms.append(r)
             ptypes.append(t)
-    PV = clip_text(["a photo of a " + p for p in plist], args.device)
-    PS = PV @ E.T
-    PSz = (PS - PS.mean(1, keepdims=True)) / (PS.std(1, keepdims=True) + 1e-9)
+    if owl:
+        PSz, psrc = owl_z(owl, order, plist, E=E, device=args.device)
+        report_src(psrc, "수용체")
+    else:
+        PV = clip_text(["a photo of a " + p for p in plist], args.device)
+        PS = PV @ E.T
+        PSz = (PS - PS.mean(1, keepdims=True)) / (PS.std(1, keepdims=True) + 1e-9)
     print("② 수용체 노드 %d개 (방 %d)" % (len(plist), len(ROOMS)))
 
     # 질의 대상: 물체·위치 문항 중 방 라벨이 있는 것
@@ -183,9 +198,17 @@ def main():
 
     # 물체 키워드 임베딩
     kws = [kwj[str(x["question_id"])]["keyword"] for x, _ in Q]
-    KV = clip_text(["a photo of a " + k for k in kws], args.device)
-    KS = KV @ E.T
-    KSz = (KS - KS.mean(1, keepdims=True)) / (KS.std(1, keepdims=True) + 1e-9)
+    if owl:
+        import re as _re
+        def _norm(w):
+            t = [y for y in _re.findall(r"[a-z]+", w.lower()) if len(y) > 1]
+            return " ".join(t[-2:]) if t else w.lower()
+        KSz, ksrc = owl_z(owl, order, [_norm(k) for k in kws], E=E, device=args.device)
+        report_src(ksrc, "키워드")
+    else:
+        KV = clip_text(["a photo of a " + k for k in kws], args.device)
+        KS = KV @ E.T
+        KSz = (KS - KS.mean(1, keepdims=True)) / (KS.std(1, keepdims=True) + 1e-9)
 
     # ④ 에피소드 구성 + 채점
     dev = torch.device("cpu")
