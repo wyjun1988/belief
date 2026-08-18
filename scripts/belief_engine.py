@@ -186,6 +186,11 @@ def prepare(seq_dir, args):
         for q in E_t.queries:
             if q["meta"]["obj"] in unk_cat:
                 q["qcls"] = NC
+    if getattr(args, "unknown_room", False):
+        from homejepa.model import NRT
+        E_t.rt[:] = NRT
+        if hasattr(E_t, "loc_rt"):
+            E_t.loc_rt[:] = NRT
     if getattr(args, "unknown_class", False):
         # 새 물체 모사: 클래스 축을 전부 미지로
         E_t.cls[:] = NC
@@ -221,6 +226,8 @@ def main():
     ap.add_argument("--eval", action="store_true", help="이동물체 전체 채점")
     ap.add_argument("--gamma", type=float, default=0.3)
     ap.add_argument("--gate", type=float, default=1.0)
+    ap.add_argument("--unknown-room", action="store_true",
+                    help="방 타입 축을 미지로 — '고정 8종 어휘가 실제로 쓰이나' 를 잰다")
     ap.add_argument("--clip-class", action="store_true",
                     help="미지 대신 **CLIP 임베딩을 클래스 속성으로** 주입(열린 어휘 정공법)."
                          " 알려진 10클래스를 앵커로 CLIP→클래스공간 선형사상을 맞춘 뒤"
