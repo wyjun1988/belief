@@ -57,10 +57,19 @@ def owl_z(owl, order, words, E=None, device="mps", owl_vocab=None, thr=0.0):
     """
     seen = owl_vocab
     if seen is None:
-        seen = set()
-        for fr in owl.values():
-            for d in fr.values():
-                seen.update(d)
+        # 질의 어휘 파일이 있으면 그것을 쓴다. 없으면 '실제로 검출된 단어' 로
+        # 대신하는데, 그러면 **어휘에 있었지만 한 번도 안 보인 단어가 CLIP 으로
+        # 폴백**한다 — "한 번도 못 봤다"는 OWLv2 의 정당한 판정인데 CLIP 신호가
+        # 섞여 들어가 비교가 오염된다.
+        vp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "data", "supermem", "owl_vocab.json")
+        if os.path.exists(vp):
+            seen = set(json.load(open(vp)))
+        else:
+            seen = set()
+            for fr in owl.values():
+                for d in fr.values():
+                    seen.update(d)
     hit = [w for w in words if w in seen]
     miss = [w for w in words if w not in seen]
     Z = np.zeros((len(words), len(order)), np.float32)
