@@ -150,6 +150,10 @@ def main():
                          " 있다(실측: 검색이 맞아도 물체위치 정답률 0.45)")
     ap.add_argument("--crop", type=float, default=None,
                     help="중앙 크롭 비율(0.6 = 가운데 60%%). 시선 방향 세부를 키운다")
+    ap.add_argument("--owl-rerank", type=float, default=0.0,
+                    help="검색 점수에 OWLv2 키워드 검출 z 를 이 가중치로 더한다."
+                         " CLIP 은 '비슷해 보이는' 프레임을, OWLv2 는 '그 물건이 있는'"
+                         " 프레임을 올린다. 0 이면 비활성")
     ap.add_argument("--answer-aware", action="store_true",
                     help="선택지를 검색 질의에 결합(answer-aware retrieval). 실측: 물체위치"
                          " hit@5 0.55→0.70. **개방형에서는 선택지가 없으므로, 그 자리를"
@@ -246,6 +250,25 @@ def main():
         S = S - S.mean(0, keepdims=True)
         k15 = np.ones(15) / 15
         S = np.apply_along_axis(lambda r: np.convolve(r, k15, mode="same"), 1, S)
+        if args.owl_rerank:
+            import re as _reo
+            from scripts.owl_presence import load_owl, owl_z, report_src
+            kwj = json.load(open(os.path.join(D, "v3_keywords.json")))
+            order_f = []
+            for vid, sd_ in SESS.items():
+                z_ = np.load(os.path.join(D, sd_, "index.npz"))
+                order_f += [(sd_, i) for i in range(len(z_["ts"]))]
+            owl = load_owl({sd_: os.path.join(D, "owl_sm_%s.json" % sd_)
+                            for sd_ in SESS.values()})
+            def _nm(w):
+                t = [y for y in _reo.findall(r"[a-z]+", w.lower()) if len(y) > 1]
+                return " ".join(t[-2:]) if t else w.lower()
+            kwl = [_nm(kwj.get(str(x["question_id"]), {}).get("keyword")
+                       or _kp(x["question"])) for x, _ in Q]
+            OZ, osrc = owl_z(owl, order_f, kwl, E=E, device="mps")
+            report_src(osrc, "검색 재순위")
+            OZ = np.apply_along_axis(lambda r: np.convolve(r, k15, mode="same"), 1, OZ)
+            S = S + args.owl_rerank * OZ
         if args.temporal:
             starts = json.load(open(os.path.join(D, "session_starts.json")))
             abst = np.array([starts[v] + t for v, t in zip(sid, ts)], float)

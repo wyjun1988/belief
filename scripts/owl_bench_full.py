@@ -88,6 +88,16 @@ def main():
         print("CLIP 전체프레임 z≥%.1f    %.2f     %.2f     %.2f" % ((zt,) + r))
         if r[2] > best.get("clip", (0, 0, 0))[2]:
             best["clip"] = r
+    # CLIP 에 더 유리한 판정규칙 — 프레임당 상위 k개. 문턱 방식은 단어마다
+    # z 분포가 달라 불리할 수 있으니, 프레임 안에서 순위만 쓰는 규칙도 같이 잰다.
+    for k in (5, 11, 20):
+        P = np.zeros_like(G)
+        for j in range(Z.shape[1]):
+            P[np.argsort(-Z[:, j])[:k], j] = True
+        r = score(P)
+        print("CLIP 프레임당 상위%-2d      %.2f     %.2f     %.2f" % ((k,) + r))
+        if r[2] > best.get("clip", (0, 0, 0))[2]:
+            best["clip"] = r
     for ot in (0.10, 0.15, 0.20, 0.30):
         r = score(O >= ot)
         print("**OWLv2 ≥%.2f**           %.2f     %.2f     %.2f" % ((ot,) + r))
