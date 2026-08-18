@@ -176,7 +176,10 @@ def main():
                                         + ("_oracle" if args.oracle else "")
                                         + ("_strict" if args.strict else "")
                                         + ("_k%d" % args.topk if args.topk != 4 else "")
-                                        + ("_abs" if args.absence else "")))
+                                        + ("_abs" if args.absence else "")
+                                        # ⚠️ 재순위 가중치가 파일명에 없으면 서로 다른
+                                        # 설정이 같은 캐시를 읽는다(전에 topk 로 겪음)
+                                        + ("_owl%g" % args.owl_rerank if args.owl_rerank else "")))
     done = {}
     if os.path.exists(out_p):
         for ln in open(out_p):
