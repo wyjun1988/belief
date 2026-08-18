@@ -16,3 +16,11 @@ __pycache__/
 # 점구름 렌더는 ADT RGB 색을 담고 있다 — 파생 프레임 취급
 docs/img/dsg_web_*.jpg
 docs/img/dsg_web_*.png
+
+# Nymeria — 연구 라이선스. 원본 영상·SLAM·검출 산출물 모두 커밋 금지(49GB).
+# scene_graph_named.json 만 예외로 추적한다(방 이름 표, 원본 복원 불가).
+data/nymeria/*
+!data/nymeria/scene_graph_named.json
+# ADT OWLv2 검출 산출물 — 원본에서 재생성 가능
+data/adt_owl/
+models/
