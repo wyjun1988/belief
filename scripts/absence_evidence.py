@@ -142,6 +142,9 @@ def main():
                     help="OWLv2 검출 JSON — 지각층을 CLIP 에서 갈아끼운다. 어휘 밖"
                          " 단어는 CLIP 으로 폴백하고 그 비율을 보고한다")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--owl-thr", type=float, default=0.0,
+                    help="OWLv2 근접 게이트 — 이 점수 미만 검출은 버린다."
+                         " Nymeria 실측으로 약한 검출이 위치를 오염시킨다")
     args = ap.parse_args()
 
     sd = args.seq if os.path.isdir(args.seq) else os.path.join(args.root, args.seq)
@@ -157,7 +160,7 @@ def main():
         from scripts.owl_presence import owl_z, report_src
         raw = json.load(open(args.owl))
         owl = {"_": {int(os.path.splitext(k)[0]): v for k, v in raw.items()}}
-        Z, src = owl_z(owl, [("_", int(f)) for f in fidx], vocab, E=E, device=args.device)
+        Z, src = owl_z(owl, [("_", int(f)) for f in fidx], vocab, E=E, device=args.device, thr=args.owl_thr)
         report_src(src, "부재증거")
         P = Z > 1.5
     else:

@@ -95,6 +95,9 @@ def main():
     ap.add_argument("--rooms3d", action="store_true",
                     help="프레임 방을 CLIP 한장분류 대신 **MPS 3D 군집**으로 결정."
                          " 실측: 방 분류 0.49 → 0.93(1.9배). belief 의 선결조건")
+    ap.add_argument("--owl-thr", type=float, default=0.0,
+                    help="OWLv2 근접 게이트 — 이 점수 미만 검출은 버린다."
+                         " Nymeria 실측으로 약한 검출이 위치를 오염시킨다")
     args = ap.parse_args()
 
     import torch
@@ -172,7 +175,7 @@ def main():
             prooms.append(r)
             ptypes.append(t)
     if owl:
-        PSz, psrc = owl_z(owl, order, plist, E=E, device=args.device)
+        PSz, psrc = owl_z(owl, order, plist, E=E, device=args.device, thr=args.owl_thr)
         report_src(psrc, "수용체")
     else:
         PV = clip_text(["a photo of a " + p for p in plist], args.device)
@@ -203,7 +206,7 @@ def main():
         def _norm(w):
             t = [y for y in _re.findall(r"[a-z]+", w.lower()) if len(y) > 1]
             return " ".join(t[-2:]) if t else w.lower()
-        KSz, ksrc = owl_z(owl, order, [_norm(k) for k in kws], E=E, device=args.device)
+        KSz, ksrc = owl_z(owl, order, [_norm(k) for k in kws], E=E, device=args.device, thr=args.owl_thr)
         report_src(ksrc, "키워드")
     else:
         KV = clip_text(["a photo of a " + k for k in kws], args.device)

@@ -61,6 +61,9 @@ def main():
     ap.add_argument("--owl", action="store_true",
                     help="지각층을 CLIP → OWLv2 로 교체 (data/supermem/owl_sm_*.json)."
                          " 어휘 밖 단어는 CLIP 폴백하고 비율을 보고한다")
+    ap.add_argument("--owl-thr", type=float, default=0.0,
+                    help="OWLv2 근접 게이트 — 이 점수 미만 검출은 버린다."
+                         " Nymeria 실측으로 약한 검출이 위치를 오염시킨다")
     args = ap.parse_args()
 
     from scripts.absence_evidence import clip_text
@@ -90,7 +93,7 @@ def main():
 
     # 가구 후보 검출
     if owl:
-        FZ, fsrc = owl_z(owl, order, FURN, E=E, device=args.device)
+        FZ, fsrc = owl_z(owl, order, FURN, E=E, device=args.device, thr=args.owl_thr)
         report_src(fsrc, "가구")
     else:
         FV = clip_text(["a photo of a " + f for f in FURN], args.device)
@@ -116,7 +119,7 @@ def main():
         def _norm(w):
             t = [x for x in _re.findall(r"[a-z]+", w.lower()) if len(x) > 1]
             return " ".join(t[-2:]) if t else w.lower()
-        KZ, ksrc = owl_z(owl, order, [_norm(k) for k in kws], E=E, device=args.device)
+        KZ, ksrc = owl_z(owl, order, [_norm(k) for k in kws], E=E, device=args.device, thr=args.owl_thr)
         report_src(ksrc, "키워드")
     else:
         KV = clip_text(["a photo of a " + k for k in kws], args.device)

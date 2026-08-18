@@ -27,17 +27,21 @@ def load_owl(paths):
     return out
 
 
-def owl_matrix(owl, order, vocab):
+def owl_matrix(owl, order, vocab, thr=0.0):
     """(단어 × 프레임) 밀집 점수. order = [(세션, 프레임인덱스), ...] = E 의 행 순서.
 
     검출 안 된 칸은 0 이다. CLIP 유사도가 항상 0.2~0.3 근처에 몰려 있는 것과 달리
-    OWLv2 점수는 **희소**하다 — 이 희소성 자체가 신호다."""
+    OWLv2 점수는 **희소**하다 — 이 희소성 자체가 신호다.
+
+    thr 은 근접 게이트다. Nymeria 실측: 약한 검출은 문 너머·먼 거리 관측이라
+    물체를 엉뚱한 장소에 넣는다 — 고정 가전의 세션 간 방 일치도가 문턱 0 에서 0.53,
+    0.35 에서 0.93 이었다. 같은 논리가 프레임 단위 존재판정에도 적용된다."""
     vi = {w: i for i, w in enumerate(vocab)}
     S = np.zeros((len(vocab), len(order)), np.float32)
     for j, (sess, idx) in enumerate(order):
         for w, s in owl.get(sess, {}).get(idx, {}).items():
             i = vi.get(w)
-            if i is not None:
+            if i is not None and s >= thr:
                 S[i, j] = s
     return S
 
@@ -46,7 +50,7 @@ def zscore(S):
     return (S - S.mean(1, keepdims=True)) / (S.std(1, keepdims=True) + 1e-9)
 
 
-def owl_z(owl, order, words, E=None, device="mps", owl_vocab=None):
+def owl_z(owl, order, words, E=None, device="mps", owl_vocab=None, thr=0.0):
     """words 각각에 대해 OWLv2 행(있으면) 또는 CLIP 행(없으면)을 만들어 z점수화.
 
     돌려주는 src 는 단어별 출처("owl"/"clip") — 폴백 비율을 보고해야 비교가 정직하다.
@@ -62,7 +66,7 @@ def owl_z(owl, order, words, E=None, device="mps", owl_vocab=None):
     Z = np.zeros((len(words), len(order)), np.float32)
     wi = {w: i for i, w in enumerate(words)}
     if hit:
-        Zo = zscore(owl_matrix(owl, order, hit))
+        Zo = zscore(owl_matrix(owl, order, hit, thr))
         for k, w in enumerate(hit):
             Z[wi[w]] = Zo[k]
     if miss:

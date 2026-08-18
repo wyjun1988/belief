@@ -147,7 +147,7 @@ def stage_eval(args):
             t = [y for y in _re.findall(r"[a-z]+", w.lower()) if len(y) > 1]
             return " ".join(t[-2:]) if t else w.lower()
         kwl = [_norm(kw[str(x["question_id"])]["keyword"]) for x, _ in Q]
-        owlZ, osrc = owl_z(owl, order, kwl, E=E, device="mps")
+        owlZ, osrc = owl_z(owl, order, kwl, E=E, device="mps", thr=args.owl_thr)
         report_src(osrc, "검색 키워드")
         owlZ = np.apply_along_axis(lambda r: np.convolve(r, k15, mode="same"), 1, owlZ)
 
@@ -171,6 +171,9 @@ def main():
     ap.add_argument("--stage", required=True, choices=["extract", "eval"])
     ap.add_argument("--owl", action="store_true",
                     help="검색에 OWLv2 재순위를 얹는다 (data/supermem/owl_sm_*.json)")
+    ap.add_argument("--owl-thr", type=float, default=0.0,
+                    help="OWLv2 근접 게이트 — 이 점수 미만 검출은 버린다."
+                         " Nymeria 실측으로 약한 검출이 위치를 오염시킨다")
     args = ap.parse_args()
     (stage_extract if args.stage == "extract" else stage_eval)(args)
 

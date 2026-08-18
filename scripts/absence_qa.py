@@ -52,6 +52,9 @@ def main():
     ap.add_argument("--owl", action="store_true",
                     help="지각층을 CLIP → OWLv2 로 교체 (data/supermem/owl_sm_*.json)")
     ap.add_argument("--update-graph", default=None)
+    ap.add_argument("--owl-thr", type=float, default=0.0,
+                    help="OWLv2 근접 게이트 — 이 점수 미만 검출은 버린다."
+                         " Nymeria 실측으로 약한 검출이 위치를 오염시킨다")
     args = ap.parse_args()
 
     E, ts, sid = load_index()
@@ -81,7 +84,7 @@ def main():
         owl = load_owl({sd: os.path.join(D, "owl_sm_%s.json" % sd) for sd in SESS.values()})
         print("OWLv2 지각층: 세션 %d · 검출프레임 %d"
               % (len(owl), sum(len(v) for v in owl.values())))
-        Z, src = owl_z(owl, order, vocab, E=E, device=args.device)
+        Z, src = owl_z(owl, order, vocab, E=E, device=args.device, thr=args.owl_thr)
         report_src(src, "부재QA")
         P = Z > 1.5
     else:
