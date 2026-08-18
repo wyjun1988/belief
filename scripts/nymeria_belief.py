@@ -147,11 +147,14 @@ def main():
     print("\n채점 %d건 (leave-one-session-out · 방 분포 %s)"
           % (n, dict(sorted(per_room.items()))))
     base = 1.0 / args.k
-    print("\n%-10s %-8s %s" % ("방식", "정확도", "무작위 대비"))
+    # 최빈방이 진짜 기준선이다 — 무작위(1/k)는 너무 관대해서 개선을 과장한다
+    maj = max(per_room.values()) / n
+    print("\n%-10s %-8s %s" % ("방식", "정확도", "최빈방 대비"))
     print("%-10s %.3f    —" % ("무작위", base))
+    print("%-10s %.3f    —" % ("최빈방", maj))
     for kname in ("지속", "사전분포", "그래프"):
         a = hit[kname] / n
-        print("%-10s **%.3f**   %+.0f%%" % (kname, a, 100 * (a / base - 1)))
+        print("%-10s **%.3f**   %+.0f%%" % (kname, a, 100 * (a / maj - 1)))
     json.dump({k: hit[k] / n for k in hit} | {"n": n, "random": base},
               open(args.out, "w"))
     print("\n→ %s" % args.out)
