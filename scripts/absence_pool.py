@@ -30,6 +30,7 @@ OWLF = {"Apartment_release_decoration_seq137_M1292": "owl_adt_decoration.json",
 
 
 RAW = [False]
+MIN_PRE = [-1e9]     # 이동 전 키워드 z 하한 — '있을 때 보였는가' 전제조건
 
 
 def one(seq, root, owl_dir, gate, thr, device="mps"):
@@ -79,14 +80,18 @@ def one(seq, root, owl_dir, gate, thr, device="mps"):
         # 이 이동 **직후** 구간: 이 이동이 끝난 뒤 ~ 다음 이동 시작 전
         fb = [i for i, f in enumerate(fidx) if e < f < next_start]
         r = absence_score(Z, P, G, vocab, vi[c], fa, fb, 4, 12, gate)
-        if r:
+        # **부재를 묻기 전에 "있을 때는 보였는가" 를 확인한다.** 단계 진단(㉓)에서
+        # 이동 전 z 가 음수인 물체(있을 때조차 검출 안 됨)는 전/후가 안 갈렸고,
+        # 양수인 5건 중 4건은 확실히 떨어졌다. GT 없이 실행 시점에 걸 수 있는
+        # 조건이다 — 사라진 것을 재려면 먼저 있는 것을 봤어야 한다.
+        if r and r["z_before"] >= MIN_PRE[0]:
             mv.append(r["drop"] if RAW[0] else r["ndrop"])
     mid = int(np.median(fidx))
     for c in statics:
         fa = [i for i, f in enumerate(fidx) if f < mid]
         fb = [i for i, f in enumerate(fidx) if f >= mid]
         r = absence_score(Z, P, G, vocab, vi[c], fa, fb, 4, 12, gate)
-        if r:
+        if r and r["z_before"] >= MIN_PRE[0]:
             st.append(r["drop"] if RAW[0] else r["ndrop"])
     return mv, st, src
 
@@ -98,6 +103,9 @@ def main():
                     help="쉼표 구분 시퀀스명. 'new' 면 신규 4시퀀스(이동 75개)")
     ap.add_argument("--owl-dir", default=None)
     ap.add_argument("--owl-thr", type=float, default=0.0)
+    ap.add_argument("--min-pre", type=float, default=-1e9,
+                    help="이동 전 키워드 z 하한. 있을 때조차 검출 안 되는 물체는"
+                         " 부재를 물을 수 없다(㉓). 이동·정적 양쪽에 같이 적용")
     ap.add_argument("--gates", default="0.5,0.7,1.0")
     ap.add_argument("--norm", action="store_true",
                     help="문맥 하락으로 정규화한 ndrop 으로 채점. **기본은 원 drop 이다** —"
@@ -106,6 +114,7 @@ def main():
                          " 이 지표를 깎는다")
     ap.add_argument("--device", default="mps")
     args = ap.parse_args()
+    MIN_PRE[0] = args.min_pre
     RAW[0] = not args.norm
 
     seqs = SEQS
