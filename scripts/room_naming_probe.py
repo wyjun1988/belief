@@ -129,14 +129,26 @@ def main():
                       for t, _ in pts])
         y = [g for _, g in pts]
         Dm = np.linalg.norm(X[:, None] - X[None], axis=2)
-        np.fill_diagonal(Dm, np.inf)
-        pred = [y[int(np.argmin(Dm[i]))] for i in range(len(y))]
-        acc = float(np.mean([p == t for p, t in zip(pred, y)]))
+        T = np.array([t for t, _ in pts])
         mj = Counter(y).most_common(1)[0]
-        print("  %-4s n=%-4d 1-NN %.3f · 최빈(%s) %.3f · %s"
-              % (sd, len(y), acc, mj[0], mj[1] / len(y),
-                 "**위치가 방을 담는다**" if acc > mj[1] / len(y) + 0.05
-                 else "위치에 방 정보 없음"))
+        # **시간 인접 누수 차단.** 근거는 시간적으로 뭉쳐 있다 — 몇 초 떨어진 두
+        # 점은 위치도 방도 같으므로 leave-one-out 1-NN 이 사실상 이웃 시각을
+        # 베낀다. 최근접을 시간으로 T초 이상 떨어진 것만 허용해 다시 잰다.
+        for gap in (0, 30, 300, 1800):
+            M = Dm.copy()
+            np.fill_diagonal(M, np.inf)
+            M[np.abs(T[:, None] - T[None]) < gap] = np.inf
+            ok = np.isfinite(M).any(1)
+            if ok.sum() < 10:
+                print("  %-4s 간격 %-5ds — 남는 표본 부족(%d)" % (sd, gap, ok.sum()))
+                continue
+            pr = [y[int(np.argmin(M[i]))] for i in np.nonzero(ok)[0]]
+            gt = [y[i] for i in np.nonzero(ok)[0]]
+            acc = float(np.mean([a == b for a, b in zip(pr, gt)]))
+            base = Counter(gt).most_common(1)[0][1] / len(gt)
+            print("  %-4s 간격 %-5ds n=%-4d 1-NN %.3f · 최빈 %.3f · %s"
+                  % (sd, gap, len(gt), acc, base,
+                     "**위치가 방을 담는다**" if acc > base + 0.05 else "차이 없음"))
 
     print("\n→ 상한이 최빈방보다 **높으면 명명이 병목**(군집은 방을 가르는데 이름이 틀림).")
     print("  상한이 최빈방과 비슷하면 **군집이 GT 방 경계와 무관**하다는 뜻이다.")
