@@ -96,7 +96,7 @@ def _segment_track(frames, pts, thresh, confirm=CONFIRM, overlap_min=OVERLAP_MIN
                "position": np.median(C, axis=0).round(4).tolist(),
                "n_obs": st["n"], "n_voxels": len(st["vox"])}
         # 위치 추정량 3종을 함께 남긴다 — 어느 쪽이 나은지는 데이터가 정한다.
-        # (belief 수용체 정확도로 비교: scripts/eval_belief.py --furn-pos)
+        # (belief 수용체 정확도로 비교: scripts/_archive/eval_belief.py --furn-pos)
         if len(V):
             lo, hi = V.min(axis=0), V.max(axis=0)
             out["vox_centroid"] = V.mean(axis=0).round(4).tolist()
