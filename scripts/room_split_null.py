@@ -33,7 +33,10 @@ def jac(labels, dets, topn):
     rs = sorted(tops)
     js = [len(tops[rs[i]] & tops[rs[j]]) / max(len(tops[rs[i]] | tops[rs[j]]), 1)
           for i in range(len(rs)) for j in range(i + 1, len(rs))]
-    return float(np.mean(js)) if js else None
+    # **최대**를 쓴다 — 구별 안 되는 방이 한 쌍만 있어도 그 분할은 망가진다.
+    # 평균을 쓰면 k 가 커질수록 쌍이 늘어 희석돼 z 가 **단조로 좋아진다**(실측:
+    # Nymeria 에서 k=6 이 z=-5.33 으로 최고인데 belief 는 기준선 미달).
+    return float(np.max(js)) if js else None
 
 
 def evaluate(name, uv, dets, kmax, topn, nperm, seed=0):
@@ -43,7 +46,7 @@ def evaluate(name, uv, dets, kmax, topn, nperm, seed=0):
     print("\n[%s] 프레임 %d · 어휘 %d · 프레임당 %.1f"
           % (name, len(dets), len(set(w for d in dets for w in d)),
              sum(map(len, dets)) / max(len(dets), 1)))
-    print("%-4s %-9s %-9s %-8s %s" % ("k", "관측", "무작위", "z", "판정"))
+    print("%-4s %-9s %-9s %-8s %s" % ("k", "관측max", "무작위max", "z", "판정"))
     best = None
     for k in range(2, kmax + 1):
         cen, _ = kmeans2(uv, k, minit="++", seed=0, iter=60)
