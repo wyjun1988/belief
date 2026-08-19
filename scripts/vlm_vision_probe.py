@@ -47,11 +47,9 @@ def main():
 
     out, t0 = [], time.time()
     for k, (vid, sd, idx, truth) in enumerate(picks):
-        fr = grab_frame(vid, float(idx), res=args.res)
-        if fr is None:
+        b64 = grab_frame(vid, float(idx), res=args.res)   # 이미 base64 JPEG 문자열이다
+        if not b64:
             continue
-        ok, buf = cv2.imencode(".jpg", fr, [cv2.IMWRITE_JPEG_QUALITY, 92])
-        b64 = base64.b64encode(buf.tobytes()).decode()
         body = json.dumps({"messages": [{"role": "user", "content": [
             {"type": "text", "text": "List the objects you can see in this photo. "
                                      "Output ONLY a comma-separated list of short noun "

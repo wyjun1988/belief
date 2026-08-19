@@ -215,8 +215,10 @@ def stage_eval(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True, choices=["extract", "eval"])
-    ap.add_argument("--recency-tau", type=float, default=0.0,
-                    help="최근성 가중 τ(시간) — 점수에 exp(-Δt/τ). 프레임 풀이 커질 때 필수")
+    ap.add_argument("--recency-tau", type=float, default=12.0,
+                    help="최근성 가중 τ(시간) — 점수에 exp(-Δt/τ). **기본 12시간**(0 이면 끔)."
+                         " 프레임 풀이 커지면 필수다. 136문항 실측: 가중 없음 물체위치 0.262 →"
+                         " τ=6h/12h 0.456 · 24h 0.417 · 48h+ 0.398. 6~12h 가 고원")
     ap.add_argument("--owl", action="store_true",
                     help="검색에 OWLv2 재순위를 얹는다 (data/supermem/owl_sm_*.json)")
     ap.add_argument("--owl-thr", type=float, default=0.0,

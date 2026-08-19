@@ -82,6 +82,44 @@ def grab_frame(vid, sec, res=448, crop=None):
     return base64.b64encode(buf.tobytes()).decode()
 
 
+def score_choices(prompt, images, letters_ok, timeout=900):
+    """선택지 문자별 **로그확률**을 직접 읽어 최댓값을 고른다.
+
+    왜 필요한가: 문법 제약으로 한 글자를 강제하면 첫 토큰 분포가 그대로 답이 되는데,
+    그 분포에 위치·문자 편향이 실려 있다(실측: 정답이 A 일 때 정답률 0.07~0.28,
+    C 일 때 0.45~0.50 — 위치별로 5배 이상 벌어진다). 순환 평균은 그 편향을 평균으로
+    덮는 것이고, 여기서는 **각 문자에 모델이 얼마나 확신하는지를 직접 비교**한다.
+
+    llama.cpp 의 logprobs 를 쓴다 — 문법으로 후보를 letters_ok 로 묶은 뒤 상위
+    로그확률을 받아 문자별로 정렬한다. 호출은 1회다(순환은 3회).
+    """
+    content = [{"type": "text", "text": prompt}]
+    for im in images:
+        content.append({"type": "image_url",
+                        "image_url": {"url": "data:image/jpeg;base64," + im}})
+    payload = {"messages": [{"role": "user", "content": content}],
+               "temperature": 0, "max_tokens": 1,
+               "grammar": "root ::= [%s]" % letters_ok,
+               "logprobs": True, "top_logprobs": 20,
+               "chat_template_kwargs": {"enable_thinking": False}}
+    req = urllib.request.Request(LLAMA_SERVER, data=json.dumps(payload).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        d = json.loads(r.read())
+    ch = d["choices"][0]
+    lp = (ch.get("logprobs") or {}).get("content") or []
+    if not lp:
+        return ch["message"]["content"].strip()[:1] or None, {}
+    best = {}
+    for t in (lp[0].get("top_logprobs") or []):
+        tk = (t.get("token") or "").strip()
+        if tk in letters_ok and tk not in best:
+            best[tk] = t.get("logprob", -99)
+    if not best:
+        return ch["message"]["content"].strip()[:1] or None, {}
+    return max(best, key=best.get), best
+
+
 def ask_server(prompt, images, timeout=900, grammar=None, max_tokens=400):
     """llama.cpp 서버(OpenAI 호환) — 이미지는 data URL 로 넣는다."""
     content = [{"type": "text", "text": prompt}]
@@ -167,20 +205,34 @@ def main():
                     help="선택지를 검색 질의에 결합(answer-aware retrieval). 실측: 물체위치"
                          " hit@5 0.55→0.70. **개방형에서는 선택지가 없으므로, 그 자리를"
                          " 씬그래프의 후보 위치가 맡는다** — v2 설계의 근거가 되는 실측이다")
+    ap.add_argument("--skills", default=None,
+                    help="채점할 스킬을 콤마로 지정. 기본 전체. **표적은"
+                         " object_location_memory,timeline_reconstruction 이다** —"
+                         " conversational_memory·intent_recall 은 정답이 발화 내용이라"
+                         " 오디오를 안 쓰는 우리 시스템이 원리적으로 답할 수 없고,"
+                         " 총합에 섞으면 무작위 잡음으로 표적 신호를 덮는다(실측: 전체는"
+                         " 텍스트-only 와 동률인데 물체·위치만 0.19→0.62 였다)")
+    ap.add_argument("--logprob", action="store_true",
+                    help="선택지 문자별 로그확률을 직접 비교해 고른다(호출 1회)."
+                         " 문법으로 한 글자를 강제하면 첫 토큰 분포의 위치·문자 편향이"
+                         " 그대로 답이 되는데, 확률을 직접 읽으면 그 비교가 명시적이 된다")
     ap.add_argument("--rotate", action="store_true",
                     help="선택지 순환 평균 — 같은 문항을 정답 위치가 A/B/C 가 되도록 돌려"
                          " 물어 다수결한다. **위치 편향 실측 때문에 필요하다**: 정답이 C 인"
                          " 문항을 4B 는 0/19, 9B 는 1/19 로 거의 못 골랐다(데이터의 정답"
                          " 위치는 균형 A262·B268·C265 이므로 모델 편향이다). 호출 3배")
-    ap.add_argument("--recency-tau", type=float, default=24.0,
+    ap.add_argument("--recency-tau", type=float, default=12.0,
                     help="최근성 가중 τ(시간). 검색 점수에 exp(-Δt/τ) 를 곱한다."
                          " ⚠️ **프레임 풀이 커지면 필수다** — 5세션(10,891프레임)에서"
                          " 물체·위치 hit@5 가 0.75→0.30 으로 붕괴하는데(상위5의 44%가"
                          " 타세션) τ=24 로 0.75 복구, GT 를 쓰는 오라클과 동률."
                          " 하드컷(최근 N시간·직전 세션)과 같은 성능이면서 먼 과거 근거를"
                          " 버리지 않는다 — 정답 근거의 시간격차가 90퍼센타일 288시간이다."
-                         " **기본 24시간으로 켜 둔다**(0 이면 끔) — 풀이 커질수록 필수이고"
-                         " 2세션 풀에서는 무해했다")
+                         " **기본 12시간**(0 이면 끔). 136문항 스윕 실측: 가중 없음 0.262 →"
+                         " τ=6h 0.456 · 12h 0.456 · 24h 0.417 · 48h+ 0.398(가중 없음에 수렴)."
+                         " 6~12h 가 고원이고 12h 가 전체 hit@5 최고(0.485)다."
+                         " ⚠️ τ 를 문항마다 고르면 오히려 나빠진다(LOO 0.449 < 고정 12h 0.485)"
+                         " — 고정값이 맞다")
     ap.add_argument("--temporal", action="store_true",
                     help="시간 논리 — 근거는 항상 질의보다 앞선다(실측 98/98). 인과"
                          " 마스크로 미래 프레임 제거: 전체 hit@5 0.34→0.47")
@@ -204,7 +256,8 @@ def main():
                                         # 설정이 같은 캐시를 읽는다(전에 topk 로 겪음)
                                         + ("_owl%g" % args.owl_rerank if args.owl_rerank else "")
                                         + ("_tau%g" % args.recency_tau if args.recency_tau else "")
-                                        + ("_rot" if args.rotate else "")))
+                                        + ("_rot" if args.rotate else "")
+                                        + ("_lp" if args.logprob else "")))
     done = {}
     if os.path.exists(out_p):
         for ln in open(out_p):
@@ -212,6 +265,11 @@ def main():
             done[r["question_id"]] = r
 
     Q = questions()
+    if args.skills:
+        want = {t.strip() for t in args.skills.split(",") if t.strip()}
+        before = len(Q)
+        Q = [(x, ev) for x, ev in Q if x["metadata"]["skill"] in want]
+        print("스킬 필터 %s · 문항 %d → %d" % (sorted(want), before, len(Q)))
     # strict: 기권 선택지를 제거하고 인덱스를 다시 매긴다. 기권이 정답인 문항은 제외
     # (그 문항은 '못 맞히는 게 정답' 이라 강제추측과 양립하지 않는다 — 73→66).
     if args.strict:
@@ -415,7 +473,11 @@ def main():
             gram = 'root ::= [%s]' % letters_ok
         nc = len(x["choices"])
         try:
-            if args.rotate:
+            if args.logprob:
+                lo = "".join(letters[:nc])
+                ch, lps = score_choices(prompt, images, lo)
+                resp = "lp:%s" % {k: round(v, 2) for k, v in sorted(lps.items())}
+            elif args.rotate:
                 # 선택지를 k 칸 회전시켜 nc 번 묻고, 원래 인덱스로 되돌려 다수결
                 from collections import Counter as _C
                 votes = _C()
