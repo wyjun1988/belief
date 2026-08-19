@@ -98,6 +98,12 @@ def main():
     ap.add_argument("--rooms3d", action="store_true",
                     help="프레임 방을 CLIP 한장분류 대신 **MPS 3D 군집**으로 결정."
                          " 실측: 방 분류 0.49 → 0.93(1.9배). belief 의 선결조건")
+    ap.add_argument("--sess", nargs="+", default=None,
+                    help="세션 제한(예: --sess s8). 분할기 효과를 세션별로 보려면 필요 —"
+                         " 기본 5세션 통합 채점은 세션을 떼어낼 수 없다")
+    ap.add_argument("--rooms-file", default="rooms3d.json",
+                    help="--rooms3d 가 읽을 방 파일. 체류 분할판과 k-means 판을"
+                         " 바꿔 끼워 **분할기만** 다르게 하고 비교한다")
     ap.add_argument("--owl-thr", type=float, default=0.0,
                     help="OWLv2 근접 게이트 — 이 점수 미만 검출은 버린다."
                          " Nymeria 실측으로 약한 검출이 위치를 오염시킨다")
@@ -117,6 +123,9 @@ def main():
         "Person_1_session_19_03292026_glasses_1266sm": "s19",
         "Person_1_session_20_03292026_glasses_1284": "s20",
     }
+    if args.sess:
+        SESS5 = {v: sd for v, sd in SESS5.items() if sd in args.sess}
+        print("세션 제한: %s" % sorted(SESS5.values()))
     Es, tss, sids, order = [], [], [], []
     for vid, sd in SESS5.items():
         f = os.path.join(D, sd, "index.npz")
@@ -148,7 +157,7 @@ def main():
     if args.rooms3d:
         # 3D 군집 → 방 이름: 군집 안 프레임들의 CLIP 방 점수 합으로 명명한다
         # (GT 를 쓰지 않는다 — 군집이 공간을 가르고, CLIP 은 이름만 붙인다)
-        r3 = json.load(open(os.path.join(D, "rooms3d.json")))
+        r3 = json.load(open(os.path.join(D, args.rooms_file)))
         fr3 = np.full(len(E), -1)
         keep = np.zeros(len(E), bool)
         for vid, sd in SESS5.items():

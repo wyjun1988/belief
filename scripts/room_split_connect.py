@@ -120,6 +120,8 @@ def main():
     ap.add_argument("--pct", type=float, default=60.0, help="체류 분위 문턱(%)")
     ap.add_argument("--sigma", type=float, default=1.0, help="체류격자 평활")
     ap.add_argument("--modality", default="Video")
+    ap.add_argument("--out", default=None,
+                    help="방 배정을 rooms3d 형식으로 저장 — belief 가 그대로 읽는다")
     ap.add_argument("--sweep", action="store_true",
                     help="한 프로세스 안에서 문턱을 쓴다 — 궤적 CSV 재적재를 피한다"
                          "(설정마다 재실행하면 설정당 4분, 스윕 12개면 48분)")
@@ -178,6 +180,30 @@ def main():
                          "**%.3f**" % (th / tn) if tn else "-"))
         print("\n(대조: k-means 방수준 k=3 상한 0.664 · 세밀 k=12(26군집) 0.745")
         print(" · 위치 1-NN s1 0.784 / s8 0.862 = 정보 상한)")
+        return
+
+    if args.out:
+        # belief 가 읽는 형식(rooms3d.json)으로 초 단위 방 배정을 쓴다
+        out = {}
+        for sd, (sec, uv) in traj.items():
+            lf, nr = (segment_dwell(uv, args.cell, args.pct, args.sigma, args.min_cells)
+                      if args.mode == "dwell"
+                      else segment(uv, args.cell, args.erode, args.min_cells, args.dilate))
+            if lf is None:
+                print("  %s 방 없음 — 건너뜀" % sd)
+                continue
+            fr = np.arange(0, int(sec.max()) + 1)
+            fu = np.stack([np.interp(fr, sec, uv[:, 0]),
+                           np.interp(fr, sec, uv[:, 1])], 1)
+            lab = lf(fu)
+            lab[lab < 0] = 0
+            out[sd] = dict(centers=[[0.0, 0.0]] * nr, frame_room=lab.tolist(),
+                           spread_m=float(np.linalg.norm(uv.max(0) - uv.min(0))),
+                           dwell=dict(Counter(int(x) for x in lab)))
+            print("  %-4s 방 %d개 · 프레임 %d · 체류 %s"
+                  % (sd, nr, len(lab), dict(Counter(int(x) for x in lab))))
+        json.dump(out, open(os.path.join(D, args.out), "w"))
+        print("→ %s" % os.path.join(D, args.out))
         return
 
     tot_n = tot_hit = 0
