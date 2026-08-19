@@ -58,6 +58,9 @@ def main():
     ap.add_argument("--gate", type=float, default=1.0)
     ap.add_argument("--gamma", type=float, default=0.3)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--dump", default=None,
+                    help="문항별 판정을 JSON 으로 남긴다 — 지각층마다 판정 가능 문항이"
+                         " 달라(CLIP 137 vs OWLv2 55) 교집합 비교가 필요하다")
     ap.add_argument("--owl", action="store_true",
                     help="지각층을 CLIP → OWLv2 로 교체 (data/supermem/owl_sm_*.json)."
                          " 어휘 밖 단어는 CLIP 폴백하고 비율을 보고한다")
@@ -141,6 +144,7 @@ def main():
 
     r_lk = r_ab = r_pop = 0
     n = 0
+    dump = []
     top3_lk = top3_ab = 0
     pop = Counter(g for _, g in Q)
     for i, (x, gtf) in enumerate(Q):
@@ -175,6 +179,9 @@ def main():
         top3_lk += int(gi in order_lk[:3])
         top3_ab += int(gi in order_ab[:3])
         r_pop += int(pop.most_common(1)[0][0] == gtf)
+        dump.append(dict(q=x["question_id"], gt=gtf,
+                         lk1=int(order_lk[0] == gi), lk3=int(gi in order_lk[:3]),
+                         ab1=int(order_ab[0] == gi), ab3=int(gi in order_ab[:3])))
     if not n:
         print("판정 가능 문항 없음")
         return
@@ -184,6 +191,9 @@ def main():
     print("  최빈 가구(%s)          %.2f     —" % (pop.most_common(1)[0][0], r_pop / n))
     print("  **last-known**             %.2f     %.2f" % (r_lk / n, top3_lk / n))
     print("  **+ 부재 게이트**           %.2f     %.2f" % (r_ab / n, top3_ab / n))
+    if args.dump:
+        json.dump(dump, open(args.dump, "w"), ensure_ascii=False)
+        print("→ %s (문항별 판정)" % args.dump)
 
 
 if __name__ == "__main__":

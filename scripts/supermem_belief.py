@@ -88,6 +88,9 @@ def main():
     ap.add_argument("--model", default="supervised_two_head_v5")
     ap.add_argument("--z-obj", type=float, default=1.5, help="물체 검출 z 문턱")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--dump", default=None,
+                    help="문항별 판정을 JSON 으로 남긴다. 지각층마다 **판정 가능 문항이"
+                         " 다르므로**(CLIP 181 vs OWLv2 95) 교집합에서만 비교해야 한다")
     ap.add_argument("--owl", action="store_true",
                     help="수용체·키워드 지각층을 CLIP → OWLv2 로 교체. **방 이름은 CLIP**"
                          " 그대로 둔다 — OWLv2 는 물체 검출기라 'a photo of a kitchen'"
@@ -298,6 +301,9 @@ def main():
     print("  무작위(4방)       %.2f" % (1 / len(ROOMS)))
     print("  **last-known**    %.2f" % acc_lk)
     print("  **home-jepa**     %.2f" % acc_md)
+    if args.dump:
+        json.dump(rows, open(args.dump, "w"), ensure_ascii=False)
+        print("→ %s (문항별 판정)" % args.dump)
 
 
 if __name__ == "__main__":
