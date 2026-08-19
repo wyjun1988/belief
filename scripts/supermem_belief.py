@@ -283,7 +283,8 @@ def main():
             if qi < 2:
                 import traceback; traceback.print_exc()
             pred = None
-        rows.append(dict(q=x["question_id"], gt=gtr, lastknown=lastk, model=pred))
+        rows.append(dict(q=x["question_id"], gt=gtr, lastknown=lastk, model=pred,
+                         probs={k: float(v) for k, v in pr.items()} if pred else None))
         if qi % 20 == 0:
             print("   %d/%d" % (qi, len(Q)))
 
