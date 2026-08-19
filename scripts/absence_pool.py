@@ -49,21 +49,35 @@ def one(seq, root, owl_dir, gate, thr, device="mps"):
         src = None
     G = pmi_graph(P, vocab)
     vi = {w: i for i, w in enumerate(vocab)}
-    movers, statics = {}, []
+    # ⚠️ 두 가지를 고쳤다 (2026-08-20):
+    # ① 물체를 **카테고리로 뭉개면** 같은 카테고리 인스턴스가 서로 덮어쓴다.
+    #    ADT 에는 dining chair 가 여러 개다 — 하나가 움직여도 나머지는 그대로다.
+    # ② 이동 구간을 min~max 로 합치면 **중간 정지 구간이 사라진다.** 치우는
+    #    활동에서는 물건이 여러 번 옮겨지므로(구간 중앙 60프레임, 물체당 여러 회)
+    #    합친 구간의 "이동 후" 에 다음 이동이 섞여 전제가 깨진다.
+    #    → **이동 구간마다 따로 채점한다**: 그 이동 직전 vs 직후(다음 이동 전까지).
+    per_move, statics = [], []
     for k, r in gt.items():
         c = (r.get("category") or "").strip()
         if c not in vi:
             continue
-        if r.get("moves"):
-            movers[c] = (min(m["start_idx"] for m in r["moves"]),
-                         max(m["end_idx"] for m in r["moves"]))
+        ms = r.get("moves") or []
+        if ms:
+            ms = sorted(ms, key=lambda m: m["start_idx"])
+            for i, m in enumerate(ms):
+                prev_end = ms[i - 1]["end_idx"] if i else -1      # 직전 이동의 끝
+                next_start = ms[i + 1]["start_idx"] if i + 1 < len(ms) else 10 ** 9
+                per_move.append((c, prev_end, m["start_idx"], m["end_idx"], next_start))
         elif r.get("motion_type") == "static":
             statics.append(c)
-    statics = [c for c in set(statics) if c not in movers]
+    moved_cats = {c for c, *_ in per_move}
+    statics = [c for c in set(statics) if c not in moved_cats]
     mv, st = [], []
-    for c, (s, e) in movers.items():
-        fa = [i for i, f in enumerate(fidx) if f < s]
-        fb = [i for i, f in enumerate(fidx) if f > e]
+    for c, prev_end, s, e, next_start in per_move:
+        # 이 이동 **직전** 구간: 직전 이동이 끝난 뒤 ~ 이 이동 시작 전
+        fa = [i for i, f in enumerate(fidx) if prev_end < f < s]
+        # 이 이동 **직후** 구간: 이 이동이 끝난 뒤 ~ 다음 이동 시작 전
+        fb = [i for i, f in enumerate(fidx) if e < f < next_start]
         r = absence_score(Z, P, G, vocab, vi[c], fa, fb, 4, 12, gate)
         if r:
             mv.append(r["drop"] if RAW[0] else r["ndrop"])
