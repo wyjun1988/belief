@@ -27,6 +27,10 @@ def main():
     ap.add_argument("--owl", required=True)
     ap.add_argument("--min-px", type=int, default=600)
     ap.add_argument("--device", default="mps")
+    ap.add_argument("--synonyms", default=None,
+                    help="개념→표면형 메타데이터(make_synonyms.py 산출). 주면 개념 점수를"
+                         " **표면형 최댓값**으로 집계한다. 검출을 재라벨링하는 것이 아니라"
+                         " 같은 개념을 여러 말로 물어본 결과를 합치는 것이므로 중복 계상이 없다")
     args = ap.parse_args()
 
     sd = os.path.join(args.root, args.seq)
@@ -51,8 +55,15 @@ def main():
         truth.append({cat_of[int(a)] for a, n in zip(u, c)
                       if int(a) in cat_of and n >= args.min_px})
         keys.append(k)
-    vocab = sorted({w for d in det.values() for w in d} |
-                   {c for t in truth for c in t})
+    syn_pre = json.load(open(args.synonyms)) if args.synonyms else None
+    if syn_pre:
+        # ⚠️ 표면형을 vocab 에 넣으면 안 된다. GT 가 없는 585개 행이 생겨 **CLIP
+        # 기준선만 그만큼 오탐을 뒤집어쓴다**(OWLv2 쪽은 개념으로 합쳐지므로 무사).
+        # 동의어 모드에서는 채점 어휘를 개념으로 고정한다.
+        vocab = sorted(set(syn_pre) | {c for t in truth for c in t})
+    else:
+        vocab = sorted({w for d in det.values() for w in d} |
+                       {c for t in truth for c in t})
     print("프레임 %d · 어휘 %d · 프레임당 정답 물체 중앙 %.1f개"
           % (len(keys), len(vocab), np.median([len(t) for t in truth])))
 
@@ -72,9 +83,33 @@ def main():
         for w in t:
             G[vi[w], j] = True
     O = np.zeros((len(vocab), len(keys)), np.float32)
-    for j, k in enumerate(keys):
-        for w, s in det[k].items():
-            O[vi[w], j] = s
+    syn = syn_pre
+    if syn:
+        # 표면형 → 개념 (여러 개념이 같은 표면형을 주장하면 make_synonyms 에서
+        # 이미 버렸으므로 여기 도달하지 않는다)
+        s2c = {}
+        for c, d in syn.items():
+            for w in d["surface"]:
+                s2c.setdefault(w, c)
+        n_hit = 0
+        for j, k in enumerate(keys):
+            for w, sc in det[k].items():
+                c = s2c.get(w, w)
+                i = vi.get(c)
+                if i is not None and sc > O[i, j]:
+                    O[i, j] = sc
+                    n_hit += 1
+        used = {w for d in det.values() for w in d}
+        extra = sorted(w for w in used if w in s2c and s2c[w] != w)
+        print("표면형 집계: 검출 어휘 %d개 중 %d개가 표면형 → 개념으로 합쳐짐"
+              % (len(used), len(extra)))
+        print("   예: %s" % ", ".join("%s→%s" % (w, s2c[w]) for w in extra[:6]))
+    else:
+        for j, k in enumerate(keys):
+            for w, s in det[k].items():
+                i = vi.get(w)
+                if i is not None:
+                    O[i, j] = s
 
     def score(P):
         tp = int((P & G).sum()); fp = int((P & ~G).sum()); fn = int((~P & G).sum())
