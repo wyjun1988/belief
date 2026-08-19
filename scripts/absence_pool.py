@@ -19,6 +19,12 @@ from scripts.owl_presence import owl_z, report_src                       # noqa:
 
 SEQS = ["Apartment_release_decoration_seq137_M1292",
         "Apartment_release_multiskeleton_party_seq102_M1292"]
+# 신규 4시퀀스(multiuser_clean) — 이동 물체 75개. 기존 2시퀀스가 11개뿐이라
+# AUC 0.761 의 신뢰구간이 넓었다. --root 를 data/seq_new 로 주면 이쪽을 쓴다.
+SEQS_NEW = ["Apartment_release_multiuser_clean_seq114_M1292",
+            "Apartment_release_multiuser_clean_seq117_M1292",
+            "Apartment_release_multiuser_clean_seq118_M1292",
+            "Apartment_release_multiuser_clean_seq119_M1292"]
 OWLF = {"Apartment_release_decoration_seq137_M1292": "owl_adt_decoration.json",
         "Apartment_release_multiskeleton_party_seq102_M1292": "owl_adt_party.json"}
 
@@ -74,6 +80,8 @@ def one(seq, root, owl_dir, gate, thr, device="mps"):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=os.path.join(ROOT, "data", "seq"))
+    ap.add_argument("--seqs", default=None,
+                    help="쉼표 구분 시퀀스명. 'new' 면 신규 4시퀀스(이동 75개)")
     ap.add_argument("--owl-dir", default=None)
     ap.add_argument("--owl-thr", type=float, default=0.0)
     ap.add_argument("--gates", default="0.5,0.7,1.0")
@@ -86,10 +94,16 @@ def main():
     args = ap.parse_args()
     RAW[0] = not args.norm
 
+    seqs = SEQS
+    if args.seqs == "new":
+        seqs = SEQS_NEW
+    elif args.seqs:
+        seqs = [x.strip() for x in args.seqs.split(",") if x.strip()]
+    print("시퀀스 %d개: %s" % (len(seqs), ", ".join(s[-12:] for s in seqs)))
     print("%-8s %-6s %-6s %-8s %s" % ("게이트", "이동", "정적", "AUC", "정적오탐10% 검출률"))
     for g in [float(x) for x in args.gates.split(",")]:
         MV, ST = [], []
-        for seq in SEQS:
+        for seq in seqs:
             mv, st, _ = one(seq, args.root, args.owl_dir, g, args.owl_thr, args.device)
             MV += mv
             ST += st
