@@ -61,6 +61,9 @@ def main():
     ap.add_argument("--owl", action="store_true",
                     help="지각층을 CLIP → OWLv2 로 교체 (data/supermem/owl_sm_*.json)."
                          " 어휘 밖 단어는 CLIP 폴백하고 비율을 보고한다")
+    ap.add_argument("--furn-synonyms", default=None,
+                    help="가구 개념의 표면형 메타데이터. 개념 점수를 표면형 최댓값으로"
+                         " 합친다 — 검출을 옮기는 게 아니라 여러 말로 물어본 결과를 합친다")
     ap.add_argument("--owl-thr", type=float, default=0.0,
                     help="OWLv2 근접 게이트 — 이 점수 미만 검출은 버린다."
                          " Nymeria 실측으로 약한 검출이 위치를 오염시킨다")
@@ -92,7 +95,17 @@ def main():
               % (len(owl), sum(len(v) for v in owl.values())))
 
     # 가구 후보 검출
-    if owl:
+    if owl and args.furn_synonyms:
+        syn = json.load(open(args.furn_synonyms))
+        from scripts.owl_presence import owl_matrix, zscore
+        rows = []
+        for f in FURN:
+            M = owl_matrix(owl, order, syn[f]["surface"], args.owl_thr)
+            rows.append(M.max(0))                      # 개념 = 표면형 최댓값
+        FZ = zscore(np.stack(rows))
+        ns = sum(len(syn[f]["surface"]) for f in FURN)
+        print("   가구 표면형 집계: 개념 %d ← 표면형 %d" % (len(FURN), ns))
+    elif owl:
         FZ, fsrc = owl_z(owl, order, FURN, E=E, device=args.device, thr=args.owl_thr)
         report_src(fsrc, "가구")
     else:
