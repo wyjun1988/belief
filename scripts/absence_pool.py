@@ -23,6 +23,9 @@ OWLF = {"Apartment_release_decoration_seq137_M1292": "owl_adt_decoration.json",
         "Apartment_release_multiskeleton_party_seq102_M1292": "owl_adt_party.json"}
 
 
+RAW = [False]
+
+
 def one(seq, root, owl_dir, gate, thr, device="mps"):
     sd = os.path.join(root, seq)
     z = np.load(os.path.join(sd, "clip_frames.npz"))
@@ -57,14 +60,14 @@ def one(seq, root, owl_dir, gate, thr, device="mps"):
         fb = [i for i, f in enumerate(fidx) if f > e]
         r = absence_score(Z, P, G, vocab, vi[c], fa, fb, 4, 12, gate)
         if r:
-            mv.append(r["ndrop"])
+            mv.append(r["drop"] if RAW[0] else r["ndrop"])
     mid = int(np.median(fidx))
     for c in statics:
         fa = [i for i, f in enumerate(fidx) if f < mid]
         fb = [i for i, f in enumerate(fidx) if f >= mid]
         r = absence_score(Z, P, G, vocab, vi[c], fa, fb, 4, 12, gate)
         if r:
-            st.append(r["ndrop"])
+            st.append(r["drop"] if RAW[0] else r["ndrop"])
     return mv, st, src
 
 
@@ -74,8 +77,14 @@ def main():
     ap.add_argument("--owl-dir", default=None)
     ap.add_argument("--owl-thr", type=float, default=0.0)
     ap.add_argument("--gates", default="0.5,0.7,1.0")
+    ap.add_argument("--norm", action="store_true",
+                    help="문맥 하락으로 정규화한 ndrop 으로 채점. **기본은 원 drop 이다** —"
+                         " 정규화 변형은 2026-08-17 에 이미 기각됐다(시퀀스 간 일관성 없음)."
+                         " 실측: 풀링 AUC 가 원 drop 0.761 vs 정규화 0.543 으로 정규화가"
+                         " 이 지표를 깎는다")
     ap.add_argument("--device", default="mps")
     args = ap.parse_args()
+    RAW[0] = not args.norm
 
     print("%-8s %-6s %-6s %-8s %s" % ("게이트", "이동", "정적", "AUC", "정적오탐10% 검출률"))
     for g in [float(x) for x in args.gates.split(",")]:
