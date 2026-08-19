@@ -108,6 +108,9 @@ def stage_eval(args):
         S = emb(texts) @ E.T
         S = S - S.mean(0, keepdims=True)
         S = np.apply_along_axis(lambda r: np.convolve(r, k15, mode="same"), 1, S)
+        if getattr(args, "recency_tau", 0) > 0:
+            dt = np.clip(qabs[:, None] - abst[None, :], 0, None)
+            S = S * np.exp(-dt / (args.recency_tau * 3600.0))
         return np.where(M, S, -np.inf)
 
     def hits(SS, k=5, tol=30):
@@ -212,6 +215,8 @@ def stage_eval(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True, choices=["extract", "eval"])
+    ap.add_argument("--recency-tau", type=float, default=0.0,
+                    help="최근성 가중 τ(시간) — 점수에 exp(-Δt/τ). 프레임 풀이 커질 때 필수")
     ap.add_argument("--owl", action="store_true",
                     help="검색에 OWLv2 재순위를 얹는다 (data/supermem/owl_sm_*.json)")
     ap.add_argument("--owl-thr", type=float, default=0.0,

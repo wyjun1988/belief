@@ -167,6 +167,13 @@ def main():
                     help="선택지를 검색 질의에 결합(answer-aware retrieval). 실측: 물체위치"
                          " hit@5 0.55→0.70. **개방형에서는 선택지가 없으므로, 그 자리를"
                          " 씬그래프의 후보 위치가 맡는다** — v2 설계의 근거가 되는 실측이다")
+    ap.add_argument("--recency-tau", type=float, default=0.0,
+                    help="최근성 가중 τ(시간). 검색 점수에 exp(-Δt/τ) 를 곱한다."
+                         " ⚠️ **프레임 풀이 커지면 필수다** — 5세션(10,891프레임)에서"
+                         " 물체·위치 hit@5 가 0.75→0.30 으로 붕괴하는데(상위5의 44%가"
+                         " 타세션) τ=24 로 0.75 복구, GT 를 쓰는 오라클과 동률."
+                         " 하드컷(최근 N시간·직전 세션)과 같은 성능이면서 먼 과거 근거를"
+                         " 버리지 않는다 — 정답 근거의 시간격차가 90퍼센타일 288시간이다")
     ap.add_argument("--temporal", action="store_true",
                     help="시간 논리 — 근거는 항상 질의보다 앞선다(실측 98/98). 인과"
                          " 마스크로 미래 프레임 제거: 전체 hit@5 0.34→0.47")
@@ -188,7 +195,8 @@ def main():
                                         + ("_abs" if args.absence else "")
                                         # ⚠️ 재순위 가중치가 파일명에 없으면 서로 다른
                                         # 설정이 같은 캐시를 읽는다(전에 topk 로 겪음)
-                                        + ("_owl%g" % args.owl_rerank if args.owl_rerank else "")))
+                                        + ("_owl%g" % args.owl_rerank if args.owl_rerank else "")
+                                        + ("_tau%g" % args.recency_tau if args.recency_tau else "")))
     done = {}
     if os.path.exists(out_p):
         for ln in open(out_p):
@@ -262,6 +270,16 @@ def main():
         S = S - S.mean(0, keepdims=True)
         k15 = np.ones(15) / 15
         S = np.apply_along_axis(lambda r: np.convolve(r, k15, mode="same"), 1, S)
+        if args.recency_tau > 0:
+            starts_r = json.load(open(os.path.join(D, "session_starts.json")))
+            abst_r = np.array([starts_r[v] + t for v, t in zip(sid, ts)], float)
+            qabs_r = []
+            for x, _ in Q:
+                qe = (x.get("question_evidence") or {}).get("time_spans") or []
+                qabs_r.append(x["metadata"]["primary_video_start_time"]
+                              + (qe[0]["start_time"] if qe else 0))
+            dt = np.clip(np.array(qabs_r)[:, None] - abst_r[None, :], 0, None)
+            S = S * np.exp(-dt / (args.recency_tau * 3600.0))
         if args.owl_rerank:
             import re as _reo
             from scripts.owl_presence import load_owl, owl_z, report_src
