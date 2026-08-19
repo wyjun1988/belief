@@ -31,8 +31,47 @@ from scripts.supermem_rooms3d import load_traj, gravity, floor_basis   # noqa: E
 from scripts.room_naming_probe import norm_room, SESS5                 # noqa: E402
 
 
+def segment_dwell(uv, cell, pct, sigma, min_cells):
+    """**체류 시간**으로 방을 정의한다 — 방은 머무는 곳, 문간은 지나가는 곳.
+
+    순수 형태학(팽창→침식)은 실패했다: 궤적 점유는 얇은 리본이라 침식하면 방이
+    아니라 전부 끊긴다(실측: s8 이 통째로 지워지고 s1 은 1개 방으로 뭉갬).
+    대신 셀별 **체류 프레임 수**를 세고 상위 분위만 남긴다. 문간은 빠르게 지나가
+    체류가 낮으므로 자연히 끊긴다.
+    """
+    from scipy import ndimage
+    lo = uv.min(0) - cell
+    g = np.floor((uv - lo) / cell).astype(int)
+    H, W = g[:, 1].max() + 2, g[:, 0].max() + 2
+    dw = np.zeros((H, W), float)
+    np.add.at(dw, (g[:, 1], g[:, 0]), 1.0)
+    if sigma > 0:
+        dw = ndimage.gaussian_filter(dw, sigma)
+    occ = dw > 0
+    thr = np.percentile(dw[occ], pct) if occ.any() else 0
+    core = dw >= thr
+    lab, n = ndimage.label(core)
+    for i in range(1, n + 1):
+        if (lab == i).sum() < min_cells:
+            lab[lab == i] = 0
+    ids = [i for i in np.unique(lab) if i]
+    if not ids:
+        return None, 0
+    remap = {v: i for i, v in enumerate(ids)}
+    _, (iy, ix) = ndimage.distance_transform_edt(lab == 0, return_indices=True)
+    full = np.where(lab > 0, lab, lab[iy, ix])
+
+    def label_of(pts):
+        q = np.floor((pts - lo) / cell).astype(int)
+        q[:, 0] = np.clip(q[:, 0], 0, W - 1)
+        q[:, 1] = np.clip(q[:, 1], 0, H - 1)
+        return np.array([remap.get(int(x), -1) for x in full[q[:, 1], q[:, 0]]])
+
+    return label_of, len(ids)
+
+
 def segment(uv, cell, erode, min_cells, dilate=3):
-    """점유격자 → 침식 → 연결성분 → 팽창 복원. 반환: (라벨함수, 방 개수)."""
+    """점유격자 → 팽창 → 침식 → 연결성분. (형태학판 — 실측 실패, 비교용으로 남김)"""
     from scipy import ndimage
     lo = uv.min(0) - cell
     g = np.floor((uv - lo) / cell).astype(int)
@@ -77,7 +116,13 @@ def main():
     ap.add_argument("--dilate", type=int, default=3, help="선팽창 — 궤적 리본을 방 덩어리로")
     ap.add_argument("--erode", type=int, default=2, help="추가 침식(문간 끊기)")
     ap.add_argument("--min-cells", type=int, default=8, help="방으로 칠 최소 셀 수")
+    ap.add_argument("--mode", default="dwell", choices=["dwell", "morph"])
+    ap.add_argument("--pct", type=float, default=60.0, help="체류 분위 문턱(%)")
+    ap.add_argument("--sigma", type=float, default=1.0, help="체류격자 평활")
     ap.add_argument("--modality", default="Video")
+    ap.add_argument("--sweep", action="store_true",
+                    help="한 프로세스 안에서 문턱을 쓴다 — 궤적 CSV 재적재를 피한다"
+                         "(설정마다 재실행하면 설정당 4분, 스윕 12개면 48분)")
     args = ap.parse_args()
 
     qs = json.load(open(os.path.join(D, "qa_person_1.json")))
@@ -92,21 +137,68 @@ def main():
                     continue
                 ev.append((sd, float(t), g))
 
+    # 궤적은 한 번만 읽는다
+    traj = {}
+    for sd in args.sess:
+        f = os.path.join(D, sd, "closed_loop_trajectory.csv")
+        if not os.path.exists(f):
+            continue
+        sec, P = load_traj(sd)
+        gv = gravity(P); e1, e2 = floor_basis(gv)
+        traj[sd] = (sec, np.stack([P @ e1, P @ e2], 1))
+
+    if args.sweep:
+        print("%-6s %-6s %-24s %-24s %s" % ("셀", "분위", "s1", "s8", "합계상한"))
+        for cell in (0.30, 0.50, 0.80):
+            for pct in (40, 55, 70, 80, 88, 94):
+                row, tn, th, ag = [], 0, 0, []
+                for sd in ("s1", "s8"):
+                    pts = [(t, g) for s_, t, g in ev if s_ == sd]
+                    if sd not in traj or len(pts) < 10:
+                        row.append("%-24s" % "-")
+                        continue
+                    sec, uv = traj[sd]
+                    lf, nr = segment_dwell(uv, cell, pct, args.sigma, args.min_cells)
+                    if lf is None:
+                        row.append("%-24s" % "방 없음")
+                        continue
+                    X = np.array([[np.interp(t, sec, uv[:, 0]),
+                                   np.interp(t, sec, uv[:, 1])] for t, _ in pts])
+                    y = [g for _, g in pts]
+                    cl = {}
+                    for l, g in zip(lf(X), y):
+                        cl.setdefault(int(l), Counter())[g] += 1
+                    h = sum(c.most_common(1)[0][1] for c in cl.values())
+                    tn += len(y); th += h; ag += y
+                    row.append("%-24s" % ("방%-2d 상한 %.3f (최빈 %.2f)"
+                               % (nr, h / len(y),
+                                  Counter(y).most_common(1)[0][1] / len(y))))
+                print("%-6.2f %-6d %s %s %s"
+                      % (cell, pct, row[0], row[1] if len(row) > 1 else "",
+                         "**%.3f**" % (th / tn) if tn else "-"))
+        print("\n(대조: k-means 방수준 k=3 상한 0.664 · 세밀 k=12(26군집) 0.745")
+        print(" · 위치 1-NN s1 0.784 / s8 0.862 = 정보 상한)")
+        return
+
     tot_n = tot_hit = 0
     allg = []
-    print("셀 %.2f m · 팽창 %d · 추가침식 %d · 최소 %d셀"
-          % (args.cell, args.dilate, args.erode, args.min_cells))
+    print("[%s] 셀 %.2f m · %s · 최소 %d셀"
+          % (args.mode, args.cell,
+             ("체류분위 %.0f%% · 평활 %.1f" % (args.pct, args.sigma))
+             if args.mode == "dwell" else
+             ("팽창 %d · 침식 %d" % (args.dilate, args.erode)), args.min_cells))
     for sd in args.sess:
         pts = [(t, g) for s_, t, g in ev if s_ == sd]
         if len(pts) < 10:
             print("  %-4s 근거 %d건 — 표본 부족" % (sd, len(pts)))
             continue
-        sec, P = load_traj(sd)
-        gv = gravity(P); e1, e2 = floor_basis(gv)
-        uv = np.stack([P @ e1, P @ e2], 1)
-        lf, nr = segment(uv, args.cell, args.erode, args.min_cells, args.dilate)
+        sec, uv = traj[sd]
+        if args.mode == "dwell":
+            lf, nr = segment_dwell(uv, args.cell, args.pct, args.sigma, args.min_cells)
+        else:
+            lf, nr = segment(uv, args.cell, args.erode, args.min_cells, args.dilate)
         if lf is None:
-            print("  %-4s 침식이 전부 지웠다 — 셀/침식 조정 필요" % sd)
+            print("  %-4s 방이 안 남았다 — 문턱 조정 필요" % sd)
             continue
         X = np.array([[np.interp(t, sec, uv[:, 0]), np.interp(t, sec, uv[:, 1])]
                       for t, _ in pts])
