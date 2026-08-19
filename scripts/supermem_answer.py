@@ -22,10 +22,19 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 D = os.path.join(ROOT, "data", "supermem")
+# ⚠️ 채점 문항 수가 여기서 결정된다. 2세션이면 물체·위치 31문항(strict 16),
+# 5세션이면 107문항 — 4B/9B 차이가 5문항 단위였던 것이 표본 문제였는지 가른다.
+# 세션 추가는 index.npz + video.mp4 가 있어야 한다.
 SESS = {
     "Person_1_session_8_03102026_glasses_1264": "s8",
     "Person_1_session_14_03152026_glasses_1266": "s14",
 }
+if os.environ.get("SESS5"):
+    SESS.update({
+        "Person_1_session_1_01312026_glasses_1266": "s1",
+        "Person_1_session_19_03292026_glasses_1266sm": "s19",
+        "Person_1_session_20_03292026_glasses_1284": "s20",
+    })
 # 기본은 ollama(CPU). --llama-server 로 llama.cpp Vulkan 서버(GPU, 4.6×)를 쓴다.
 OLLAMA = "http://localhost:11434/api/chat"
 LLAMA_SERVER = os.environ.get("LLAMA_SERVER",
