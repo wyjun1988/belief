@@ -165,6 +165,49 @@ def stage_eval(args):
             print("**확장+OWLv2 (a=%.1f)**: 전체 %.2f · 물체위치 %.2f"
                   % ((a,) + hits(np.where(M, ext + a * owlZ, -np.inf))))
 
+        # ── 선별(gate) — 점수로 섞지 말고 **후보를 좁히는 데** 쓴다 ────────────
+        # 검색이 찾는 것은 "물건이 보이는 프레임"이 아니라 "그 물건을 거기 둔 순간"
+        # 이다. OWLv2 는 재현율이 높아 보이는 프레임을 너무 많이 올린다(그래서
+        # 점수 가산은 오히려 나빠졌다). 대신 OWLv2 로 **후보를 거르고 순위는
+        # CLIP 에 맡기면**, 높은 재현율이 잡음이 아니라 필터로 쓰인다.
+        print("\n[선별] OWLv2 로 후보를 좁히고 순위는 CLIP 확장질의가 정한다")
+        for g in (0.5, 1.0, 1.5):
+            gated = np.where(owlZ >= g, ext, -np.inf)
+            keep = float(np.mean(np.isfinite(gated) & M))
+            print("  문턱 z≥%.1f (후보 %4.1f%%): 전체 %.2f · 물체위치 %.2f"
+                  % ((g, 100 * keep) + hits(np.where(M, gated, -np.inf))))
+        for frac in (0.05, 0.10, 0.25):
+            # 질문마다 상위 frac 프레임만 후보로 남긴다(질문별 분위수 — 물체마다
+            # 검출 빈도가 달라 절대 문턱은 공평하지 않다)
+            thr = np.quantile(owlZ, 1 - frac, axis=1, keepdims=True)
+            gated = np.where(owlZ >= thr, ext, -np.inf)
+            print("  상위 %4.0f%% 후보:        전체 %.2f · 물체위치 %.2f"
+                  % ((100 * frac,) + hits(np.where(M, gated, -np.inf))))
+        # 등장 순간 — 검출 점수가 **올라가는** 구간. 물건이 화면에 새로 들어온
+        # 시점이 '거기 둔 순간'에 더 가깝다는 가설.
+        onset = owlZ - np.roll(owlZ, 30, axis=1)
+        onset[:, :30] = 0
+        print("  등장 순간(상승 구간):    전체 %.2f · 물체위치 %.2f"
+              % hits(np.where(M, ext + 0.5 * onset, -np.inf)))
+        print("  등장 순간 단독:          전체 %.2f · 물체위치 %.2f"
+              % hits(np.where(M, onset, -np.inf)))
+
+        # ── 방향을 뒤집은 선별 — **CLIP 이 고른 후보 안에서만** OWLv2 로 고른다.
+        # 전역 필터가 실패한 이유는 명확하다: OWLv2 는 GT 근거 프레임을 약하게만
+        # 표시한다(근거구간 검출률 0.43 vs 전체 0.33). 전역으로 거르면 근거의
+        # 57% 를 통째로 버린다. CLIP 의 재현율을 살린 채 순위만 손보면 그 손실이 없다.
+        print("\n[역방향 선별] CLIP 상위 N개 후보 안에서 OWLv2 점수로 재정렬")
+        for N in (10, 20, 40):
+            SS = np.full_like(ext, -np.inf)
+            for i in range(ext.shape[0]):
+                valid = np.nonzero(np.isfinite(ext[i]) & M[i])[0]
+                if len(valid) == 0:
+                    continue
+                top = valid[np.argsort(-ext[i][valid])[:N]]
+                # 후보 안에서 OWLv2 순위로 재배열 (동점은 CLIP 순위 유지)
+                SS[i, top] = owlZ[i, top] + 1e-6 * ext[i, top]
+            print("  N=%-3d 후보 재정렬:      전체 %.2f · 물체위치 %.2f" % ((N,) + hits(SS)))
+
 
 def main():
     ap = argparse.ArgumentParser()
