@@ -167,13 +167,20 @@ def main():
                     help="선택지를 검색 질의에 결합(answer-aware retrieval). 실측: 물체위치"
                          " hit@5 0.55→0.70. **개방형에서는 선택지가 없으므로, 그 자리를"
                          " 씬그래프의 후보 위치가 맡는다** — v2 설계의 근거가 되는 실측이다")
-    ap.add_argument("--recency-tau", type=float, default=0.0,
+    ap.add_argument("--rotate", action="store_true",
+                    help="선택지 순환 평균 — 같은 문항을 정답 위치가 A/B/C 가 되도록 돌려"
+                         " 물어 다수결한다. **위치 편향 실측 때문에 필요하다**: 정답이 C 인"
+                         " 문항을 4B 는 0/19, 9B 는 1/19 로 거의 못 골랐다(데이터의 정답"
+                         " 위치는 균형 A262·B268·C265 이므로 모델 편향이다). 호출 3배")
+    ap.add_argument("--recency-tau", type=float, default=24.0,
                     help="최근성 가중 τ(시간). 검색 점수에 exp(-Δt/τ) 를 곱한다."
                          " ⚠️ **프레임 풀이 커지면 필수다** — 5세션(10,891프레임)에서"
                          " 물체·위치 hit@5 가 0.75→0.30 으로 붕괴하는데(상위5의 44%가"
                          " 타세션) τ=24 로 0.75 복구, GT 를 쓰는 오라클과 동률."
                          " 하드컷(최근 N시간·직전 세션)과 같은 성능이면서 먼 과거 근거를"
-                         " 버리지 않는다 — 정답 근거의 시간격차가 90퍼센타일 288시간이다")
+                         " 버리지 않는다 — 정답 근거의 시간격차가 90퍼센타일 288시간이다."
+                         " **기본 24시간으로 켜 둔다**(0 이면 끔) — 풀이 커질수록 필수이고"
+                         " 2세션 풀에서는 무해했다")
     ap.add_argument("--temporal", action="store_true",
                     help="시간 논리 — 근거는 항상 질의보다 앞선다(실측 98/98). 인과"
                          " 마스크로 미래 프레임 제거: 전체 hit@5 0.34→0.47")
@@ -196,7 +203,8 @@ def main():
                                         # ⚠️ 재순위 가중치가 파일명에 없으면 서로 다른
                                         # 설정이 같은 캐시를 읽는다(전에 topk 로 겪음)
                                         + ("_owl%g" % args.owl_rerank if args.owl_rerank else "")
-                                        + ("_tau%g" % args.recency_tau if args.recency_tau else "")))
+                                        + ("_tau%g" % args.recency_tau if args.recency_tau else "")
+                                        + ("_rot" if args.rotate else "")))
     done = {}
     if os.path.exists(out_p):
         for ln in open(out_p):
@@ -357,6 +365,10 @@ def main():
             absinfo[x["question_id"]] = marks
 
     letters = "ABCD"
+
+    def letters_of(x):
+        return list(letters[:len(x["choices"])])
+
     n_ok = n = 0
     fout = open(out_p, "a")
     for qi, (x, ev) in enumerate(Q):
@@ -376,32 +388,57 @@ def main():
             fg = ("You MUST choose the single most plausible option even if the "
                   "frames are inconclusive. Guessing is required; there is no "
                   "option to decline. " if (args.force_guess or args.strict) else "")
+            tail = (("Consider every option before deciding; any of them may be "
+                     "correct.\nReply with exactly one letter: %s." % "/".join(letters_of(x)))
+                    if args.strict else
+                    "Answer with the single letter of the best choice, and end your "
+                    "response with a final line: Answer: <letter>")
             prompt = ("These are frames retrieved from my past egocentric video "
                       "(my first-person view at home).\n"
-                      "Question: %s\n%s\n%s"
-                      "Answer with the single letter of the best choice, and end your "
-                      "response with a final line: Answer: <letter>"
-                      % (x["question"], choices, fg))
+                      "Question: %s\n%s\n%s%s"
+                      % (x["question"], choices, fg, tail))
         else:
             images = []
             fg = ("You MUST pick the single most plausible concrete option even "
                   "if unsure; do not pick 'can not be answered'. "
                   if args.force_guess else "")
-            prompt = ("Question about my past activities at home: %s\n%s\n%s"
-                      "Answer with the single letter of the best choice, and end your "
-                      "response with a final line: Answer: <letter>"
-                      % (x["question"], choices, fg))
+            tail = (("Consider every option before deciding; any of them may be "
+                     "correct.\nReply with exactly one letter: %s." % "/".join(letters_of(x)))
+                    if args.strict else
+                    "Answer with the single letter of the best choice, and end your "
+                    "response with a final line: Answer: <letter>")
+            prompt = ("Question about my past activities at home: %s\n%s\n%s%s"
+                      % (x["question"], choices, fg, tail))
         gram = None
         if args.strict:
             letters_ok = "".join(letters[:len(x["choices"])])
             gram = 'root ::= [%s]' % letters_ok
+        nc = len(x["choices"])
         try:
-            resp = ask(args.model, prompt, images, grammar=gram,
-                       max_tokens=4 if args.strict else 400)
+            if args.rotate:
+                # 선택지를 k 칸 회전시켜 nc 번 묻고, 원래 인덱스로 되돌려 다수결
+                from collections import Counter as _C
+                votes = _C()
+                for k in range(nc):
+                    perm = [(i + k) % nc for i in range(nc)]      # 표시위치 i ← 원래 perm[i]
+                    body = "\n".join("%s. %s%s" % (letters[i], x["choices"][perm[i]],
+                                                   mk[perm[i]] if perm[i] < len(mk) else "")
+                                     for i in range(nc))
+                    pr = prompt.replace(choices, body)
+                    rr = ask(args.model, pr, images, grammar=gram,
+                             max_tokens=4 if args.strict else 400)
+                    cc = parse_choice(rr)
+                    if cc and cc in letters[:nc]:
+                        votes[perm[letters.index(cc)]] += 1       # 원래 인덱스로 환산
+                resp = "rotate:%s" % dict(votes)
+                ch = letters[votes.most_common(1)[0][0]] if votes else None
+            else:
+                resp = ask(args.model, prompt, images, grammar=gram,
+                           max_tokens=4 if args.strict else 400)
+                ch = parse_choice(resp)
         except Exception as e:
             print("[%d] 오류: %s" % (qid, e))
             continue
-        ch = parse_choice(resp)
         correct = int(ch == letters[x["correct_option_index"]])
         n += 1
         n_ok += correct
