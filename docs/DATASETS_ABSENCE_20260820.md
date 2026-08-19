@@ -52,6 +52,41 @@ ID 로 명시된다. MIT 라이선스. ⚠️ 900GB 부분 다운로드 불가, 
 | AI2-THOR RoomR | 변경 유형에 **removal 이 없음** |
 | EgoLife | object GT 없음(자막·캡션만). 단 7일·단일 주택이라 **자체 주석 기판**으로는 가치 |
 
+## ⭐⭐ 2차 조사 — 더 나은 후보 발견 (2026-08-20)
+
+3D 스캔·변화 탐지 계열을 별도로 조사해 **egocentric + 객체별 removed 라벨**을
+모두 갖춘 데이터셋을 찾았다.
+
+| 순위 | 데이터셋 | 왜 | 라이선스 |
+|---|---|---|---|
+| **1** | **SceneDiff SD-K** | **HD-EPIC 유래 egocentric 150쌍**. 객체별 **`Added`/`Removed`/`Moved`** 명시 라벨 + 보이는 모든 프레임 인스턴스 마스크(RLE). 350쌍/50씬/1,009객체 | **MIT · 게이트 없음 · 11.9GB** |
+| **2** | **HD-EPIC** | Aria 착용 41h/4.4M 프레임, 19.9K 이동 트랙(from→to 시각·3D 위치) | CC BY-NC 4.0 |
+| **3** | **ChangeSim** | 프레임별 **`missing`** 독립 클래스, ~130k 프레임 | **MIT · 게이트 없음 · 156GB** |
+| **4** | RoomR + `DisableObject` 확장 | 유일하게 walkthrough/unshuffle **2-phase 프로토콜 내장** + 인덱스 정렬 GT. REMOVED 만 없는데 API 로 자작 가능 | **Apache-2.0 · 무제한 생성** |
+| **5** | 3RScan | 실사 재스캔의 유일한 큐레이션 `removed` GT — **단 542건뿐** | 커스텀 ToU |
+
+**SD-K 가 1순위인 이유**: 우리가 필요한 세 가지(에고센트릭 · 객체별 removed ·
+프레임 마스크)를 모두 갖춘 유일한 공개 데이터셋이고, **MIT 에 11.9GB 로 즉시
+받을 수 있다.** `wget https://huggingface.co/datasets/yuqun/SceneDiff/resolve/main/scenediff_bechmark.zip`
+
+### ⚠️ 3RScan 을 쓸 때의 함정 (조사에서 직접 집계로 확인)
+
+"instance ID 가 사라졌으면 제거"로 라벨을 만들면 **안 된다**:
+
+```
+reference 에 있고 rescan 에 없는 ID  = 6,515건
+공식 removed 리스트                =   542건
+두 집합이 정확히 일치하는 rescan   =  170/903 (18.8%)
+```
+
+파생-부재 상위가 `wall 592 · ceiling 199 · window 138` — 물리적 제거가 아니라
+**미관측**이다. rescan 이 reference 보다 평균 16% 작다.
+
+### 존재하지 않거나 접근 불가로 확인된 것
+
+"Changing Rooms"(부재) · TDW 공식 사이트(도메인 소멸) · Habitat 2023 rearrange
+챌린지(404) · ChangingGrounding 데이터(미공개) · StandardSim 프로젝트 페이지(404).
+
 ## ⭐ 재다운로드 없이 당장 가능한 개선
 
 **ADT 아파트 시퀀스들은 동일한 Scene frame `F_S` 를 공유한다**(ADT 논문 3.2절:
