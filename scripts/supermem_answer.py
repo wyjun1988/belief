@@ -221,6 +221,10 @@ def main():
                          " 물어 다수결한다. **위치 편향 실측 때문에 필요하다**: 정답이 C 인"
                          " 문항을 4B 는 0/19, 9B 는 1/19 로 거의 못 골랐다(데이터의 정답"
                          " 위치는 균형 A262·B268·C265 이므로 모델 편향이다). 호출 3배")
+    ap.add_argument("--recency-auto", action="store_true",
+                    help="τ 를 **기록 길이에 맞춰 자동**으로(창의 10배, 상한이 --recency-tau)."
+                         " 실측: SuperMemory(여러 날) 12h · EgoLife(2.8h) 12h ·"
+                         " S-EMBER(6분) **1h** — 고정 12h 는 짧은 기록에서 무력하다")
     ap.add_argument("--recency-tau", type=float, default=12.0,
                     help="최근성 가중 τ(시간). 검색 점수에 exp(-Δt/τ) 를 곱한다."
                          " ⚠️ **프레임 풀이 커지면 필수다** — 5세션(10,891프레임)에서"
@@ -345,7 +349,16 @@ def main():
                 qabs_r.append(x["metadata"]["primary_video_start_time"]
                               + (qe[0]["start_time"] if qe else 0))
             dt = np.clip(np.array(qabs_r)[:, None] - abst_r[None, :], 0, None)
-            S = S * np.exp(-dt / (args.recency_tau * 3600.0))
+            tau_h = args.recency_tau
+            if args.recency_auto:
+                # **τ 는 기록 길이에 비례해야 한다** — 세 데이터셋 실측(2026-08-21):
+                #   SuperMemory(여러 날) τ=12h · EgoLife(2.8h) τ=12h · S-EMBER(6분) τ=1h
+                # 고정 12h 를 짧은 기록에 쓰면 감쇠가 사실상 없다(exp(−0.1/12)≈0.99).
+                # 창의 약 10배를 쓰면 세 경우가 모두 설명된다.
+                span_h = float(abst_r.max() - abst_r.min()) / 3600.0
+                tau_h = max(0.25, min(args.recency_tau, span_h * 10.0))
+                print("   최근성 τ 자동: 기록 %.1fh → τ=%.2fh" % (span_h, tau_h))
+            S = S * np.exp(-dt / (tau_h * 3600.0))
         if args.owl_rerank:
             import re as _reo
             from scripts.owl_presence import load_owl, owl_z, report_src
