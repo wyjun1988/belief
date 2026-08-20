@@ -35,6 +35,8 @@ def main():
     ap.add_argument("--n-video", type=int, default=40, help="쓸 영상 수")
     ap.add_argument("--every", type=float, default=2.0, help="프레임 표집 간격(초)")
     ap.add_argument("--device", default="mps")
+    ap.add_argument("--local-only", action="store_true",
+                    help="이미 받아둔 영상만 쓴다 — 재다운로드 없이 빠르게 재측정")
     ap.add_argument("--object-loc", action="store_true",
                     help="**물건 위치 회상 질문만** — `where did I put ~`(189건) ·"
                          " `where is my ~`(9건) · `when I last saw`(16건). 우리 과제와"
@@ -102,12 +104,20 @@ def main():
     for vi_, vid in enumerate(vids):
         qs = by[vid]
         rel = qs[0]["video"]
-        try:
-            mp4 = hf_hub_download("facebook/S-EMBER", rel, repo_type="dataset",
-                                  local_dir=args.root)
-        except Exception as e:
-            print("  %s 내려받기 실패: %s" % (vid[:24], str(e)[:60]))
+        # 이미 받아둔 것이 있으면 **재다운로드하지 않는다** — 영상 하나가 100~200MB라
+        # 재다운로드가 평가 시간의 대부분을 차지한다
+        local = os.path.join(args.root, rel)
+        if os.path.exists(local) and os.path.getsize(local) > 1_000_000:
+            mp4 = local
+        elif args.local_only:
             continue
+        else:
+            try:
+                mp4 = hf_hub_download("facebook/S-EMBER", rel, repo_type="dataset",
+                                      local_dir=args.root)
+            except Exception as e:
+                print("  %s 내려받기 실패: %s" % (vid[:24], str(e)[:60]))
+                continue
         cap = cv2.VideoCapture(mp4)
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
