@@ -47,7 +47,7 @@
   **여백 ②−③ 이 커야** 장소를 찾을 수 있고, **시점여백 ①−③ 이 양수여야**
   각도 변화에 견딘다.
 """
-import argparse, glob, os, subprocess, sys, tempfile
+import argparse, glob, os, re, subprocess, sys, tempfile
 
 import numpy as np
 
@@ -69,6 +69,8 @@ def main():
     ap.add_argument("--device", default="mps")
     ap.add_argument("--reps", default="clip_cls,clip_patch,clip_g2,dino_cls,dino_patch,"
                                       "dino_g2,dino_vlad,ijepa,vjepa2,owlvec,owlvec_idf,tiny,colorlay")
+    ap.add_argument("--save", default=None,
+                    help="계산한 표현을 npz 로 저장 — 채점 단계에서 죽어도 재계산 불필요")
     ap.add_argument("--group", default="none", choices=["none", "home"],
                     help="③(남의 장소)를 **같은 집 안으로 제한**한다. 실사용은 GPS·"
                          "graph_uid 로 집을 먼저 고르므로(설계 2-1) 후보가 방 몇 개다. "
@@ -327,6 +329,15 @@ def main():
         df = (ALLV > args.owl_thr).mean(0) + 1e-6
         idf = np.log(1.0 / df)
         R["owlvec_idf"] = {k: nz(v * idf[None]) for k, v in R["owlvec_idf"].items()}
+
+    if args.save:
+        # ⚠️ 표현 계산이 전체 시간의 99% 다(OWLv2 5,680프레임 = 1.5시간).
+        # 뒤쪽 채점에서 사소한 오류로 죽으면 그게 통째로 날아간다 — 실제로
+        # `re` 미임포트 하나로 1.5시간을 잃었다. **계산이 끝나면 먼저 저장한다.**
+        np.savez_compressed(args.save,
+                            **{"%s|%s|%s" % (r, k[0], k[1]): v
+                               for r in R for k, v in R[r].items()})
+        print("→ 표현 저장 %s" % args.save)
 
     names = sorted({n for n, _ in clips})
 
