@@ -37,6 +37,9 @@ def main():
     ap.add_argument("--device", default="mps")
     ap.add_argument("--local-only", action="store_true",
                     help="이미 받아둔 영상만 쓴다 — 재다운로드 없이 빠르게 재측정")
+    ap.add_argument("--local-only", action="store_true",
+                    help="로컬에 있는 영상만 쓴다(HF 인증 불필요). 영상을 미리"
+                         " 옮겨둔 머신에서 평가만 돌릴 때")
     ap.add_argument("--object-loc", action="store_true",
                     help="**물건 위치 회상 질문만** — `where did I put ~`(189건) ·"
                          " `where is my ~`(9건) · `when I last saw`(16건). 우리 과제와"
@@ -61,12 +64,20 @@ def main():
         if r.get("answer_start_time") is None:
             continue
         by[r["video_id"]].append(r)
+    if args.local_only:
+        have = {os.path.basename(p) for p in glob.glob(os.path.join(vdir, "*.mp4"))}
+        by = {v: q for v, q in by.items()
+              if os.path.basename(q[0]["video"]) in have}
+        print("로컬 보유 영상으로 제한: %d개" % len(by))
     vids = sorted(by, key=lambda v: -len(by[v]))[:args.n_video]
     print("영상 %d · 질의 %d" % (len(vids), sum(len(by[v]) for v in vids)))
 
     vdir = args.videos or os.path.join(args.root, "videos")
     os.makedirs(vdir, exist_ok=True)
-    from huggingface_hub import hf_hub_download
+    try:
+        from huggingface_hub import hf_hub_download
+    except Exception:
+        hf_hub_download = None
 
     import torch, cv2
     from PIL import Image
