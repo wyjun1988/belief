@@ -88,7 +88,7 @@ ID 로 명시된다. MIT 라이선스. ⚠️ 900GB 부분 다운로드 불가, 
 
 **SD-K 가 1순위인 이유**: 우리가 필요한 세 가지(에고센트릭 · 객체별 removed ·
 프레임 마스크)를 모두 갖춘 유일한 공개 데이터셋이고, **MIT 에 11.9GB 로 즉시
-받을 수 있다.** `wget https://huggingface.co/datasets/yuqun/SceneDiff/resolve/main/scenediff_bechmark.zip`
+받을 수 있다.** `wget https://huggingface.co/datasets/yuqun/SceneDiff/resolve/main/scenediff_benchmark.zip`
 
 ### ⚠️ 3RScan 을 쓸 때의 함정 (조사에서 직접 집계로 확인)
 

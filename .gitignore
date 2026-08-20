@@ -24,3 +24,6 @@ data/nymeria/*
 # ADT OWLv2 검출 산출물 — 원본에서 재생성 가능
 data/adt_owl/
 models/
+
+# SceneDiff SD-K — 연구용 라이선스 데이터(원본 프레임 커밋 금지)
+data/scenediff/
