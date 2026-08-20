@@ -42,10 +42,20 @@
   · V-JEPA2 의 `AutoVideoProcessor` 는 torchvision 을 요구한다 → 전처리를 PIL+numpy 로
     직접 한다(짧은변 292 → 256 중앙크롭 → ImageNet 정규화)
 
-판정 세 거리(시점 프로브와 동일):
-  ① 같은 클립 안(시점만 다름) · ② 같은 장소 v1↔v2 · ③ 남의 장소 최고
-  **여백 ②−③ 이 커야** 장소를 찾을 수 있고, **시점여백 ①−③ 이 양수여야**
-  각도 변화에 견딘다.
+⚠️ **여백·시점여백은 편향된 지표다** — 쓰되 판정 근거로 삼지 말 것.
+  ① 은 같은 클립 프레임쌍의 **중앙값**, ③ 은 다른 장소들의 **최댓값**이다.
+  중앙값에서 최댓값을 빼므로 후보가 늘수록 자동으로 음수가 된다. 실제로 집 단위로
+  후보를 줄여도(−0.067 → −0.059) 거의 변하지 않았다.
+
+**판정은 순위 지표로 한다** — 우연 대비 배수가 정직하게 나온다:
+  · **top-1** 같은 장소가 1등인 비율. 우연 = 1/후보수
+  · **recall@k** 상위 k 안에 드는 비율. 부재 판정은 후보 몇 개를 훑어도 되므로
+    이쪽이 실용 지표다
+  · **시점 순위** 같은 장소 다른 시점 프레임이 남의 장소보다 위에 오는 비율
+
+실측 예: DINO-VLAD top-1 **51%**. 전수 355곳이면 우연 0.28% 대비 **180배**,
+집 단위(후보 중앙 4·평균 12)면 **2.3~6배**다. 앞서 이 51%를 "동전 던지기" 로
+읽은 것은 오독이었다 — 우연 기준선을 안 본 탓이다.
 """
 import argparse, glob, os, re, subprocess, sys, tempfile
 
@@ -351,9 +361,60 @@ def main():
         hc = _C(home_of(n) for n in names)
         print("집 단위로 묶음 — %d집 · 집당 장소 %s"
               % (len(hc), dict(hc.most_common(6))))
-    print("\n%-11s %-8s %-8s %-8s %-9s %-9s %s"
-          % ("표현", "①시점", "②같은장소", "③남의장소", "여백②−③", "시점①−③", "1등비율"))
+
+    print("\n%-11s %-7s %-8s %-8s %-9s %-9s %s"
+          % ("표현", "후보수", "top-1", "우연", "배수", "recall@3", "시점순위"))
     out = []
+    for r in reps:
+        E = R[r]
+        rk, vr, cand = [], [], []
+        for n in names:
+            if (n, "v1") not in E or (n, "v2") not in E:
+                continue
+            A, B = E[(n, "v1")], E[(n, "v2")]
+            a = A.mean(0); a /= np.linalg.norm(a) + 1e-9
+            same = float(np.median(B @ a))
+            others = []
+            for m in names:
+                if m == n or (args.group == "home" and home_of(m) != home_of(n)):
+                    continue
+                for wv in ("v1", "v2"):
+                    if (m, wv) in E:
+                        others.append(float(np.median(E[(m, wv)] @ a)))
+            if not others:
+                continue
+            others = np.array(others)
+            rk.append(int((others > same).sum()))          # 0 = 1등
+            cand.append(len(others) + 1)
+            # 시점 순위 — 같은 클립의 **다른 프레임**이 남의 장소보다 위에 오는가
+            if len(A) > 1:
+                for i in range(len(A)):
+                    q = A[i]
+                    rest = np.delete(np.arange(len(A)), i)
+                    sv = float(np.median(A[rest] @ q))     # 같은 장소·다른 시점
+                    ov = float(np.max([np.median(E[(m, wv)] @ q)
+                                       for m in names
+                                       if m != n and not (args.group == "home"
+                                                          and home_of(m) != home_of(n))
+                                       for wv in ("v1", "v2") if (m, wv) in E] or [-9]))
+                    vr.append(sv > ov)
+        if len(rk) < 5:
+            continue
+        rk = np.array(rk); cand = np.array(cand, float)
+        top1 = float((rk == 0).mean())
+        rec3 = float((rk < 3).mean())
+        chance = float(np.mean(1.0 / cand))
+        vrate = float(np.mean(vr)) if vr else float("nan")
+        print("%-11s %-7.0f %-8.2f %-8.3f %-9.1f %-9.2f %.2f"
+              % (r, np.median(cand), top1, chance, top1 / max(chance, 1e-9), rec3, vrate))
+        out.append((r, top1, chance, rec3, vrate))
+    print("\n**판정은 '배수'(top-1 ÷ 우연) 와 recall@3 로 한다.** 여백 계열은 아래 참고용.")
+    print("시점순위 = 같은 장소를 다른 각도에서 본 프레임이 남의 장소보다 위에 오는 비율")
+    print("           (0.5 미만이면 각도가 바뀔 때 남의 장소에 밀린다)\n")
+
+    out2 = []
+    print("%-11s %-8s %-8s %-8s %-9s %-9s %s"
+          % ("(참고)", "①시점", "②같은장소", "③남의장소", "여백②−③", "시점①−③", "1등비율"))
     for r in reps:
         E = R[r]
         rows = []
@@ -365,27 +426,24 @@ def main():
             intra = float(np.median(S[np.triu_indices(len(A), 1)])) if len(A) > 1 else np.nan
             a = A.mean(0); a /= np.linalg.norm(a) + 1e-9
             same = float(np.median(B @ a))
-            oth, top1 = -9.0, True
+            oth = -9.0
             for m in names:
-                if m == n:
+                if m == n or (args.group == "home" and home_of(m) != home_of(n)):
                     continue
-                if args.group == "home" and home_of(m) != home_of(n):
-                    continue                      # 다른 집은 후보가 아니다
                 for wv in ("v1", "v2"):
                     if (m, wv) in E:
-                        s = float(np.median(E[(m, wv)] @ a))
-                        oth = max(oth, s)
-            rows.append((intra, same, oth))
+                        oth = max(oth, float(np.median(E[(m, wv)] @ a)))
+            if oth > -8:
+                rows.append((intra, same, oth))
         if len(rows) < 5:
             continue
-        rows = [r for r in rows if r[2] > -8]
         I = np.array([x[0] for x in rows]); Sa = np.array([x[1] for x in rows])
-        O = np.array([x[2] for x in rows])
-        mg = Sa - O
+        O = np.array([x[2] for x in rows]); mg = Sa - O
         print("%-11s %-8.3f %-8.3f %-8.3f %-9.3f %-9.3f %.0f%%"
               % (r, np.median(I), np.median(Sa), np.median(O),
                  np.median(mg), np.median(I - O), 100 * (mg > 0).mean()))
-        out.append((r, float(np.median(mg)), float((mg > 0).mean())))
+        out2.append((r, float(np.median(mg)), float((mg > 0).mean())))
+    out = out2
     out.sort(key=lambda x: -x[1])
     print("\n여백 순위: %s" % " > ".join("%s(%+.3f·%.0f%%)" % (a, b, 100 * c) for a, b, c in out))
     print("→ 여백이 크고 1등비율이 높은 표현이 장소를 잘 가른다. 시점①−③ 이 음수면")
