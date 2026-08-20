@@ -1,2 +1,5 @@
 *
 !.gitignore
+# owl_vocab.json 은 단어 목록일 뿐이다(원본·개인정보 없음).
+# place_repr_bench 의 owlvec 경로가 이 파일을 요구하므로 예외로 추적한다.
+!owl_vocab.json
