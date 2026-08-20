@@ -44,13 +44,23 @@ def pmi_from(P):
     return G
 
 
-def last_visit(idx, max_gap):
-    """고른 프레임 인덱스에서 **마지막 연속 구간**만 남긴다(간격 max_gap 이하면 연속)."""
+def visits_of(idx, max_gap):
+    """고른 프레임 인덱스를 **방문 구간들**로 쪼갠다(간격 max_gap 이하면 같은 방문)."""
     if len(idx) == 0:
-        return idx
+        return []
     idx = np.sort(idx)
     cut = np.nonzero(np.diff(idx) > max_gap)[0]
-    return idx[cut[-1] + 1:] if len(cut) else idx
+    out, s0 = [], 0
+    for c in cut:
+        out.append(idx[s0:c + 1]); s0 = c + 1
+    out.append(idx[s0:])
+    return out
+
+
+def last_visit(idx, max_gap):
+    """마지막 방문 구간만."""
+    v = visits_of(idx, max_gap)
+    return v[-1] if v else np.array([], int)
 
 
 def main():
@@ -79,6 +89,11 @@ def main():
                          " 관대(재현↑·정밀↓). **퍼센타일 게이트를 대체한 것** —"
                          " 상위 N%% 로 자르면 방해 구간에서도 반드시 뽑혀 마지막"
                          " 방문이 늘 타임라인 끝이 된다")
+    ap.add_argument("--visit-mode", default="last", choices=["last", "recency"],
+                    help="last=마지막 방문만(현행) · recency=여러 방문을 최신 가중으로"
+                         " 누적. 마지막 방문은 프레임이 적어 잡음에 흔들린다")
+    ap.add_argument("--visit-tau", type=float, default=1.0,
+                    help="recency: 방문 단위 감쇠. 작을수록 마지막 방문만 본다")
     ap.add_argument("--vote-k", type=int, default=3,
                     help="앵커 프레임 중 상위 몇 개와의 유사도를 평균할지(프레임 투표)")
     ap.add_argument("--cache", default=None,
@@ -251,10 +266,20 @@ def run(args, pairs, targets, vocab, clips, embs):
             ok = after[cs >= args.ctx_gate]
         if len(ok) == 0:
             return None, 0, np.array([], int)
-        sel = last_visit(ok, args.max_gap)
-        if len(sel) == 0:
-            return None, 0, sel
-        return float(np.median(tl[ki, sel])), len(sel), sel
+        vs = visits_of(ok, args.max_gap)
+        if not vs:
+            return None, 0, np.array([], int)
+        if args.visit_mode == "last":
+            sel = vs[-1]
+            return float(np.median(tl[ki, sel])), len(sel), sel
+        # **여러 방문 누적** — 마지막 방문 하나는 프레임이 적어 잡음에 흔들린다.
+        # 방문마다 값을 내고 **최신일수록 크게** 가중해 합친다. 현재 상태를 묻는
+        # 것이므로 과거 방문은 참고만 해야 한다(τ 는 방문 단위).
+        vals = np.array([np.median(tl[ki, v]) for v in vs], float)
+        ages = np.arange(len(vs) - 1, -1, -1, dtype=float)   # 마지막 방문이 0
+        w = np.exp(-ages / max(args.visit_tau, 1e-6))
+        sel = vs[-1]
+        return float((vals * w).sum() / w.sum()), len(sel), sel
 
     rng = np.random.default_rng(args.seed)
     rows = []
