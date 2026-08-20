@@ -77,17 +77,31 @@ def duration_of(mp4):
 
 
 def frames_of(mp4, n, tmp, tag):
-    dur = duration_of(mp4)
+    """영상에서 시간 균등으로 n장. **OpenCV 로 직접 읽는다.**
+
+    종전에는 프레임마다 ffmpeg 프로세스를 띄웠는데 두 가지 문제가 있었다:
+      · 느리다 — 프레임당 프로세스 생성
+      · MBP 의 번들 ffmpeg(imageio-ffmpeg)는 **mjpeg 인코더가 없어** jpg 를 못 쓴다
+        ("Could not open encoder before EOF" · exit −22)
+    OpenCV 는 양쪽 머신에 이미 있고 외부 바이너리가 필요 없다.
+    """
+    import cv2
+    cap = cv2.VideoCapture(mp4)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     out = []
-    if dur <= 0:
+    if total <= 0:
+        cap.release()
         return out
-    for i in range(n):
-        t = dur * (i + 0.5) / n
+    want = [int(total * (i + 0.5) / n) for i in range(n)]
+    for i, f in enumerate(want):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, min(f, total - 1))
+        ok, img = cap.read()
+        if not ok:
+            continue
         p = os.path.join(tmp, "%s_%02d.jpg" % (tag, i))
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-ss", "%.3f" % t, "-i", mp4,
-                        "-frames:v", "1", "-y", p], check=False)
-        if os.path.exists(p):
-            out.append(p)
+        cv2.imwrite(p, img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+        out.append(p)
+    cap.release()
     return out
 
 

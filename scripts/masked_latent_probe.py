@@ -33,18 +33,23 @@ from scripts.scenediff_absence import base_label, frames_of, video_of   # noqa: 
 
 
 def grab_idx(mp4, idxs, tmp, tag):
-    """프레임 **번호**로 뽑는다(마스크가 프레임 번호로 색인돼 있다)."""
+    """프레임 **번호**로 뽑는다(마스크가 프레임 번호로 색인돼 있다). OpenCV 사용 —
+    번들 ffmpeg 에 mjpeg 인코더가 없는 환경이 있다."""
+    import cv2
+    cap = cv2.VideoCapture(mp4)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     out = {}
-    sel = "+".join("eq(n\\,%d)" % i for i in idxs)
-    pat = os.path.join(tmp, "%s_%%03d.jpg" % tag)
-    # ⚠️ `-vsync` 는 이 ffmpeg 빌드에서 제거됐다("Unrecognized option 'vsync'").
-    # `-fps_mode passthrough` 가 대체다 — 없으면 프레임이 하나도 안 나온다.
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-i", mp4, "-vf",
-                    "select='%s'" % sel, "-fps_mode", "passthrough", "-y", pat],
-                   check=False)
-    got = sorted(glob.glob(os.path.join(tmp, "%s_*.jpg" % tag)))
-    for i, p in zip(sorted(idxs), got):
+    for i in sorted(set(int(x) for x in idxs)):
+        if total and i >= total:
+            continue
+        cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+        ok, img = cap.read()
+        if not ok:
+            continue
+        p = os.path.join(tmp, "%s_%06d.jpg" % (tag, i))
+        cv2.imwrite(p, img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
         out[i] = p
+    cap.release()
     return out
 
 
