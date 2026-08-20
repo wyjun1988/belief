@@ -54,10 +54,30 @@ def video_of(d, n):
     return None
 
 
+def duration_of(mp4):
+    """영상 길이(초). ffprobe 가 없으면 OpenCV 로 — MBP 의 번들 ffmpeg 에는
+    ffmpeg 만 있고 ffprobe 가 없다."""
+    try:
+        v = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                            "format=duration", "-of", "csv=p=0", mp4],
+                           capture_output=True, text=True).stdout.strip()
+        if v:
+            return float(v)
+    except FileNotFoundError:
+        pass
+    try:
+        import cv2
+        c = cv2.VideoCapture(mp4)
+        fps = c.get(cv2.CAP_PROP_FPS) or 0
+        n = c.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+        c.release()
+        return float(n / fps) if fps > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
 def frames_of(mp4, n, tmp, tag):
-    dur = float(subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "csv=p=0", mp4], capture_output=True, text=True).stdout.strip() or 0)
+    dur = duration_of(mp4)
     out = []
     if dur <= 0:
         return out
