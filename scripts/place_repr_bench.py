@@ -21,6 +21,19 @@
                **표현**을 문맥에서 예측하도록 학습돼, 지엽적 물체보다 장면 구조를
                남긴다. 우리가 필요한 "시점 불변 + 물체 불변 장소 표현"에 가장 가깝다.
                프레임 하나가 아니라 **방문 구간(짧은 영상)** 을 한 표현으로 만든다.
+  dino_vlad    **AnyLoc 계열** — DINOv2 패치 특징을 **VLAD** 로 집계한다. 전역 평균
+               (CLS·패치평균)은 시점이 바뀌면 통째로 흔들리지만, VLAD 는 패치를
+               시각 어휘에 배정하고 **어휘별 잔차를 누적**하므로 어느 패치가 어디
+               있었는지에 덜 의존한다 — 우리가 못 넘는 지표(시점여백)를 정면으로
+               겨냥한 집계다. 학습 불필요.
+  owlvec       **물체 조합 벡터** — OWLv2 점수를 어휘 전체에 걸쳐 모은 것.
+               "장소는 그 안의 물체 조합이다" 를 직접 쓴다. 근거: ADT 방 서명
+               (TF-IDF 물체 조합 투표)이 **0.971** 로 GT 사전(0.966)과 동률이었다.
+               ⚠️ 앞서 이것이 실패했던 것(장소 정밀도 0.37)은 어휘를 **변화한 물체
+               38개**로만 잡았기 때문이다 — 문맥이 주변 가구가 아니라 다른 장면의
+               물체가 됐다. 여기서는 어휘 1,037개(`owl_vocab.json`)를 쓴다.
+               **이미 저장하는 메타**라 추가 비용이 0 이라는 점이 중요하다.
+  owlvec_idf   같은 벡터에 IDF 가중 — 어디에나 있는 물체(wall·floor)의 비중을 낮춘다
   tiny         32×32 회색조 축소 — 저주파 구조만. 비용 거의 0
   colorlay     3×3 구역 × 색 히스토그램 — 배치+색. 비용 거의 0
 
@@ -55,7 +68,11 @@ def main():
     ap.add_argument("--limit", type=int, default=999)
     ap.add_argument("--device", default="mps")
     ap.add_argument("--reps", default="clip_cls,clip_patch,clip_g2,dino_cls,dino_patch,"
-                                      "dino_g2,ijepa,vjepa2,tiny,colorlay")
+                                      "dino_g2,dino_vlad,ijepa,vjepa2,owlvec,owlvec_idf,tiny,colorlay")
+    ap.add_argument("--vlad-k", type=int, default=32, help="VLAD 시각 어휘 수")
+    ap.add_argument("--owl-vocab", default=os.path.join(ROOT, "data", "supermem", "owl_vocab.json"),
+                    help="물체 조합 벡터용 어휘(1,037단어)")
+    ap.add_argument("--owl-thr", type=float, default=0.05)
     ap.add_argument("--vjepa", default="facebook/vjepa2-vitl-fpc64-256",
                     help="V-JEPA2 체크포인트. GPU 가 크면 vjepa2-vitg-fpc64-384 도 가능")
     ap.add_argument("--clip", default="openai/clip-vit-base-patch16")
@@ -177,6 +194,36 @@ def main():
             g2 = torch.cat(qs, 1)
         return nz(cls.cpu().numpy()), nz(mean.cpu().numpy()), nz(g2.cpu().numpy())
 
+    owlnet = None
+    if "owlvec" in reps or "owlvec_idf" in reps:
+        import json as _json
+        from transformers import Owlv2Processor, Owlv2ForObjectDetection
+        OWV = _json.load(open(args.owl_vocab))
+        op = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
+        owlnet = Owlv2ForObjectDetection.from_pretrained(
+            "google/owlv2-base-patch16-ensemble").to(args.device).eval()
+        # 어휘 1,037개를 한 번에 넣으면 메모리가 터진다 — 조각으로 나눠 훑는다
+        CH = 128
+        OWCH = [OWV[i:i + CH] for i in range(0, len(OWV), CH)]
+        print("물체 조합 어휘 %d단어 · %d조각" % (len(OWV), len(OWCH)))
+
+    def owl_vec(imgs):
+        """프레임별 [어휘] 최대 검출점수 → 물체 조합 벡터."""
+        V = np.zeros((len(imgs), sum(len(c) for c in OWCH)), np.float32)
+        for i, im in enumerate(imgs):
+            off = 0
+            for ch in OWCH:
+                with torch.no_grad():
+                    inp = op(text=[ch], images=im, return_tensors="pt").to(args.device)
+                    o = owlnet(**inp)
+                    r = op.post_process_grounded_object_detection(
+                        o, threshold=args.owl_thr,
+                        target_sizes=torch.tensor([im.size[::-1]]).to(args.device))[0]
+                for lb, sc in zip(r["labels"].tolist(), r["scores"].tolist()):
+                    V[i, off + lb] = max(V[i, off + lb], float(sc))
+                off += len(ch)
+        return V
+
     def cheap(imgs):
         """tiny(32×32 회색조) · colorlay(3×3 × 색 히스토그램) — 비용 거의 0."""
         T, C = [], []
@@ -196,6 +243,7 @@ def main():
 
     # ── 모든 클립에 대해 표현 계산
     R = {r: {} for r in reps}
+    DPATCH = {}
     for i, (key, files) in enumerate(clips.items()):
         ims = [Image.open(p).convert("RGB") for p in files]
         if "clip" in enc:
@@ -208,6 +256,11 @@ def main():
             for nm, v in (("dino_cls", a), ("dino_patch", b), ("dino_g2", c)):
                 if nm in R:
                     R[nm][key] = v
+        if "dino_vlad" in R:
+            proc, net, _ = enc["dino"]
+            with torch.no_grad():
+                o = net(**proc(images=ims, return_tensors="pt").to(args.device))
+            DPATCH[key] = o.last_hidden_state[:, 1:].cpu().numpy().astype(np.float32)
         if "ijepa" in enc:
             a, b, c = vit_feats("ijepa", ims)
             R["ijepa"][key] = b                      # CLS 가 없으니 패치평균
@@ -219,6 +272,12 @@ def main():
             vs = [v for v in vs if v is not None]
             if vs:
                 R["vjepa2"][key] = np.concatenate(vs)
+        if owlnet is not None:
+            V = owl_vec(ims)
+            if "owlvec" in R:
+                R["owlvec"][key] = nz(V)
+            if "owlvec_idf" in R:
+                R["owlvec_idf"][key] = V          # IDF 는 전체를 모은 뒤 적용
         if "tiny" in R or "colorlay" in R:
             t, cl = cheap(ims)
             if "tiny" in R:
@@ -227,6 +286,36 @@ def main():
                 R["colorlay"][key] = cl
         if (i + 1) % 20 == 0:
             print("  %d/%d 클립" % (i + 1, len(clips)))
+
+    if "dino_vlad" in R and DPATCH:
+        # VLAD — 패치를 시각 어휘에 배정하고 **어휘별 잔차 합**을 기술자로.
+        # 전역 평균과 달리 "무엇이 있었나" 를 어휘별로 나눠 담아 시점 이동에 덜 흔들린다.
+        from sklearn.cluster import KMeans
+        allp = np.concatenate([v.reshape(-1, v.shape[-1]) for v in DPATCH.values()])
+        sub = allp[np.random.default_rng(0).permutation(len(allp))[:60000]]
+        km = KMeans(args.vlad_k, n_init=4, random_state=0).fit(sub)
+        C = km.cluster_centers_.astype(np.float32)
+        print("VLAD 어휘 %d개 학습 (패치 %d개 중 %d 표본)" % (args.vlad_k, len(allp), len(sub)))
+        for key, P_ in DPATCH.items():
+            out = []
+            for f in P_:                                   # 프레임마다
+                a = np.argmin(((f[:, None] - C[None]) ** 2).sum(-1), 1)
+                V = np.zeros_like(C)
+                for j in range(len(C)):
+                    m = a == j
+                    if m.any():
+                        V[j] = (f[m] - C[j]).sum(0)
+                V = np.sign(V) * np.sqrt(np.abs(V))        # power normalization
+                V = V.ravel()
+                out.append(V / (np.linalg.norm(V) + 1e-9))
+            R["dino_vlad"][key] = np.stack(out)
+
+    if "owlvec_idf" in R and R["owlvec_idf"]:
+        # IDF — 어디에나 뜨는 물체(wall·floor)의 비중을 낮춘다
+        ALLV = np.concatenate(list(R["owlvec_idf"].values()))
+        df = (ALLV > args.owl_thr).mean(0) + 1e-6
+        idf = np.log(1.0 / df)
+        R["owlvec_idf"] = {k: nz(v * idf[None]) for k, v in R["owlvec_idf"].items()}
 
     names = sorted({n for n, _ in clips})
     print("\n%-11s %-8s %-8s %-8s %-9s %-9s %s"
