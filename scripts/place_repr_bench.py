@@ -69,6 +69,11 @@ def main():
     ap.add_argument("--device", default="mps")
     ap.add_argument("--reps", default="clip_cls,clip_patch,clip_g2,dino_cls,dino_patch,"
                                       "dino_g2,dino_vlad,ijepa,vjepa2,owlvec,owlvec_idf,tiny,colorlay")
+    ap.add_argument("--group", default="none", choices=["none", "home"],
+                    help="③(남의 장소)를 **같은 집 안으로 제한**한다. 실사용은 GPS·"
+                         "graph_uid 로 집을 먼저 고르므로(설계 2-1) 후보가 방 몇 개다. "
+                         "전체를 한 풀에 넣으면 '전 세계 355곳 중 찾기' 를 재게 된다. "
+                         "SD-K 는 참가자(P01·P02·P04·P09)가 곧 한 부엌이다")
     ap.add_argument("--vlad-k", type=int, default=32, help="VLAD 시각 어휘 수")
     ap.add_argument("--owl-vocab", default=os.path.join(ROOT, "data", "supermem", "owl_vocab.json"),
                     help="물체 조합 벡터용 어휘(1,037단어)")
@@ -324,6 +329,17 @@ def main():
         R["owlvec_idf"] = {k: nz(v * idf[None]) for k, v in R["owlvec_idf"].items()}
 
     names = sorted({n for n, _ in clips})
+
+    def home_of(n):
+        """같은 집(씬그래프) 식별자. SD-K 는 참가자 접두어가 곧 한 부엌이다."""
+        m = re.match(r"^(P\d+)", n)
+        return m.group(1) if m else re.sub(r"_\d+_.*$", "", n)
+
+    if args.group == "home":
+        from collections import Counter as _C
+        hc = _C(home_of(n) for n in names)
+        print("집 단위로 묶음 — %d집 · 집당 장소 %s"
+              % (len(hc), dict(hc.most_common(6))))
     print("\n%-11s %-8s %-8s %-8s %-9s %-9s %s"
           % ("표현", "①시점", "②같은장소", "③남의장소", "여백②−③", "시점①−③", "1등비율"))
     out = []
@@ -342,6 +358,8 @@ def main():
             for m in names:
                 if m == n:
                     continue
+                if args.group == "home" and home_of(m) != home_of(n):
+                    continue                      # 다른 집은 후보가 아니다
                 for wv in ("v1", "v2"):
                     if (m, wv) in E:
                         s = float(np.median(E[(m, wv)] @ a))
@@ -349,6 +367,7 @@ def main():
             rows.append((intra, same, oth))
         if len(rows) < 5:
             continue
+        rows = [r for r in rows if r[2] > -8]
         I = np.array([x[0] for x in rows]); Sa = np.array([x[1] for x in rows])
         O = np.array([x[2] for x in rows])
         mg = Sa - O
