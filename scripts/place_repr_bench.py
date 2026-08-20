@@ -202,27 +202,33 @@ def main():
         op = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
         owlnet = Owlv2ForObjectDetection.from_pretrained(
             "google/owlv2-base-patch16-ensemble").to(args.device).eval()
-        # 어휘 1,037개를 한 번에 넣으면 메모리가 터진다 — 조각으로 나눠 훑는다
-        CH = 128
-        OWCH = [OWV[i:i + CH] for i in range(0, len(OWV), CH)]
-        print("물체 조합 어휘 %d단어 · %d조각" % (len(OWV), len(OWCH)))
+        # ⚠️ 어휘를 조각내 `owlnet(**inp)` 를 반복하면 **이미지 인코더가 조각 수만큼**
+        # 다시 돈다(어휘 1,037 → 9회). 텍스트만 바뀌는데 무거운 쪽을 반복하는 것이다.
+        # MBP `owl_fast.py` 에서 검증된 방식(원 경로 대비 최대오차 0.00e+00)을 쓴다:
+        # 텍스트 임베딩을 **한 번만** 만들고, 프레임마다 image_embedder 를 **1회**
+        # 돌린 뒤 class_predictor 로 점수를 낸다. box 예측·후처리는 쓰지 않으므로 건너뛴다.
+        _q = ["a photo of a " + w for w in OWV]
+        _dummy = Image.new("RGB", (256, 256), (128, 128, 128))
+        _ti = op(text=[_q], images=[_dummy], return_tensors="pt").to(args.device)
+        with torch.no_grad():
+            _o = owlnet.owlv2(input_ids=_ti["input_ids"], attention_mask=_ti["attention_mask"],
+                              pixel_values=_ti["pixel_values"], return_dict=True)
+            OWTEXT = _o.text_embeds
+        OWMASK = (_ti["input_ids"][:, 0] > 0)
+        print("물체 조합 어휘 %d단어 · 텍스트 임베딩 %s 캐시 (이미지 인코더는 프레임당 1회)"
+              % (len(OWV), tuple(OWTEXT.shape)))
 
     def owl_vec(imgs):
-        """프레임별 [어휘] 최대 검출점수 → 물체 조합 벡터."""
-        V = np.zeros((len(imgs), sum(len(c) for c in OWCH)), np.float32)
-        for i, im in enumerate(imgs):
-            off = 0
-            for ch in OWCH:
-                with torch.no_grad():
-                    inp = op(text=[ch], images=im, return_tensors="pt").to(args.device)
-                    o = owlnet(**inp)
-                    r = op.post_process_grounded_object_detection(
-                        o, threshold=args.owl_thr,
-                        target_sizes=torch.tensor([im.size[::-1]]).to(args.device))[0]
-                for lb, sc in zip(r["labels"].tolist(), r["scores"].tolist()):
-                    V[i, off + lb] = max(V[i, off + lb], float(sc))
-                off += len(ch)
-        return V
+        """프레임별 [어휘] 최대 검출점수 — 이미지 인코더 1회."""
+        pv = op(images=imgs, return_tensors="pt")["pixel_values"].to(args.device)
+        with torch.no_grad():
+            fmap = owlnet.image_embedder(pixel_values=pv)[0]
+            b, ph, pw, hd = fmap.shape
+            feats = fmap.reshape(b, ph * pw, hd)
+            logits, _ = owlnet.class_predictor(
+                feats, OWTEXT.unsqueeze(0).expand(b, -1, -1),
+                OWMASK.unsqueeze(0).expand(b, -1))
+            return torch.sigmoid(logits).amax(1).float().cpu().numpy()
 
     def cheap(imgs):
         """tiny(32×32 회색조) · colorlay(3×3 × 색 히스토그램) — 비용 거의 0."""
