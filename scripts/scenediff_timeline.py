@@ -70,8 +70,13 @@ def main():
     ap.add_argument("--place", default="latent", choices=["latent", "pmi", "gt"],
                     help="장소를 무엇으로 찾는가. latent=CLIP 프레임 임베딩 유사도"
                          "(우리 검색층과 같은 것) · pmi=물체 조합 · gt=상한")
-    ap.add_argument("--sim-q", type=float, default=80.0,
-                    help="latent: 앵커 유사도 상위 몇 퍼센타일을 '그 장소' 로 볼지")
+    ap.add_argument("--anchor-q", type=float, default=0.25,
+                    help="앵커 자기유사도의 이 분위를 절대 문턱으로 쓴다. 낮출수록"
+                         " 관대(재현↑·정밀↓). **퍼센타일 게이트를 대체한 것** —"
+                         " 상위 N%% 로 자르면 방해 구간에서도 반드시 뽑혀 마지막"
+                         " 방문이 늘 타임라인 끝이 된다")
+    ap.add_argument("--vote-k", type=int, default=3,
+                    help="앵커 프레임 중 상위 몇 개와의 유사도를 평균할지(프레임 투표)")
     ap.add_argument("--cache", default=None,
                     help="클립별 OWL 점수 캐시(npz). 판정 로직만 바꿔 재실험할 때"
                          " 지각층을 다시 돌리지 않는다")
@@ -197,14 +202,25 @@ def run(args, pairs, targets, vocab, clips, embs):
     def judge(tl, em, ki, ctx, n0, owner, name):
         """타임라인 → (마지막 방문 구간의 키워드 값, 구간 길이, 구간 인덱스)
 
-        **장소를 어떻게 찾는가**가 이 함수의 전부다. 세 방식을 비교한다:
+        **장소를 어떻게 찾는가**가 이 함수의 전부다.
 
-          latent  물건을 본 근거 구간(앞머리 n0 프레임)의 CLIP 임베딩을 앵커로 삼아
-                  **그 이후** 프레임 중 유사도가 높은 것을 그 장소로 본다.
-                  실사용에서 씬그래프는 "이 물건을 마지막으로 본 프레임" 을 갖고
-                  있으므로 앵커는 **과거 정보**다 — 인과를 어기지 않는다.
-          pmi     키워드를 뺀 물체 조합(현행). 어휘가 좁으면 무너진다.
+          latent  물건을 본 근거 구간(앞머리 n0 프레임)을 앵커로, **그 이후** 프레임 중
+                  그 장소로 보이는 것을 고른다. 씬그래프가 "이 물건을 마지막으로 본
+                  프레임" 을 갖고 있으므로 앵커는 과거 정보다 — 인과를 안 어긴다.
+          pmi     키워드를 뺀 물체 조합.
           gt      정답 장소를 그대로 준다 — 상한.
+
+        ⚠️ **퍼센타일 게이트를 쓰면 안 된다.** 종전에는 상위 20% 로 잘랐는데, 그러면
+        방해 장면만 있는 구간에서도 반드시 뭔가 뽑혀 **마지막 방문이 늘 타임라인 끝**
+        이 됐다(장소 적중률이 pmi·latent 모두 정확히 0.00 이었던 원인).
+
+        대신 **앵커 자기유사도로 절대 문턱을 교정한다**: 같은 장소를 찍은 앵커
+        프레임끼리의 유사도 분포가 "이 장소는 이 정도로 닮는다" 의 기준이다.
+        GT 없이 앵커만으로 정해지므로 실사용에서 그대로 쓸 수 있다.
+
+        표현은 **CLIP** 을 쓴다. 4090 실측에서 CLIP CLS 가 DINO-VLAD 와 top-1 동률
+        (51%)이고 recall@3 는 오히려 높다(63% vs 61%). 우리가 **이미 저장하는 것**이라
+        추가 비용이 0 이다.
         """
         after = np.arange(n0, tl.shape[1])          # 근거 구간 이후만 본다(인과)
         if len(after) == 0:
@@ -212,15 +228,25 @@ def run(args, pairs, targets, vocab, clips, embs):
         if args.place == "gt":
             ok = np.array([i for i in after if owner[i][0] == name])
         elif args.place == "latent":
-            a = em[:n0].mean(0); a /= np.linalg.norm(a) + 1e-9
-            sim = em[after] @ a
-            thr = np.percentile(sim, args.sim_q)
+            A = em[:n0]
+            if len(A) < 2:
+                return None, 0, np.array([], int)
+            # 앵커 자기유사도 → "이 장소는 이 정도로 닮는다"
+            SS = A @ A.T
+            iu = np.triu_indices(len(A), 1)
+            base = SS[iu]
+            thr = float(np.quantile(base, args.anchor_q))
+            # **프레임 투표** — 앵커 평균 하나가 아니라 앵커 프레임 각각과 비교해
+            # 상위 몇 개의 평균을 쓴다. 평균 벡터는 시선이 흩어진 앵커에서 뭉개진다.
+            S = em[after] @ A.T                     # [after, anchor]
+            k = min(args.vote_k, A.shape[0])
+            sim = np.sort(S, 1)[:, -k:].mean(1)
             ok = after[sim >= thr]
         else:
             cs = tl[ctx][:, after].max(0)
             ok = after[cs >= args.ctx_gate]
         if len(ok) == 0:
-            return None, 0, ok
+            return None, 0, np.array([], int)
         sel = last_visit(ok, args.max_gap)
         if len(sel) == 0:
             return None, 0, sel
