@@ -62,7 +62,12 @@ def main():
     ap.add_argument("--ratio", type=float, default=0.6)
     ap.add_argument("--bbox-tol", type=float, default=2e6)
     ap.add_argument("--min-frames", type=int, default=4)
-    ap.add_argument("--oracle", nargs="*", default=[], choices=["evidence", "place"])
+    ap.add_argument("--oracle", nargs="*", default=[], choices=["premove", "place"],
+                    help="premove — 검색을 **이동 직전 목격**으로 고정한다. "
+                         "⚠️ 이러면 정답이 구성상 전부 '없음' 이라 정밀도는 0.000 으로 "
+                         "퇴화한다(읽지 말 것). 대신 **진짜 부재 사례를 인위로 만든다** — "
+                         "자연 발생은 4건뿐인데 이 모드에서 128건이 된다. "
+                         "읽어야 할 값은 **부재 재현**뿐이다.")
     ap.add_argument("--device", default="mps")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
@@ -101,7 +106,7 @@ def main():
                 if len(rec) < 50:
                     continue
                 # ① 검색 — 마지막 목격
-                if "evidence" in args.oracle:
+                if "premove" in args.oracle:
                     prev = bts[bts <= segl[si - 1][1]]
                     if len(prev) == 0:
                         continue
@@ -177,7 +182,10 @@ def main():
           % (sum(1 for r in rows if r["state"] == "b"), n,
              100.0 * sum(1 for r in rows if r["state"] == "b") / n))
     print("  ④ 기권(u) %d/%d (%.0f%%)" % (len(ab), n, 100.0 * len(ab) / n))
-    print("  **위치를 답한 %d건의 정밀도 %.3f  (다수결 %.3f)**" % (len(ans), prec, base))
+    if "premove" in args.oracle:
+        print("  (정밀도는 premove 모드에서 구성상 0 — 읽지 않는다)")
+    else:
+        print("  **위치를 답한 %d건의 정밀도 %.3f  (다수결 %.3f)**" % (len(ans), prec, base))
     print("  **실제로 없는 %d건 중 '없다' 로 넘긴 비율(재현) %.3f**" % (len(gone), rec_))
     print("  상태 분포 %s" % dict(Counter(r["state"] for r in rows)))
     print("\n  ── 새 자리가 관측됐는가로 가르면 (부재 층이 필요한 쪽은 '미관측')")
