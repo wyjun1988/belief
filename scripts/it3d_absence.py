@@ -130,7 +130,10 @@ def main():
     PVRE = re.compile(r"raw_videos/(video_\d+_scene_\d+)/pv/(\d+)\.png$")
     if args.slices:
         for f in sorted(os.listdir(args.slices)):
-            if not f.endswith(".index.json"):
+            # ⚠️ exFAT 에서 rsync 로 가져오면 `._<이름>` AppleDouble 이 딸려온다.
+            # 셸 glob 은 점파일을 안 잡아 검증에서 놓쳤는데 `os.listdir` 은 집는다 →
+            # 바이너리를 json 으로 읽어 UnicodeDecodeError 로 죽었다.
+            if f.startswith(".") or not f.endswith(".index.json"):
                 continue
             vn = f[:-len(".index.json")]
             binp = os.path.join(args.slices, vn + ".bin")
