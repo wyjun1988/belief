@@ -19,7 +19,7 @@
 ⚠️ 영상이 중앙 **369초**라 `memory_recency` 가 중앙 74초 · 최대 19분이다.
    **시간축이 짧아 하루 스케일 검증은 안 된다** — 표본 크기가 강점인 데이터다.
 """
-import argparse, json, os, subprocess, sys, tempfile
+import argparse, glob, json, os, subprocess, sys, tempfile
 from collections import defaultdict
 
 import numpy as np
@@ -37,9 +37,6 @@ def main():
     ap.add_argument("--device", default="mps")
     ap.add_argument("--local-only", action="store_true",
                     help="이미 받아둔 영상만 쓴다 — 재다운로드 없이 빠르게 재측정")
-    ap.add_argument("--local-only", action="store_true",
-                    help="로컬에 있는 영상만 쓴다(HF 인증 불필요). 영상을 미리"
-                         " 옮겨둔 머신에서 평가만 돌릴 때")
     ap.add_argument("--object-loc", action="store_true",
                     help="**물건 위치 회상 질문만** — `where did I put ~`(189건) ·"
                          " `where is my ~`(9건) · `when I last saw`(16건). 우리 과제와"
