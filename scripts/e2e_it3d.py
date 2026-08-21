@@ -23,6 +23,15 @@ IT3DEgo 는 개체 ID·이동 시각이 GT라 **질의 수백 건**을 만들 �
 
     정답 = (그 자리에 있다/없다) 판정이 **T 시점 실제 위치**와 맞는가
 
+⚠️ **부재 층이 필요한 질의와 아닌 질의를 갈라야 한다.** IT3DEgo 는 사람이 물건을
+눈앞에서 옮기므로, 새 자리가 **관측된** 경우가 많다. 그러면 검색이 최신 목격을
+찾아내 그것만으로 답이 맞는다 — 부재 판정은 할 일이 없다("항상 마지막 본 곳"
+다수결이 0.63인 이유가 이것이다).
+
+우리 시나리오("안 보는 사이에 누가 옮겼다")에 해당하는 것은 **새 자리가 아직
+관측되지 않은** 질의다. 그 부분집합에서만 부재 층의 값어치가 드러난다.
+그래서 `obs_new`(현재 구간에 그 물체 2D bbox 가 있었나)로 갈라 각각 보고한다.
+
 ⚠️ SuperMemory 에서 배운 것 두 가지를 그대로 적용한다:
   · 부재 판정에 **고정 문턱 × 최댓값**을 쓰면 안 된다 → 자기 기준 전/후 중앙값 비율
   · **조건②** — 목격 때조차 안 잡히면 답하지 않고 **기권**한다(㉞ 에서 이게 병목)
@@ -42,7 +51,11 @@ def main():
     ap.add_argument("--cache", nargs="+", required=True, help="*.all.npz 가 있는 디렉터리들")
     ap.add_argument("--ann", required=True)
     ap.add_argument("--topk", type=int, default=5)
-    ap.add_argument("--anchor-win", type=float, default=6e8, help="앵커 시간창(100ns·기본 60초)")
+    ap.add_argument("--anchor-win", type=float, default=0.0,
+                    help="앵커 시간창(100ns). 0이면 창 없음. "
+                         "⚠️ 60초로 좁혔더니 앵커가 서로 거의 같은 프레임이라 "
+                         "자기유사도 문턱이 치솟아 **재방문 없음이 85%%** 가 됐다. "
+                         "앵커는 시간창이 아니라 **장소 키**로 뽑아야 한다.")
     ap.add_argument("--anchor-m", type=int, default=8)
     ap.add_argument("--anchor-q", type=float, default=0.70)
     ap.add_argument("--cond2", type=float, default=0.10)
@@ -107,7 +120,9 @@ def main():
                 truly_here = (L_at == L_now)
 
                 # ③ 재방문 — li 근방을 앵커로 삼아 자기유사도 문턱
-                near = rec[np.abs(ts[rec] - ts[li]) <= args.anchor_win]
+                near = rec[ts[rec] <= ts[li]]
+                if args.anchor_win > 0:
+                    near = near[np.abs(ts[near] - ts[li]) <= args.anchor_win]
                 if len(near) < 3:
                     continue
                 A = near[np.argsort(-(E[near] @ E[li]))[:args.anchor_m]]
@@ -135,7 +150,10 @@ def main():
                     else:
                         s_aft = float(np.median(S[after, oi]))
                         state = "c" if s_aft < args.ratio * s_bef else "a"
+                # 새 자리가 T 까지 **관측됐는가** — 부재 층이 필요한지 가른다
+                obs_new = bool(len(bts) and np.any((bts >= t0) & (bts <= T)))
                 rows.append(dict(video=vn, obj=labs[oi], word=words[oi], T=int(T),
+                                 obs_new=obs_new,
                                  state=state, seen_ok=seen_ok, truly_here=bool(truly_here),
                                  n_after=int(len(after)), s_before=s_bef,
                                  L_at=int(L_at), L_now=int(L_now)))
@@ -162,6 +180,19 @@ def main():
     print("  **위치를 답한 %d건의 정밀도 %.3f  (다수결 %.3f)**" % (len(ans), prec, base))
     print("  **실제로 없는 %d건 중 '없다' 로 넘긴 비율(재현) %.3f**" % (len(gone), rec_))
     print("  상태 분포 %s" % dict(Counter(r["state"] for r in rows)))
+    print("\n  ── 새 자리가 관측됐는가로 가르면 (부재 층이 필요한 쪽은 '미관측')")
+    for tag, sub in (("관측됨", [r for r in rows if r["obs_new"]]),
+                     ("**미관측**", [r for r in rows if not r["obs_new"]])):
+        a = [r for r in sub if r["state"] in ("a", "b")]
+        sc = [r for r in sub if r["state"] != "u"]
+        g = [r for r in sc if not r["truly_here"]]
+        if not a or not sc:
+            continue
+        print("    %-10s 질의 %3d · 정밀도 %.3f (다수결 %.3f) · 부재재현 %s · b %d%%"
+              % (tag, len(sub), sum(r["truly_here"] for r in a) / len(a),
+                 sum(r["truly_here"] for r in sc) / len(sc),
+                 ("%.3f" % (sum(1 for r in g if r["state"] == "c") / len(g))) if g else "—",
+                 int(100 * sum(1 for r in sub if r["state"] == "b") / len(sub))))
     if args.out:
         json.dump(rows, open(args.out, "w"), ensure_ascii=False)
         print("→ %s" % args.out)
