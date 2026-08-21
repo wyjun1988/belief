@@ -38,7 +38,7 @@
 GT: HD-EPIC 은 관측마다 `fixture` 가 붙어 있으므로 "그 시각에 어느 가구 앞인가" 를
 채점할 수 있다. ⚠️ **키는 앞부분에서만 만들고 뒷부분에서 채점한다**(누수 방지).
 """
-import argparse, json, os, sys, tempfile
+import argparse, glob, json, os, re, sys, tempfile
 from collections import Counter, defaultdict
 
 import numpy as np
@@ -61,6 +61,17 @@ def main():
                          " 고정돼 오히려 나빠진다(실측 0.463→0.263)")
     ap.add_argument("--verif", type=float, default=0.002, help="자기검증 가중")
     ap.add_argument("--min-vis", type=int, default=3, help="장소로 칠 최소 관측 수")
+    ap.add_argument("--coarse", action="store_true",
+                    help="**가구 구획을 종류로 묶는다**(`counter.005`·`counter.006` →"
+                         " `counter`). HD-EPIC fixture 는 같은 조리대를 7구획으로"
+                         " 쪼개 놓았는데, \"노트북 어디 있어\" 에 답하려면 그 정도가"
+                         " 필요 없다 — **\"부엌 조리대\"** 면 충분하다."
+                         " 43종 → 21종으로 준다")
+    ap.add_argument("--undistort", action="store_true",
+                    help="**어안 → 선형 재투영**(크롭이 아니라 보정). 크롭은 화각과"
+                         " GT 증거를 같이 잃어 왜곡의 영향을 못 잰다 — 55%% 크롭에서"
+                         " GT bbox 14%% 가 소실되고 성능도 14.7%% 떨어져 구분이 안 됐다."
+                         " 재투영은 내용을 보존한 채 왜곡만 편다")
     ap.add_argument("--crop", type=float, default=0.0,
                     help="**어안 보정용 중앙 크롭 비율**(0=원본). HD-EPIC 영상은"
                          " 1408×1408 **원형 어안 미보정**이다 — 모서리가 검고(밝기 2)"
@@ -76,6 +87,17 @@ def main():
     from PIL import Image
     from transformers import (CLIPImageProcessor, CLIPVisionModelWithProjection,
                               CLIPTextModelWithProjection, CLIPTokenizer)
+    UMAP = None
+    if args.undistort:
+        from scripts.aria_undistort import rgb_fisheye_params, build_maps
+        cal = sorted(glob.glob(os.path.join(
+            ROOT, "data/nymeria/locbx/*/recording_head/mps/slam/online_calibration.jsonl")))
+        if not cal:
+            print("캘리브 없음 — 보정 생략"); args.undistort = False
+        else:
+            P = rgb_fisheye_params(cal[0])
+            UMAP = build_maps(P, 1408, 1408, 704, 350.0)
+            print("어안 보정 켬 (Nymeria 캘리브 근사 · 1408→704 선형)")
     cm = "openai/clip-vit-base-patch16"
     cp = CLIPImageProcessor.from_pretrained(cm)
     cn = CLIPVisionModelWithProjection.from_pretrained(
@@ -122,9 +144,12 @@ def main():
                 for m in t.get("masks", []):
                     r = mi.get(m)
                     if r and r.get("fixture"):
-                        obs.append((r["frame_number"] / FPS, r["fixture"]))
+                        fxn = r["fixture"]
+                        if args.coarse:
+                            fxn = re.sub(r"\.\d+$", "", fxn)
+                        obs.append((r["frame_number"] / FPS, fxn))
                         if nm:
-                            fx_objs[r["fixture"]][nm] += 1
+                            fx_objs[fxn][nm] += 1
         if len(obs) < 20:
             continue
         obs.sort()
@@ -150,6 +175,8 @@ def main():
             ok, img = cap.read()
             if not ok:
                 continue
+            if UMAP is not None:
+                img = cv2.remap(img, UMAP[0], UMAP[1], cv2.INTER_LINEAR)
             if args.crop > 0:
                 h_, w_ = img.shape[:2]
                 ch, cw = int(h_ * args.crop), int(w_ * args.crop)
