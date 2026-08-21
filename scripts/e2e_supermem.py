@@ -72,6 +72,14 @@ def main():
                     help="최근성 τ(시간). 0이면 끔. 기록 길이의 1/10 이 경험칙")
     ap.add_argument("--cond2", type=float, default=0.10,
                     help="조건② — 마지막 목격 때 이만큼도 안 잡히면 **모름(u)** 으로 기권")
+    ap.add_argument("--min-age-h", type=float, default=0.0,
+                    help="**부재 층을 언제 부를지 정하는 문지기.** 마지막 목격이 "
+                         "이보다 최근이면 부재 검사를 건너뛰고 '있다' 로 답한다. "
+                         "⚠️ 실측 근거: 새 위치가 관측된 질의(n=132)에서는 부재 층이 "
+                         "오히려 해로웠다(정밀도 0.591 vs 다수결 0.636) — 방금 본 것을 "
+                         "'없다' 로 뒤집는 오경보 때문이다. 반대로 미관측 질의에서는 "
+                         "0.929 vs 0.737 로 이득이 컸다. 시스템은 '관측됐는지' 를 직접 "
+                         "알 수 없지만 **목격이 얼마나 오래됐는지** 는 안다.")
     ap.add_argument("--ratio", type=float, default=0.6,
                     help="재방문 검출도가 목격 때의 이 비율 미만이면 '없다'")
     ap.add_argument("--evidence", choices=["clip", "owl", "both"], default="both")
@@ -195,6 +203,10 @@ def main():
                 continue
             gt_last = inrec[-1]                    # 기록 안 마지막 목격 (GT)
             r_true = H[-1][3]                      # **시각 T 의 실제 위치**
+            # ⚠️ 부재 층이 필요한 질의와 아닌 질의를 갈라야 한다. 최종 근거가
+            # **기록 안 세션**에 있으면 새 위치가 관측된 것이라 검색만으로 답이 맞는다.
+            # 우리 시나리오("안 보는 사이에 옮겨졌다")는 최종 근거가 **기록 밖**인 쪽이다.
+            obs_new = (H[-1][1] in [int(x[1:]) for x in args.sessions])
             moved = r_true != gt_last[3]
 
             # ① 검색 — 마지막 목격 프레임
@@ -229,8 +241,11 @@ def main():
             s_bef = float(np.median(DET[np.ix_(befw, mi)].max(1))) if len(befw) else 0.0
             # ⚠️ `detect` 오라클은 만들지 않는다 — 부재 판정이 **곧 답**이라
             # GT 를 넣으면 구성상 1.000 이 나오는 순환이다(실측으로 확인).
+            age_h = (T - gt_[li]) / 3600.0
             if len(after) == 0:
                 state = "b"
+            elif age_h < args.min_age_h:
+                state = "a"                       # 방금 봤다 — 부재 검사를 안 부른다
             elif s_bef < args.cond2:
                 state = "u"                       # 지각이 못 본다 → 기권
             else:
@@ -240,6 +255,7 @@ def main():
             says_here = state in ("a", "b")
             truly_here = (r_true == r_pred)
             rows.append(dict(T=T, obj=o, r_pred=r_pred, r_gt=gt_last[3], r_true=r_true,
+                             obs_new=bool(obs_new),
                              state=state, moved=bool(moved), n_after=int(len(after)),
                              says_here=says_here, truly_here=bool(truly_here),
                              ok=bool(says_here == truly_here),
@@ -271,6 +287,18 @@ def main():
     print("  **위치를 답한 %d건의 정밀도 %.3f  (다수결 %.3f)**" % (len(ans), prec, base))
     print("  **실제로 없는 %d건 중 '없다' 로 넘긴 비율(재현) %.3f**" % (len(truly_gone), rec))
     print("  상태 분포 %s" % dict(Counter(r["state"] for r in rows)))
+    print("\n  ── 새 위치가 기록에 관측됐는가로 가르면 (부재 층이 필요한 쪽은 '미관측')")
+    for tag, sub in (("관측됨", [r for r in rows if r["obs_new"]]),
+                     ("**미관측**", [r for r in rows if not r["obs_new"]])):
+        a = [r for r in sub if r["state"] in ("a", "b")]
+        sc2 = [r for r in sub if r["state"] != "u"]
+        g = [r for r in sc2 if not r["truly_here"]]
+        if not a or not sc2:
+            print("    %-10s 질의 %d — 판정 표본 부족" % (tag, len(sub))); continue
+        print("    %-10s 질의 %3d · 정밀도 %.3f (다수결 %.3f) · 부재재현 %s"
+              % (tag, len(sub), sum(r["truly_here"] for r in a) / len(a),
+                 sum(r["truly_here"] for r in sc2) / len(sc2),
+                 ("%.3f" % (sum(1 for r in g if r["state"] == "c") / len(g))) if g else "—"))
     if args.out:
         json.dump(rows, open(args.out, "w"), ensure_ascii=False)
         print("→ %s" % args.out)
