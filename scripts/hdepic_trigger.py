@@ -61,6 +61,13 @@ def main():
                          " 고정돼 오히려 나빠진다(실측 0.463→0.263)")
     ap.add_argument("--verif", type=float, default=0.002, help="자기검증 가중")
     ap.add_argument("--min-vis", type=int, default=3, help="장소로 칠 최소 관측 수")
+    ap.add_argument("--crop", type=float, default=0.0,
+                    help="**어안 보정용 중앙 크롭 비율**(0=원본). HD-EPIC 영상은"
+                         " 1408×1408 **원형 어안 미보정**이다 — 모서리가 검고(밝기 2)"
+                         " 직선이 휜다. 검은 영역이 프레임의 약 21%%를 차지하고,"
+                         " CLIP·OWLv2 는 원근 이미지로 학습됐으므로 손해다."
+                         " 0.7 이면 중앙 70%%만 남긴다. ⚠️ ADT 는 이미 rectify 돼 있다"
+                         " (`aria_rgb_fisheye624 -> linear`, 왜곡계수 0)")
     ap.add_argument("--device", default="mps")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
@@ -143,6 +150,11 @@ def main():
             ok, img = cap.read()
             if not ok:
                 continue
+            if args.crop > 0:
+                h_, w_ = img.shape[:2]
+                ch, cw = int(h_ * args.crop), int(w_ * args.crop)
+                y0, x0 = (h_ - ch) // 2, (w_ - cw) // 2
+                img = img[y0:y0 + ch, x0:x0 + cw]
             p = os.path.join(tmp, "T%03d_%05d.jpg" % (vi_, i))
             cv2.imwrite(p, img, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
             secs.append(float(s)); paths.append(p)
