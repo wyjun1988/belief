@@ -41,6 +41,18 @@ IT3DEgo 가 마지막 칸을 채운다. `3d_center_annot.txt` 가
 
 ⚠️ 조건① — 같은 영상에 같은 기본 이름의 다른 개체가 있으면 제외한다(`pen_1`·`pen_3`).
 검출기가 둘을 못 가르므로 "떠났다" 를 물을 수 없다.
+
+### 왜 2단계인가 — OWL 이 비싸다
+
+실측(장당): 디코드 0.014 s · CLIP 0.010 s · **OWL 0.60 s**(M1 Pro) / 1.25 s(iMac).
+전 프레임에 OWL 을 돌리면 961장 × 49영상 = 7.8시간이다. 그런데 검출 점수가 필요한
+곳은 **창(before·control·test)에 들어간 프레임뿐**이다. 그래서:
+
+    1단계  CLIP 을 전 프레임에 — 장소 게이트용 (싸다)
+    2단계  창이 정해진 뒤, **거기 쓰인 프레임에만** OWL
+
+창마다 `--cap` 장으로 균등 간격 표본을 뽑아 더 줄인다. 시간 분포를 유지하려고
+무작위가 아니라 **균등 간격**으로 뽑는다.
 """
 import argparse, io, json, os, re, sys
 from collections import defaultdict
@@ -85,19 +97,31 @@ def main():
                     help="it3d_slice.py 산출 디렉터리 — 영상별 <이름>.bin + .index.json")
     ap.add_argument("--ann", required=True, help="annotations 디렉터리")
     ap.add_argument("--cache", default="data/it3dego/cache")
-    ap.add_argument("--stride", type=int, default=15, help="pv 프레임 부분추출 간격")
+    ap.add_argument("--stride", type=int, default=0,
+                    help="pv 프레임 부분추출 간격. 0이면 자동 — "
+                         "⚠️ **조각 모드에서는 1이어야 한다.** 조각 자체가 이미 "
+                         "무작위 부분추출본(1GB≈960프레임)이라 여기서 또 15로 자르면 "
+                         "영상당 65프레임만 남아 창마다 표본이 말라버린다. "
+                         "전체 tar 모드에서만 15가 맞다.")
     ap.add_argument("--anchor-q", type=float, default=0.70,
                     help="앵커 자기유사도 분위수 → 장소 문턱 (㉗ 에서 0.70 최적)")
     ap.add_argument("--topk", type=int, default=3, help="프레임 투표에 쓸 앵커 수")
     ap.add_argument("--min-frames", type=int, default=4)
+    ap.add_argument("--cap", type=int, default=12,
+                    help="창당 최대 프레임 — OWL 비용을 줄인다. 균등 간격으로 뽑는다.")
     ap.add_argument("--max-gap", type=float, default=0.10,
                     help="허용 최대 시간 공백(영상 길이 대비) — 균일 표본 검사")
     ap.add_argument("--cond2", type=float, default=0.0, help="before 검출도 하한(조건②)")
     ap.add_argument("--videos", nargs="*", default=None)
     ap.add_argument("--device", default="mps")
-    ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument("--batch", type=int, default=16, help="CLIP 배치")
+    ap.add_argument("--owl-batch", type=int, default=2,
+                    help="OWL 배치 — ⚠️ 960×960 어텐션이 커서 8GB MPS 에서 16은 터진다"
+                         "(buffer 9.27GB). 2가 안전선.")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
+    if not args.stride:
+        args.stride = 1 if args.slices else 15
     os.makedirs(args.cache, exist_ok=True)
 
     # ── ① 프레임 목록 — 영상별 (시각, 오프셋, 크기) 와 그것을 담은 파일
@@ -196,17 +220,17 @@ def main():
             print("  %-20s 프레임 %d — 부족" % (vn, len(frames)))
             continue
 
-        if os.path.exists(cf):
-            z = np.load(cf)
-            ts, E, S = z["ts"], z["emb"], z["owl"]
+        cclip = os.path.join(args.cache, vn + ".clip.npz")
+        cowl = os.path.join(args.cache, vn + ".owl.npz")
+        if os.path.exists(cclip):
+            z = np.load(cclip)
+            ts, E = z["ts"], z["emb"]
         else:
-            TX, MK = owl_text(words)
-            ts, E, S = [], [], []
+            ts, E = [], []
             with open(src[vn], "rb") as tf:
                 for i in range(0, len(frames), args.batch):
-                    chunk = frames[i:i + args.batch]
                     ims = []
-                    for t, off, sz in chunk:
+                    for t, off, sz in frames[i:i + args.batch]:
                         tf.seek(off)
                         try:
                             ims.append(Image.open(io.BytesIO(tf.read(sz))).convert("RGB"))
@@ -218,42 +242,38 @@ def main():
                     with torch.no_grad():
                         e = cnet(**cp(images=ims, return_tensors="pt").to(
                             args.device)).image_embeds.cpu().numpy().astype(np.float32)
-                        E.append(e / (np.linalg.norm(e, axis=1, keepdims=True) + 1e-9))
-                        pv = op(images=ims, return_tensors="pt")["pixel_values"].to(args.device)
-                        fm = onet.image_embedder(pixel_values=pv)[0]
-                        b, ph, pw, hd = fm.shape
-                        lg, _ = onet.class_predictor(
-                            fm.reshape(b, ph * pw, hd),
-                            TX.unsqueeze(0).expand(b, -1, -1),
-                            MK.unsqueeze(0).expand(b, -1))
-                        S.append(torch.sigmoid(lg).amax(1).float().cpu().numpy())
-            ts = np.array(ts, np.int64)
-            E = np.concatenate(E); S = np.concatenate(S)
-            np.savez_compressed(cf, ts=ts, emb=E, owl=S)
-        print("  %-20s 프레임 %d · 물체 %d" % (vn, len(ts), len(labs)), flush=True)
+                    E.append(e / (np.linalg.norm(e, axis=1, keepdims=True) + 1e-9))
+            ts = np.array(ts, np.int64); E = np.concatenate(E)
+            np.savez_compressed(cclip, ts=ts, emb=E)
 
         # ── 조건① 같은 기본 이름의 다른 개체가 있으면 제외
         dup = {w for w in words if words.count(w) > 1}
+
+        def pick(idx):
+            """창에서 --cap 장을 **균등 간격**으로 — 시간 분포를 유지한다."""
+            if len(idx) <= args.cap:
+                return idx
+            return idx[np.linspace(0, len(idx) - 1, args.cap).astype(int)]
+
+        events, need = [], set()
         for oi, segl in segs.items():
             if oi >= len(words) or words[oi] in dup:
                 continue
             bts = box.get(oi, np.array([], np.int64))
+            if len(bts) == 0:
+                continue
             for si in range(len(segl) - 1):
                 t0, t1, L = segl[si]
                 if segl[si + 1][2] == L:            # 위치가 안 바뀌면 이동이 아니다
                     continue
-                A = np.nonzero((ts >= t0) & (ts <= t1) &
-                               (np.isin(ts, bts) if len(bts) else False))[0]
-                if len(A) < 3:
-                    # bbox 시각이 부분추출과 안 맞을 수 있다 → 가장 가까운 프레임으로
-                    if len(bts) == 0:
-                        continue
-                    A = np.unique([int(np.argmin(np.abs(ts - b))) for b in bts
-                                   if t0 <= b <= t1])
-                    A = A[(ts[A] >= t0) & (ts[A] <= t1)] if len(A) else A
+                # 앵커 — bbox 시각과 부분추출 프레임이 정확히 안 맞으므로 최근접
+                cand = bts[(bts >= t0) & (bts <= t1)]
+                if len(cand) == 0:
+                    continue
+                A = np.unique([int(np.argmin(np.abs(ts - b))) for b in cand])
+                A = A[(ts[A] >= t0) & (ts[A] <= t1)]
                 if len(A) < 3:
                     continue
-                # 앵커 자기유사도 → 절대 문턱
                 SS = E[A] @ E[A].T
                 iu = np.triu_indices(len(A), 1)
                 thr = float(np.quantile(SS[iu], args.anchor_q))
@@ -261,16 +281,58 @@ def main():
                 sim = np.sort(E[rest] @ E[A].T, 1)[:, -min(args.topk, len(A)):].mean(1)
                 G = rest[sim >= thr]
                 mid = (t0 + t1) // 2
-                bef = G[(ts[G] >= t0) & (ts[G] <= mid)]
-                ctl = G[(ts[G] > mid) & (ts[G] <= t1)]
-                tst = G[ts[G] > t1]
+                bef = pick(G[(ts[G] >= t0) & (ts[G] <= mid)])
+                ctl = pick(G[(ts[G] > mid) & (ts[G] <= t1)])
+                tst = pick(G[ts[G] > t1])
                 if min(len(bef), len(ctl), len(tst)) < args.min_frames:
                     continue
-                sb, sc, st = (float(np.median(S[x, oi])) for x in (bef, ctl, tst))
-                rows.append(dict(video=vn, obj=labs[oi], word=words[oi], loc=L,
-                                 n_bef=len(bef), n_ctl=len(ctl), n_tst=len(tst),
-                                 s_before=sb, s_control=sc, s_test=st,
-                                 drop_ctl=sb - sc, drop_tst=sb - st))
+                events.append((oi, L, bef, ctl, tst))
+                need.update(bef.tolist() + ctl.tolist() + tst.tolist())
+
+        if not events:
+            print("  %-20s 프레임 %d · 물체 %d · 사건 0" % (vn, len(ts), len(labs)), flush=True)
+            continue
+        need = np.array(sorted(need))
+        print("  %-20s 프레임 %d · 물체 %d · 사건 %d · OWL 필요 %d장 (%.0f%%)"
+              % (vn, len(ts), len(labs), len(events), len(need),
+                 len(need) * 100.0 / len(ts)), flush=True)
+
+        # ── 2단계 OWL — 창에 쓰인 프레임에만
+        if os.path.exists(cowl):
+            z = np.load(cowl)
+            oidx, S = z["idx"], z["owl"]
+        else:
+            TX, MK = owl_text(words)
+            fmap = {t: (o, sz) for t, o, sz in frames}
+            S = []
+            with open(src[vn], "rb") as tf:
+                for i in range(0, len(need), args.owl_batch):
+                    ims = []
+                    for k in need[i:i + args.owl_batch]:
+                        o, sz = fmap[int(ts[k])]
+                        tf.seek(o)
+                        ims.append(Image.open(io.BytesIO(tf.read(sz))).convert("RGB"))
+                    pvx = op(images=ims, return_tensors="pt")["pixel_values"].to(args.device)
+                    with torch.no_grad():
+                        fm = onet.image_embedder(pixel_values=pvx)[0]
+                        b, ph, pw, hd = fm.shape
+                        lg, _ = onet.class_predictor(
+                            fm.reshape(b, ph * pw, hd),
+                            TX.unsqueeze(0).expand(b, -1, -1),
+                            MK.unsqueeze(0).expand(b, -1))
+                        S.append(torch.sigmoid(lg).amax(1).float().cpu().numpy())
+            S = np.concatenate(S); oidx = need
+            np.savez_compressed(cowl, idx=oidx, owl=S)
+        pos = {int(k): i for i, k in enumerate(oidx)}
+
+        for oi, L, bef, ctl, tst in events:
+            def med(ix):
+                return float(np.median([S[pos[int(k)], oi] for k in ix if int(k) in pos]))
+            sb, sc, st = med(bef), med(ctl), med(tst)
+            rows.append(dict(video=vn, obj=labs[oi], word=words[oi], loc=L,
+                             n_bef=len(bef), n_ctl=len(ctl), n_tst=len(tst),
+                             s_before=sb, s_control=sc, s_test=st,
+                             drop_ctl=sb - sc, drop_tst=sb - st))
 
     if not rows:
         print("채점 가능한 사건이 없다.")
