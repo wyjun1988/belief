@@ -61,7 +61,10 @@ def main():
         if r.get("answer_start_time") is None:
             continue
         by[r["video_id"]].append(r)
+    vdir = args.videos or os.path.join(args.root, "videos")
+    os.makedirs(vdir, exist_ok=True)
     if args.local_only:
+        # ⚠️ **후보를 고르기 전에** 걸러야 한다 — vids 를 먼저 계산하면 필터가 무효다
         have = {os.path.basename(p) for p in glob.glob(os.path.join(vdir, "*.mp4"))}
         by = {v: q for v, q in by.items()
               if os.path.basename(q[0]["video"]) in have}
@@ -69,8 +72,6 @@ def main():
     vids = sorted(by, key=lambda v: -len(by[v]))[:args.n_video]
     print("영상 %d · 질의 %d" % (len(vids), sum(len(by[v]) for v in vids)))
 
-    vdir = args.videos or os.path.join(args.root, "videos")
-    os.makedirs(vdir, exist_ok=True)
     try:
         from huggingface_hub import hf_hub_download
     except Exception:
