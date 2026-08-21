@@ -21,6 +21,15 @@
 상태를 써넣어 **그래프를 오염시킨다**(갱신은 읽기가 아니라 쓰기라 누적된다).
 다만 실사용 조건은 훨씬 유리하다 — 여기서 그 셋을 하나씩 켜며 잰다:
 
+⚠️ **1fps 를 다 저장하기로 하면(2026-08-21) 필요한 지표가 바뀐다.** 프레임을 버리지
+않으므로 트리거가 틀려도 **데이터가 사라지지 않고 계산만 헛돈다** — 나중에 다시
+돌리면 된다. 즉 트리거는 "맞는 곳만 고르는 관문" 이 아니라 **"계산 예산을 어디에 쓸지
+정하는 배분기"** 다. 그래서 top-1 정밀도보다 **top-k 재현율**(정답 장소가 상위 k 안에
+드는가)이 맞는 지표다.
+
+예산도 생각만큼 빡빡하지 않다: 12시간 43,200프레임 · OWLv2 2,046 ms/프레임 →
+하룻밤 8시간에 **14,100프레임(33%)**. **30배가 아니라 3배**만 줄이면 된다.
+
   A **단순 최근접**   키 중 가장 닮은 것 (기준선)
   B **+ 연속성**      직전 판정에 가산점 (순간이동 안 한다)
   C **+ 자기검증**    그 장소에 있어야 할 물체가 실제로 보이는지 확인
@@ -46,7 +55,11 @@ def main():
     ap.add_argument("--period", type=float, default=30.0, help="트리거 주기(초)")
     ap.add_argument("--key-frac", type=float, default=0.4,
                     help="앞 이 비율로 키를 만들고 나머지로 채점(누수 방지)")
-    ap.add_argument("--cont", type=float, default=0.05, help="연속성 가산점")
+    ap.add_argument("--cont", type=float, default=0.005,
+                    help="연속성 가산점. ⚠️ **유사도 차이 규모에 맞춰야 한다** — 장소 키"
+                         " 간 유사도 차이가 0.01~0.05 뿐이라 0.05 를 주면 직전 장소에"
+                         " 고정돼 오히려 나빠진다(실측 0.463→0.263)")
+    ap.add_argument("--verif", type=float, default=0.002, help="자기검증 가중")
     ap.add_argument("--min-vis", type=int, default=3, help="장소로 칠 최소 관측 수")
     ap.add_argument("--device", default="mps")
     ap.add_argument("--out", default=None)
@@ -86,6 +99,7 @@ def main():
     vdir = os.path.join(args.root, "Videos", args.part)
     tmp = tempfile.mkdtemp()
     tot = {k: [0, 0] for k in ("A", "B", "C", "D")}
+    rec = {k: [] for k in (1, 2, 3, 5)}          # top-k 재현율
     n_place = []
 
     vids = sorted(v for v in assoc if v.startswith(args.part)
@@ -184,13 +198,17 @@ def main():
                 bonus = np.array([np.mean([z[wi[w]] for w in ws]) if ws else 0.0
                                   for ws in OBJW], np.float32)
                 bonus = (bonus - bonus.mean()) / (bonus.std() + 1e-9)
-                simC = sim + 0.02 * bonus
-                simD = simB + 0.02 * bonus
+                simC = sim + args.verif * bonus
+                simD = simB + args.verif * bonus
             else:
                 simC, simD = sim, simB
             c = int(np.argmax(simC)); d = int(np.argmax(simD))
             for k, pick in (("A", a), ("B", b), ("C", c), ("D", d)):
                 tot[k][0] += int(knames[pick] == gt); tot[k][1] += 1
+            # **top-k 재현율** — 다 저장하는 구조에서는 이쪽이 맞는 지표다
+            order = np.argsort(-sim)
+            for k in rec:
+                rec[k].append(gt in [knames[j] for j in order[:k]])
             prev = d
         print("  %-22s 장소 %-2d · 채점 %d (누적 %d)"
               % (vid[4:], len(keys), tot["A"][1], tot["A"][1]), flush=True)
@@ -206,7 +224,13 @@ def main():
                   ("C", "+자기검증"), ("D", "**연속성+자기검증**")):
         acc = tot[k][0] / tot[k][1]
         print("%-24s %-8.3f %.1f배" % (nm, acc, acc / ch))
-    print("\n→ 90%대면 이 설계가 선다. 60%대면 그래프 오염 때문에 못 쓴다.")
+    print("\n**top-k 재현율** (정답 장소가 상위 k 안에 드는가 — 배분기 관점)")
+    for k in sorted(rec):
+        if rec[k]:
+            print("  top-%-2d  %.3f  (후보 %d개 처리 = 전체의 %.0f%%)"
+                  % (k, float(np.mean(rec[k])), k, 100.0 * k / np.mean(n_place)))
+    print("\n→ 다 저장하면 트리거는 **배분기**다. top-k 재현율이 높고 k 가 작으면")
+    print("  '3배 줄이기' 가 달성된다. top-1 정밀도는 부차적이다.")
     if args.out:
         json.dump({k: v for k, v in tot.items()}, open(args.out, "w"))
         print("→ %s" % args.out)
