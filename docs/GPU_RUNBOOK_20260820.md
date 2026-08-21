@@ -363,3 +363,42 @@ PY
 **가장 중요한 한 줄**: J1·J2 로그 맨 아래 **"여백 순위"** 와, 표의 **시점여백 열**.
 시점여백이 양수로 뒤집힌 표현이 하나라도 나오면 전체가 연결된다 — 그게 없으면
 판별 학습으로 넘어가야 한다.
+
+## 원격 실행 함정 — `pkill -f` 가 ssh 를 통해 원격 작업을 죽인다 (2026-08-21)
+
+아이맥에서 MBP 작업을 이렇게 띄웠다:
+
+```bash
+ssh mbp "cd ~/khronos && ~/khronos-venv/bin/python -u scripts/it3d_absence.py ..."
+```
+
+그 뒤 **아이맥 쪽** 작업만 멈추려고 `pkill -f "it3d_absence.py"` 를 했더니
+MBP 작업도 함께 죽었다(33영상 중 8개에서 중단).
+
+원인: 로컬 `ssh` 프로세스의 **명령줄에 원격 명령 문자열이 그대로 들어 있다.**
+`pkill -f` 는 전체 명령줄을 보므로 그 ssh 를 잡고, ssh 가 끊기면 원격 프로세스도
+SIGHUP 으로 죽는다.
+
+**대응**: 원격 작업이 걸려 있을 때 `pkill -f` 는 원격 명령에 안 나오는 문자열로 좁힌다.
+로컬만 잡으려면 PID 로 죽이거나 `pgrep -f` 로 먼저 확인한다.
+
+```bash
+pgrep -alf "it3d_absence"      # 먼저 무엇이 잡히는지 본다 (ssh 도 나온다)
+kill <로컬 python PID>          # PID 로 정확히
+```
+
+전에 물린 `ps aux | grep <패턴>` 이 **자기 자신의 셸**을 잡아 부모를 죽였던 것과
+같은 부류다 — **패턴이 의도한 것보다 넓게 잡힌다.**
+
+## exFAT rsync 가 `._` AppleDouble 을 딸려보낸다
+
+외장(exFAT)에서 `rsync -a` 로 가져오면 파일마다 `._<이름>` 이 생긴다.
+셸 glob(`*.index.json`)은 **점파일을 안 잡아** 검증을 통과하는데
+`os.listdir` 은 집어서 바이너리를 json 으로 읽다 `UnicodeDecodeError` 로 죽는다.
+목록을 만들 때 `f.startswith(".")` 를 반드시 건다.
+
+## zsh 는 따옴표 없는 변수를 단어분할하지 않는다
+
+`--videos $LIST` 로 영상 16개를 넘겼는데 argparse 가 **1개**로 받았다.
+Claude Code 의 Bash 도구는 zsh 라 bash 처럼 쪼개지지 않는다.
+목록을 인자로 넘기려면 `bash -c '...'` 안에서 확장하거나 `${=LIST}` 를 쓴다.
