@@ -35,6 +35,17 @@ IT3DEgo 가 마지막 칸을 채운다. `3d_center_annot.txt` 가
 보이는 프레임" 을 포함해 유리해진다). 판정은 짝지은 부호검정이라 물체별 어휘
 편향·시점·조도가 상쇄된다 — ㉜ 에서 물린 "물체 간 절대값 비교" 함정을 원천 차단한다.
 
+⚠️ **자리 수준에서는 "떠났다"가 "안 보인다"가 아니다.** 16영상 123사건 첫 실측에서
+대조 하락 -0.0000 · 검정 하락 **-0.0439**(AUC 0.354)로 **방향이 반대**로 나왔다.
+위치 간 거리가 0.6~1.9 m라 떠난 자리와 새 자리가 **같은 시야 안**에 있고, 물체를
+집어 들면 카메라에 가까워져 검출이 오히려 세진다. 프레임 단위 최대 검출점수는
+"시야에 있나" 를 재지 "이 자리에 있나" 를 재지 못한다 — **신호의 공간 해상도 한계**다.
+
+그래서 사건마다 두 가지를 더 기록해 이 진단을 검증한다:
+  · `dist`     떠난 자리와 새 자리의 **3D 거리** — 멀수록 시야에서 벗어나야 한다
+  · `s_test_gone` 검정 창 중 **GT 2D bbox 가 없는**(정말 안 보이는) 프레임만의 중앙값
+    (`s_test_vis` 는 그 반대) — 시야를 벗어났을 때만 우리 신호가 듣는지 가른다
+
 ⚠️ 장소 게이트에 **퍼센타일을 쓰지 않는다.** 종전에 상위 20% 로 자르면 L 을 전혀
 안 보는 구간에서도 뭔가 뽑혀 장소 적중률이 정확히 0.00 이 됐다(㉗). 앵커 자기유사도
 분위수를 절대 문턱으로 쓴다.
@@ -107,6 +118,9 @@ def main():
                     help="앵커 자기유사도 분위수 → 장소 문턱 (㉗ 에서 0.70 최적)")
     ap.add_argument("--topk", type=int, default=3, help="프레임 투표에 쓸 앵커 수")
     ap.add_argument("--min-frames", type=int, default=4)
+    ap.add_argument("--bbox-tol", type=float, default=2e6,
+                    help="프레임 시각이 GT bbox 시각과 이 안이면 '보인다' 로 본다"
+                         " (100ns 단위 · 기본 0.2초)")
     ap.add_argument("--cap", type=int, default=12,
                     help="창당 최대 프레임 — OWL 비용을 줄인다. 균등 간격으로 뽑는다.")
     ap.add_argument("--max-gap", type=float, default=0.10,
@@ -258,6 +272,12 @@ def main():
                 return idx
             return idx[np.linspace(0, len(idx) - 1, args.cap).astype(int)]
 
+        # 위치 id → 3D 중심 (거리 진단용)
+        cen = {}
+        for line in open(os.path.join(ad, "3d_center_annot.txt")):
+            q = line.split()
+            if len(q) >= 7:
+                cen[(int(q[2]), int(q[6]))] = (float(q[3]), float(q[4]), float(q[5]))
         events, need = [], set()
         for oi, segl in segs.items():
             if oi >= len(words) or words[oi] in dup:
@@ -289,7 +309,11 @@ def main():
                 tst = pick(G[ts[G] > t1])
                 if min(len(bef), len(ctl), len(tst)) < args.min_frames:
                     continue
-                events.append((oi, L, bef, ctl, tst))
+                # 새 자리까지의 3D 거리 — 진단용
+                c0 = cen.get((oi, L)); c1 = cen.get((oi, segl[si + 1][2]))
+                dist = float(np.linalg.norm(np.array(c0) - np.array(c1))) \
+                    if c0 and c1 else float("nan")
+                events.append((oi, L, bef, ctl, tst, dist, bts))
                 need.update(bef.tolist() + ctl.tolist() + tst.tolist())
 
         if not events:
@@ -328,13 +352,21 @@ def main():
             np.savez_compressed(cowl, idx=oidx, owl=S)
         pos = {int(k): i for i, k in enumerate(oidx)}
 
-        for oi, L, bef, ctl, tst in events:
+        for oi, L, bef, ctl, tst, dist, bts in events:
             def med(ix):
-                return float(np.median([S[pos[int(k)], oi] for k in ix if int(k) in pos]))
+                v = [S[pos[int(k)], oi] for k in ix if int(k) in pos]
+                return float(np.median(v)) if v else float("nan")
+            # 검정 창을 **GT 로 정말 안 보이는 프레임**과 아닌 것으로 가른다
+            tol = args.bbox_tol
+            vis = np.array([bool(len(bts)) and bool(np.any(np.abs(bts - ts[int(k)]) <= tol))
+                            for k in tst])
             sb, sc, st = med(bef), med(ctl), med(tst)
             rows.append(dict(video=vn, obj=labs[oi], word=words[oi], loc=L,
                              n_bef=len(bef), n_ctl=len(ctl), n_tst=len(tst),
+                             dist=dist, vis_frac=float(vis.mean()) if len(vis) else 0.0,
                              s_before=sb, s_control=sc, s_test=st,
+                             s_test_gone=med(np.array(tst)[~vis]) if (~vis).any() else None,
+                             s_test_vis=med(np.array(tst)[vis]) if vis.any() else None,
                              drop_ctl=sb - sc, drop_tst=sb - st))
 
     if not rows:

@@ -45,6 +45,40 @@ def main():
         print("  ≥%.2f    %6d %+10.4f %+10.4f  %4d/%-4d %10.3g %10.3f"
               % (c, len(sel), np.median(dc), np.median(dt), w, len(sel), pw,
                  u / (len(dt) * len(dc))))
+    # ── 진단 ① 새 자리까지의 거리별
+    d = [r for r in rows if r.get("dist") == r.get("dist") and r.get("dist") is not None]
+    if len(d) > 20:
+        q = np.quantile([r["dist"] for r in d], [0, .25, .5, .75, 1.0])
+        print("\n거리별 (떠난 자리 → 새 자리의 3D 거리)")
+        print("  %-14s %6s %10s %10s %10s" % ("구간(m)", "사건", "대조 하락", "검정 하락", "떠남>있음"))
+        for i in range(4):
+            sub = [r for r in d if q[i] <= r["dist"] <= q[i + 1]]
+            if len(sub) < 5:
+                continue
+            dc = np.array([r["drop_ctl"] for r in sub]); dt = np.array([r["drop_tst"] for r in sub])
+            print("  %5.2f ~ %-6.2f %6d %+10.4f %+10.4f  %4d/%-4d"
+                  % (q[i], q[i + 1], len(sub), np.median(dc), np.median(dt),
+                     int((dt > dc).sum()), len(sub)))
+
+    # ── 진단 ② 검정 창에서 물체가 **GT 로 안 보이는** 프레임만
+    g = [r for r in rows if r.get("s_test_gone") is not None]
+    print("\n검정 창을 GT 가시성으로 가르면 (사건 %d 중 %d 에 '안 보이는' 프레임 있음)"
+          % (len(rows), len(g)))
+    if len(g) >= 6:
+        dg = np.array([r["s_before"] - r["s_test_gone"] for r in g])
+        dcg = np.array([r["drop_ctl"] for r in g])
+        _, pg = wilcoxon(dg, dcg, alternative="greater")
+        print("  안 보이는 프레임만 하락 %+.4f vs 대조 %+.4f · 떠남>있음 %d/%d · p=%.3g"
+              % (np.median(dg), np.median(dcg), int((dg > dcg).sum()), len(g), pg))
+    v = [r for r in rows if r.get("s_test_vis") is not None]
+    if len(v) >= 6:
+        dv = np.array([r["s_before"] - r["s_test_vis"] for r in v])
+        dcv = np.array([r["drop_ctl"] for r in v])
+        print("  아직 보이는 프레임만 하락 %+.4f vs 대조 %+.4f · 떠남>있음 %d/%d"
+              % (np.median(dv), np.median(dcv), int((dv > dcv).sum()), len(v)))
+    vf = np.array([r.get("vis_frac", 0.0) for r in rows])
+    print("  검정 창에서 물체가 여전히 보이는 프레임 비율 중앙 **%.0f%%**" % (100 * np.median(vf)))
+
     sel = [r for r in rows if r["s_before"] >= args.cond2[0]]
     dc = np.array([r["drop_ctl"] for r in sel]); dt = np.array([r["drop_tst"] for r in sel])
     b = binomtest(int((dt > dc).sum()), int((dt != dc).sum()), 0.5, alternative="greater")
