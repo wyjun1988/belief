@@ -59,6 +59,12 @@ def main():
     ap.add_argument("--anchor-m", type=int, default=8)
     ap.add_argument("--anchor-q", type=float, default=0.70)
     ap.add_argument("--cond2", type=float, default=0.10)
+    ap.add_argument("--calib", action="store_true",
+                    help="**물체마다 자기 분포로 문턱을 잡는다.** ⚠️ 절대문턱 0.10 은 "
+                         "잡음 바닥보다 낮다 — GT bbox 대조 실측(`it3d_percep.py`): "
+                         "안 보이는 프레임의 검출도 중앙 0.152, 그 61%%가 0.10 을 넘는다"
+                         "(보일 때 0.380). 검출기 자체는 멀쩡하다(AUC 0.812).")
+    ap.add_argument("--calib-hi", type=float, default=0.90)
     ap.add_argument("--ratio", type=float, default=0.6)
     ap.add_argument("--bbox-tol", type=float, default=2e6)
     ap.add_argument("--min-frames", type=int, default=4)
@@ -150,7 +156,16 @@ def main():
                 if state != "b" and len(after) < args.min_frames:
                     state = "b"
                 if state != "b":
-                    if s_bef < args.cond2:
+                    if args.calib:
+                        allsc = S[rec, oi]
+                        nfl = float(np.median(allsc))
+                        nhi = float(np.quantile(allsc, args.calib_hi))
+                        if nhi - nfl < 0.05 or s_bef < nfl + 0.05:
+                            state = "u"
+                        else:
+                            s_aft = float(np.median(S[after, oi]))
+                            state = "c" if s_aft < nfl + args.ratio * (s_bef - nfl) else "a"
+                    elif s_bef < args.cond2:
                         state = "u"
                     else:
                         s_aft = float(np.median(S[after, oi]))

@@ -71,7 +71,16 @@ def main():
     ap.add_argument("--tau-h", type=float, default=0.0,
                     help="최근성 τ(시간). 0이면 끔. 기록 길이의 1/10 이 경험칙")
     ap.add_argument("--cond2", type=float, default=0.10,
-                    help="조건② — 마지막 목격 때 이만큼도 안 잡히면 **모름(u)** 으로 기권")
+                    help="조건② 절대문턱(--calib 이면 안 씀)")
+    ap.add_argument("--calib", action="store_true",
+                    help="**물체마다 자기 분포로 문턱을 잡는다.** ⚠️ 절대문턱 0.10 은 "
+                         "잡음 바닥보다 낮았다 — IT3DEgo GT bbox 대조 실측: 물체가 "
+                         "**안 보이는** 프레임의 검출도 중앙이 0.152 이고 그 61%가 "
+                         "0.10 을 넘는다(보일 때는 0.380). 그래서 '없다' 를 말할 수가 "
+                         "없었다. 검출기 자체는 멀쩡하다(AUC 0.812). "
+                         "대신 그 물체의 **전 기록 분위수**를 기준으로 잡는다 — "
+                         "물체는 대개 소수 프레임에만 보이므로 중앙값이 곧 잡음 바닥이다.")
+    ap.add_argument("--calib-hi", type=float, default=0.90)
     ap.add_argument("--min-age-h", type=float, default=0.0,
                     help="**부재 층을 언제 부를지 정하는 문지기.** 마지막 목격이 "
                          "이보다 최근이면 부재 검사를 건너뛰고 '있다' 로 답한다. "
@@ -236,6 +245,10 @@ def main():
             # "있다" 로 붙었다(다수결과 무구별). 검증된 형태로 간다 —
             # **물체 자기 기준의 전/후 하락**(㉜)과 **조건②**(㉓·㉔·㉞).
             mi = match(o)
+            # 물체 자기 분포 — 중앙 = 잡음 바닥, 상위분위 = 보일 때 수준
+            allsc = DET[np.ix_(rec, mi)].max(1)
+            nfloor = float(np.median(allsc))
+            nhi = float(np.quantile(allsc, args.calib_hi))
             befw = np.array([i for i in rec if rm_of[i] == r_pred
                              and gt_[li] - 900 <= gt_[i] <= gt_[li]])
             s_bef = float(np.median(DET[np.ix_(befw, mi)].max(1))) if len(befw) else 0.0
@@ -246,6 +259,17 @@ def main():
                 state = "b"
             elif age_h < args.min_age_h:
                 state = "a"                       # 방금 봤다 — 부재 검사를 안 부른다
+            elif args.calib:
+                # 조건② — 그 물체가 기록 안에서 잡음 바닥 위로 올라오는 일이 있나
+                if nhi - nfloor < 0.05:
+                    state = "u"
+                else:
+                    s_aft = float(np.median(DET[np.ix_(after, mi)].max(1)))
+                    # 목격 창이 잡음 바닥에 붙어 있으면 그 창 자체가 못 믿을 것
+                    if s_bef < nfloor + 0.05:
+                        state = "u"
+                    else:
+                        state = "c" if s_aft < nfloor + args.ratio * (s_bef - nfloor) else "a"
             elif s_bef < args.cond2:
                 state = "u"                       # 지각이 못 본다 → 기권
             else:
