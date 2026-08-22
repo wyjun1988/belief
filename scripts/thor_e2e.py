@@ -122,8 +122,11 @@ def main():
             gt_state = ("b" if rt.get(v1["room"]) and v1["room"] not in g["revisited"]
                         else "c" if r_now != v1["room"] else "a")
             bl = belief(ot, hd) if state == "c" else []
+            # ⚠️ **id 와 타입을 비교하면 안 된다.** 군집은 방 **id** 로 매핑되는데
+            # GT 를 방 **타입**("Bedroom")으로 뒀더니 방 정답률이 **정확히 0.000** 이 나왔다.
             rows.append(dict(house=os.path.basename(hd), oid=oid, otype=ot,
-                             r_gt=rt.get(v1["room"]), r_pred=r_pred,
+                             r_gt=rt.get(v1["room"]), r_pred=rt.get(r_pred, r_pred),
+                             r_pred_id=r_pred,
                              r_now=rt.get(r_now) if r_now else None,
                              moved=oid in g["moved"], state=state, gt_state=gt_state,
                              s_before=sb, s_after=sa, belief=bl))
