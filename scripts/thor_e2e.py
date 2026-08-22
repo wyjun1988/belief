@@ -121,7 +121,7 @@ def main():
             r_now = g2.get("room")
             gt_state = ("b" if rt.get(v1["room"]) and v1["room"] not in g["revisited"]
                         else "c" if r_now != v1["room"] else "a")
-            bl = belief(ot, hd) if state == "c" else []
+            bl = belief(ot, hd)
             # ⚠️ **id 와 타입을 비교하면 안 된다.** 군집은 방 **id** 로 매핑되는데
             # GT 를 방 **타입**("Bedroom")으로 뒀더니 방 정답률이 **정확히 0.000** 이 나왔다.
             rows.append(dict(house=os.path.basename(hd), oid=oid, otype=ot,
@@ -159,6 +159,24 @@ def main():
                    and r["r_pred"] == r["r_gt"])
                or (r["gt_state"] == "c" and r["state"] == "c"
                    and (r["r_now"] is None or r["r_now"] in r["belief"])))
+    # ── **사용자 질문에 대한 최종 답**
+    # ⚠️ 상태 3분류·전체정답은 "원래 방을 떠났나" 를 묻는다. 그런데 사용자 질문은
+    # **"지금 어디 있나"** 다. 시스템이 새 위치에서 물체를 찾아내면 그게 최선의
+    # 답인데 종전 채점은 그것을 틀렸다고 셌다. 답 = (a)/(b)면 예측 방,
+    # (c)면 belief 1순위. 정답 = 실제 현재 방.
+    ans = [(r["r_pred"] if r["state"] in ("a", "b")
+            else (r["belief"][0] if r["belief"] else None), r.get("r_now")) for r in rows]
+    ans = [(a, t) for a, t in ans if t]
+    if ans:
+        acc = sum(1 for a, t in ans if a == t) / len(ans)
+        mb = Counter(t for _, t in ans).most_common(1)[0][1] / len(ans)
+        print("⑥ **최종 답('지금 어디 있나') %.3f (%d건) — 최빈 %.3f**" % (acc, len(ans), mb))
+    if ans:
+        bo = [(r["belief"][0] if r["belief"] else None, r.get("r_now")) for r in rows]
+        bo = [(a, t) for a, t in bo if t]
+        if bo:
+            print("   └ **belief 단독** %.3f (%d건) — 인지 파이프라인 없이 사전확률만"
+                  % (sum(1 for a, t in bo if a == t) / len(bo), len(bo)))
     print("⑤ **전체 정답 %.3f (%d/%d)**" % (full / n, full, n))
     if args.out:
         json.dump(rows, open(args.out, "w"), ensure_ascii=False)

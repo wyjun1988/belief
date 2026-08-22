@@ -134,7 +134,7 @@ def main():
                                  r_gt=rt.get(r_old), r_pred=rt.get(r_pred, r_pred),
                                  r_now=rt.get(r_true), moved=bool(mv),
                                  state=state, gt_state=gt_state,
-                                 belief=belief(ot, hd) if state == "c" else []))
+                                 belief=belief(ot, hd)))
 
     if not rows:
         print("표본 없음"); return
@@ -164,6 +164,37 @@ def main():
                if (r["gt_state"] in ("a", "b") and r["state"] == r["gt_state"]
                    and r["r_pred"] == r["r_gt"])
                or (r["gt_state"] == "c" and r["state"] == "c" and r["r_now"] in r["belief"]))
+    # ── **사용자 질문에 대한 최종 답**
+    # ⚠️ 상태 3분류·전체정답은 "원래 방을 떠났나" 를 묻는다. 그런데 사용자 질문은
+    # **"지금 어디 있나"** 다. 시스템이 새 위치에서 물체를 찾아내면 그게 최선의
+    # 답인데 종전 채점은 그것을 틀렸다고 셌다. 답 = (a)/(b)면 예측 방,
+    # (c)면 belief 1순위. 정답 = 실제 현재 방.
+    ans = [(r["r_pred"] if r["state"] in ("a", "b")
+            else (r["belief"][0] if r["belief"] else None), r.get("r_now")) for r in rows]
+    ans = [(a, t) for a, t in ans if t]
+    if ans:
+        acc = sum(1 for a, t in ans if a == t) / len(ans)
+        mb = Counter(t for _, t in ans).most_common(1)[0][1] / len(ans)
+        print("⑥ **최종 답('지금 어디 있나') %.3f (%d건) — 최빈 %.3f**" % (acc, len(ans), mb))
+    if ans:
+        bo = [(r["belief"][0] if r["belief"] else None, r.get("r_now")) for r in rows]
+        bo = [(a, t) for a, t in bo if t]
+        if bo:
+            print("   └ **belief 단독** %.3f (%d건) — 인지 파이프라인 없이 사전확률만"
+                  % (sum(1 for a, t in bo if a == t) / len(bo), len(bo)))
+    # ── 관측 vs 사전확률 — 어디서 갈리나
+    sub = [r for r in rows if r.get("r_now") and r.get("belief")]
+    for tag, ss in (("전체", sub), ("이동한 물체", [r for r in sub if r["moved"]]),
+                    ("안 움직인 물체", [r for r in sub if not r["moved"]])):
+        if len(ss) < 10:
+            continue
+        obs = np.mean([r["r_pred"] == r["r_now"] for r in ss])
+        bel = np.mean([r["belief"][0] == r["r_now"] for r in ss])
+        dis = [r for r in ss if r["r_pred"] != r["belief"][0]]
+        do = np.mean([r["r_pred"] == r["r_now"] for r in dis]) if dis else float("nan")
+        db = np.mean([r["belief"][0] == r["r_now"] for r in dis]) if dis else float("nan")
+        print("   %-12s n=%4d · 관측만 %.3f · 사전확률만 %.3f │ 둘이 다를 때(%d건) 관측 %.3f vs 사전 %.3f"
+              % (tag, len(ss), obs, bel, len(dis), do, db))
     print("⑤ **전체 정답 %.3f (%d/%d)**" % (full / n, full, n))
     if args.out:
         json.dump(rows, open(args.out, "w"), ensure_ascii=False)
