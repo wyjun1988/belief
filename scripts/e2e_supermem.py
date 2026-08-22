@@ -81,6 +81,41 @@ def main():
                          "대신 그 물체의 **전 기록 분위수**를 기준으로 잡는다 — "
                          "물체는 대개 소수 프레임에만 보이므로 중앙값이 곧 잡음 바닥이다.")
     ap.add_argument("--calib-hi", type=float, default=0.90)
+    ap.add_argument("--accum", action="store_true",
+                    help="**A5 — 관측을 증거로 누적한다.** 분위수 하나로 판정하는 대신, "
+                         "재방문 **시점마다** 로그우도비를 더한다. 근거: 물체가 그 자리에 "
+                         "있어도 프레임 대부분에는 안 보인다(㊱ — 보일 때 0.380 vs 전체 "
+                         "중앙 0.152). 그래서 '한 번 안 보였다' 는 약한 증거이고 "
+                         "'다른 시점에서 여러 번 안 보였다' 가 강한 증거다. "
+                         "비슷한 프레임 여러 장은 **한 시점으로 친다**(--view-sim).")
+    ap.add_argument("--fire-rate", type=float, default=0.20,
+                    help="발화 문턱을 물체별로 정하는 기준 — 전 기록에서 이 비율만 넘게")
+    ap.add_argument("--view-sim", type=float, default=0.95,
+                    help="이 유사도 위면 같은 시점으로 본다")
+    ap.add_argument("--llr-w", type=float, default=1.0,
+                    help="시점당 증거에 곱하는 할인. ⚠️ 1.0(독립 가정)이면 **과신**한다 — "
+                         "실측: 확률 0.8~1.0 구간의 실제 부재율이 0.493 이었다"
+                         "(0.9여야 한다). 같은 장소를 보는 프레임은 강하게 상관된다.")
+    ap.add_argument("--matched", action="store_true",
+                    help="**A5' — 시점을 짝지어 비교한다.** 창끼리 통계를 비교하면 "
+                         "시점이 안 맞는다: 목격 창은 그 자리를 가까이서 본 프레임, "
+                         "재방문 창은 멀리서 스쳐본 프레임일 수 있다. 그러면 검출도 차이가 "
+                         "물체 유무가 아니라 **보는 각도·거리** 때문에 생긴다. "
+                         "⚠️ 실측: 창 통계 방식(--accum)은 어떤 할인·시점군집 설정에서도 "
+                         "확률 보정이 안 섰다(모든 확률 구간에서 실제 부재율 0.4 근처로 평평). "
+                         "우도비가 log(p_fire/(1-q_miss))인데 목격 창이 오염되면 "
+                         "q_miss≈1-p_fire 가 되어 **증거가 0**이 된다. "
+                         "그래서 재방문 프레임마다 **가장 닮은 목격 프레임**을 찾아 "
+                         "그 짝에서만 비교한다 — pose 없이 시점을 통제하는 방법이다.")
+    ap.add_argument("--pair-sim", type=float, default=0.90,
+                    help="짝으로 인정할 최소 유사도")
+    ap.add_argument("--max-views", type=int, default=0,
+                    help="세는 시점 수 상한 (0=무제한). 상관을 거칠게 막는 다른 방법")
+    ap.add_argument("--p-absent", type=float, default=0.5, help="사전확률(부재)")
+    ap.add_argument("--no-abstain", action="store_true",
+                    help="기권 없이 전부 판정한다 — **확신 점수가 순서를 매기는지** 재려면 "
+                         "판정 규칙을 고정한 채 기권만 풀어야 한다. 안 그러면 wq 를 올릴 때 "
+                         "기권과 판정 기준이 **같이** 바뀌어 위험-커버리지 곡선이 오염된다.")
     ap.add_argument("--wq", type=float, default=0.5,
                     help="창을 대표하는 분위수. ⚠️ **중앙값(0.5)은 틀린 선택이다** — "
                          "물체는 그 자리에 있어도 프레임 **대부분에는 안 보인다**"
@@ -263,18 +298,79 @@ def main():
             # ⚠️ `detect` 오라클은 만들지 않는다 — 부재 판정이 **곧 답**이라
             # GT 를 넣으면 구성상 1.000 이 나오는 순환이다(실측으로 확인).
             age_h = (T - gt_[li]) / 3600.0
-            if len(after) == 0:
-                state = "b"
+            if args.matched and len(after) > 0:
+                # 목격 풀 — 그 방에서 목격 시각 이전 전부 (짝을 찾을 후보를 넓게)
+                pool = np.array([i for i in rec if rm_of[i] == r_pred and gt_[i] <= gt_[li]])
+                if len(pool) < 3:
+                    state = "b"; pab = float("nan"); conf = 0.0; nview = 0
+                else:
+                    fire_thr = float(np.quantile(allsc, 1.0 - args.fire_rate))
+                    Sm = E[after] @ E[pool].T
+                    j = np.argmax(Sm, 1); best = Sm[np.arange(len(after)), j]
+                    keep = best >= args.pair_sim
+                    aft_i = after[keep]; bef_i = pool[j[keep]]
+                    if len(aft_i) < 2:
+                        state = "b"; pab = float("nan"); conf = 0.0; nview = 0
+                    else:
+                        fa_ = DET[np.ix_(aft_i, mi)].max(1) > fire_thr
+                        fb_ = DET[np.ix_(bef_i, mi)].max(1) > fire_thr
+                        # 짝에서 **엇갈린 것**만 증거다 (둘 다 같으면 정보 없음)
+                        gone = int(np.sum(fb_ & ~fa_))     # 전엔 보였는데 이제 안 보임
+                        came = int(np.sum(~fb_ & fa_))
+                        n_inf = gone + came
+                        nview = int(len(aft_i))
+                        if n_inf == 0:
+                            state = "b"; pab = float("nan"); conf = 0.0
+                        else:
+                            pab = (gone + 1.0) / (n_inf + 2.0)   # 라플라스 보정
+                            state = "c" if pab >= 0.5 else "a"
+                            conf = abs(pab - 0.5) * 2
+            elif args.accum and len(after) > 0 and len(befw) > 0:
+                # 물체별 발화 문턱 — 전 기록에서 상위 fire_rate 만 넘도록
+                # ⚠️ 이 변수를 `tau` 로 부르면 안 된다 — `tau` 는 **검색의 최근성
+                # 시간상수**다. 한 질의에서 덮어쓰면 다음 질의부터 검색이
+                # `exp(-(T-t)/0.3)` 이 되어 늘 마지막 프레임만 집고, 그 뒤 재방문이
+                # 없어 218건 중 217건이 "재방문 없음" 이 됐다. 같은 이유로 `r` 도 못 쓴다.
+                fire_thr = float(np.quantile(allsc, 1.0 - args.fire_rate))
+                p_fire = float(np.mean(allsc > fire_thr))
+                bs = DET[np.ix_(befw, mi)].max(1)
+                q_miss = float(np.mean(bs <= fire_thr))    # 있을 때 놓칠 확률
+                p_fire = min(max(p_fire, 1e-3), 0.5)
+                q_miss = min(max(q_miss, 1e-3), 0.999)
+                # 서로 다른 **시점** 만 센다 — 비슷한 프레임은 하나로
+                order = after[np.argsort(gt_[after])]
+                views, cen = [], []
+                for i in order:
+                    j = next((k for k, c in enumerate(cen) if float(E[i] @ c) >= args.view_sim), None)
+                    if j is None:
+                        cen.append(E[i]); views.append([i])
+                    else:
+                        views[j].append(i)
+                if args.max_views > 0 and len(views) > args.max_views:
+                    keep = np.linspace(0, len(views) - 1, args.max_views).astype(int)
+                    views = [views[k] for k in keep]
+                llr = 0.0
+                for v in views:
+                    fired = bool(np.max(DET[np.ix_(v, mi)].max(1)) > fire_thr)
+                    llr += (np.log(p_fire / (1 - q_miss)) if fired
+                            else np.log((1 - p_fire) / q_miss))
+                lo = np.log(args.p_absent / (1 - args.p_absent)) + args.llr_w * llr
+                pab = 1.0 / (1.0 + np.exp(-lo))
+                state = "c" if pab >= 0.5 else "a"
+                conf = abs(pab - 0.5) * 2
+                nview = len(views)
+            elif len(after) == 0:
+                state = "b"; pab = float("nan"); conf = 0.0; nview = 0
             elif age_h < args.min_age_h:
                 state = "a"                       # 방금 봤다 — 부재 검사를 안 부른다
             elif args.calib:
                 # 조건② — 그 물체가 기록 안에서 잡음 바닥 위로 올라오는 일이 있나
-                if nhi - nfloor < 0.05:
+                if nhi - nfloor < 0.05 and not args.no_abstain:
                     state = "u"
                 else:
                     s_aft = float(np.median(DET[np.ix_(after, mi)].max(1)))
                     # 목격 창이 잡음 바닥에 붙어 있으면 그 창 자체가 못 믿을 것
-                    if s_bef < nfloor + 0.05:
+                    if s_bef < nfloor + 0.05 and not args.no_abstain:
                         state = "u"
                     else:
                         state = "c" if s_aft < nfloor + args.ratio * (s_bef - nfloor) else "a"
@@ -296,6 +392,20 @@ def main():
             second = alt[-1][1] if alt else r_pred
             rank_off = [r_pred, second]                       # 부재 층 끔
             rank_on = ([second, r_pred] if state == "c" else [r_pred, second])
+            if not (args.accum or args.matched):
+                pab = float("nan"); conf = float("nan"); nview = int(len(after))
+            # **관측 품질** — 목격 창이 잡음 바닥 위로 얼마나 떴나.
+            # ⚠️ A5·A5' 가 다 실패한 뒤 남은 관찰: 되는 것은 "못 맞히겠을 때 답을 안 하는 것"
+            # 하나였다(분위 방식이 커버리지 49%에서 비 2.17, 91%에서 1.23).
+            # 그렇다면 하류로 넘길 확신은 **부재 확률이 아니라 관측 품질**이다.
+            obsq = (s_bef - nfloor) / max(nhi - nfloor, 1e-6)
+            try:
+                cut = nfloor + args.ratio * (s_bef - nfloor)
+                s_a = float(np.quantile(DET[np.ix_(after, mi)].max(1), args.wq)) \
+                    if len(after) else float("nan")
+                margin = float(cut - s_a)              # 양수면 부재 쪽, 크기가 확신
+            except Exception:
+                margin = float("nan")
             says_here = state in ("a", "b")
             truly_here = (r_true == r_pred)
             rows.append(dict(T=T, obj=o, r_pred=r_pred, r_gt=gt_last[3], r_true=r_true,
@@ -303,6 +413,9 @@ def main():
                              state=state, moved=bool(moved), n_after=int(len(after)),
                              says_here=says_here, truly_here=bool(truly_here),
                              ok=bool(says_here == truly_here),
+                             p_absent=float(pab), conf=float(conf), n_view=int(nview),
+                             obs_q=float(obsq), margin=float(margin),
+                             absmargin=float(abs(margin)) if margin == margin else float("nan"),
                              top1_off=bool(rank_off[0] == r_true),
                              top2_off=bool(r_true in rank_off),
                              top1_on=bool(rank_on[0] == r_true),
