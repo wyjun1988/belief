@@ -81,6 +81,13 @@ def main():
                          "대신 그 물체의 **전 기록 분위수**를 기준으로 잡는다 — "
                          "물체는 대개 소수 프레임에만 보이므로 중앙값이 곧 잡음 바닥이다.")
     ap.add_argument("--calib-hi", type=float, default=0.90)
+    ap.add_argument("--wq", type=float, default=0.5,
+                    help="창을 대표하는 분위수. ⚠️ **중앙값(0.5)은 틀린 선택이다** — "
+                         "물체는 그 자리에 있어도 프레임 **대부분에는 안 보인다**"
+                         "(㊱: 보일 때 0.380 vs 전체 중앙 0.152). 중앙값을 쓰면 "
+                         "'있어도 없어 보여서' 목격 창까지 잡음으로 판정해 기권한다"
+                         "(진짜 부재 93건 중 71%가 기권이었다). 물어야 할 것은 "
+                         "'그 창에서 **한 번이라도 뚜렷하게** 보였나' 이므로 상위 분위수를 쓴다.")
     ap.add_argument("--min-age-h", type=float, default=0.0,
                     help="**부재 층을 언제 부를지 정하는 문지기.** 마지막 목격이 "
                          "이보다 최근이면 부재 검사를 건너뛰고 '있다' 로 답한다. "
@@ -251,7 +258,8 @@ def main():
             nhi = float(np.quantile(allsc, args.calib_hi))
             befw = np.array([i for i in rec if rm_of[i] == r_pred
                              and gt_[li] - 900 <= gt_[i] <= gt_[li]])
-            s_bef = float(np.median(DET[np.ix_(befw, mi)].max(1))) if len(befw) else 0.0
+            s_bef = float(np.quantile(DET[np.ix_(befw, mi)].max(1), args.wq)) \
+                if len(befw) else 0.0
             # ⚠️ `detect` 오라클은 만들지 않는다 — 부재 판정이 **곧 답**이라
             # GT 를 넣으면 구성상 1.000 이 나오는 순환이다(실측으로 확인).
             age_h = (T - gt_[li]) / 3600.0
