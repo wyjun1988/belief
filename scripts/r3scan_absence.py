@@ -88,9 +88,27 @@ def main():
             if o_s is None:
                 continue
             npair += 1
-            removed = {int(v) for v in s.get("removed", [])}
-            moved = {int(r["instance_reference"]) for r in s.get("rigid", [])}
-            nonrig = {int(v) for v in (s.get("nonrigid") or [])}
+            removed = set()
+            for v in s.get("removed", []) or []:
+                try:
+                    removed.add(int(v) if not isinstance(v, dict)
+                                else int(v.get("instance_reference", v.get("id", -1))))
+                except (TypeError, ValueError):
+                    pass
+            # ⚠️ `rigid` 항목이 dict 인 곳과 정수 id 인 곳이 섞여 있다.
+            moved = set()
+            for r in s.get("rigid", []) or []:
+                try:
+                    moved.add(int(r["instance_reference"]) if isinstance(r, dict) else int(r))
+                except (KeyError, TypeError, ValueError):
+                    pass
+            nonrig = set()
+            for v in (s.get("nonrigid") or []):
+                try:
+                    nonrig.add(int(v) if not isinstance(v, dict)
+                               else int(v.get("instance_reference", -1)))
+                except (TypeError, ValueError):
+                    pass
             for iid, lb in lab_r.items():
                 if lb not in vi or cnt[lb] > 1 or iid in amb:
                     continue
