@@ -276,6 +276,18 @@ def main():
                 s_aft = float(np.median(DET[np.ix_(after, mi)].max(1)))
                 state = "c" if s_aft < args.ratio * s_bef else "a"
 
+            # ── 후보 **순위** — "어디를 먼저 가볼까"
+            # ⚠️ 이진 판정(있다/없다)은 오경보를 과대평가한다. 실제로는 사용자가
+            # 그 자리에서 못 찾고 묻는 경우가 많고, 시스템도 한 곳만 말할 필요가 없다.
+            # 2순위는 **그 물체가 기록에서 두 번째로 많이 잡힌 방**(시스템이 계산 가능).
+            byroom = {}
+            for rn in names_all:
+                ix = [i for i in rec if rm_of[i] == rn]
+                byroom[rn] = float(np.median(DET[np.ix_(ix, mi)].max(1))) if ix else 0.0
+            alt = sorted((v, k) for k, v in byroom.items() if k != r_pred)
+            second = alt[-1][1] if alt else r_pred
+            rank_off = [r_pred, second]                       # 부재 층 끔
+            rank_on = ([second, r_pred] if state == "c" else [r_pred, second])
             says_here = state in ("a", "b")
             truly_here = (r_true == r_pred)
             rows.append(dict(T=T, obj=o, r_pred=r_pred, r_gt=gt_last[3], r_true=r_true,
@@ -283,6 +295,10 @@ def main():
                              state=state, moved=bool(moved), n_after=int(len(after)),
                              says_here=says_here, truly_here=bool(truly_here),
                              ok=bool(says_here == truly_here),
+                             top1_off=bool(rank_off[0] == r_true),
+                             top2_off=bool(r_true in rank_off),
+                             top1_on=bool(rank_on[0] == r_true),
+                             top2_on=bool(r_true in rank_on),
                              t_err_h=abs(gt_[li] - gt_last[0]) / 3600.0))
 
     n = len(rows)
@@ -311,6 +327,15 @@ def main():
     print("  **위치를 답한 %d건의 정밀도 %.3f  (다수결 %.3f)**" % (len(ans), prec, base))
     print("  **실제로 없는 %d건 중 '없다' 로 넘긴 비율(재현) %.3f**" % (len(truly_gone), rec))
     print("  상태 분포 %s" % dict(Counter(r["state"] for r in rows)))
+    # ── "어디를 먼저 가볼까" 순위로 보면
+    sc3 = [r for r in rows if r["state"] != "u"]
+    if sc3:
+        print("\n  ── 순위로 보면 (기권 제외 %d건)" % len(sc3))
+        print("    %-16s %8s %8s" % ("", "1순위", "2순위 안"))
+        for tag, a, b in (("부재 층 끔", "top1_off", "top2_off"),
+                          ("**부재 층 켬**", "top1_on", "top2_on")):
+            print("    %-16s %8.3f %8.3f"
+                  % (tag, np.mean([r[a] for r in sc3]), np.mean([r[b] for r in sc3])))
     print("\n  ── 새 위치가 기록에 관측됐는가로 가르면 (부재 층이 필요한 쪽은 '미관측')")
     for tag, sub in (("관측됨", [r for r in rows if r["obs_new"]]),
                      ("**미관측**", [r for r in rows if not r["obs_new"]])):
