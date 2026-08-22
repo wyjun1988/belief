@@ -134,6 +134,17 @@ def main():
     ap.add_argument("--ratio", type=float, default=0.6,
                     help="재방문 검출도가 목격 때의 이 비율 미만이면 '없다'")
     ap.add_argument("--evidence", choices=["clip", "owl", "both"], default="both")
+    ap.add_argument("--retr", default="sum",
+                    choices=["sum", "znorm", "thresh", "thresh2"],
+                    help="**C1 — 검색 규칙.** ⚠️ 기본 `sum` 은 CLIP 유사도(≈0.2~0.3)와 "
+                         "OWL 검출점수(0~0.5)를 **척도 확인 없이 더한다**(물체별 절대값 "
+                         "비교 함정의 세 번째 판본). znorm=물체별 순위로 정규화 후 합. "
+                         "thresh=물체별 문턱을 넘는 **가장 늦은** 프레임. "
+                         "thresh2=거기에 연속 지지를 요구. "
+                         "IT3DEgo GT bbox 대조 실측(검색이 실제 목격을 짚은 비율): "
+                         "znorm 0.732 > thresh2 0.721 > sum 0.711 > owl 0.670 > "
+                         "thresh 0.631 > clip 0.598.")
+    ap.add_argument("--retr-q", type=float, default=0.90)
     ap.add_argument("--oracle", nargs="*", default=[],
                     choices=["evidence", "room"])
     ap.add_argument("--multi-t", action="store_true",
@@ -264,15 +275,37 @@ def main():
             if "evidence" in args.oracle:
                 li = int(rec[np.argmin(np.abs(gt_[rec] - gt_last[0]))])
             else:
-                sc = np.zeros(len(rec), np.float32)
-                if args.evidence in ("clip", "both"):
-                    sc += E[rec] @ Q[qi]
-                if args.evidence in ("owl", "both"):
-                    sc += DET[np.ix_(rec, match(o))].max(1)
+                c_ = E[rec] @ Q[qi]
+                o_ = DET[np.ix_(rec, match(o))].max(1)
+                if args.retr == "znorm":
+                    rk = lambda v: np.argsort(np.argsort(v)) / max(len(v) - 1, 1)
+                    sc = (rk(c_) if args.evidence in ("clip", "both") else 0) + \
+                         (rk(o_) if args.evidence in ("owl", "both") else 0)
+                    sc = np.asarray(sc, np.float32)
+                else:
+                    sc = np.zeros(len(rec), np.float32)
+                    if args.evidence in ("clip", "both"):
+                        sc += c_
+                    if args.evidence in ("owl", "both"):
+                        sc += o_
                 if tau:
                     sc *= np.exp(-(T - gt_[rec]) / tau)
-                top = rec[np.argsort(-sc)[:args.topk]]
-                li = int(top[np.argmax(gt_[top])])
+                if args.retr in ("thresh", "thresh2"):
+                    thr_o = float(np.quantile(DET[np.ix_(rec, match(o))].max(1), args.retr_q))
+                    fire = rec[o_ > thr_o]
+                    if args.retr == "thresh2" and len(fire) > 1:
+                        pos = {int(x): k for k, x in enumerate(rec)}
+                        keep = [x for x in fire
+                                if max(o_[pos[int(x)] - 1] if pos[int(x)] > 0 else 0.0,
+                                       o_[pos[int(x)] + 1] if pos[int(x)] + 1 < len(o_) else 0.0) > thr_o]
+                        if keep:
+                            fire = np.array(keep)
+                    li = int(fire[np.argmax(gt_[fire])]) if len(fire) else \
+                        int(rec[np.argsort(-sc)[:args.topk]][np.argmax(
+                            gt_[rec[np.argsort(-sc)[:args.topk]]])])
+                else:
+                    top = rec[np.argsort(-sc)[:args.topk]]
+                    li = int(top[np.argmax(gt_[top])])
 
             # ② 장소 식별
             r_pred = (lab_names[li] or pred_room[li]) if "room" in args.oracle \

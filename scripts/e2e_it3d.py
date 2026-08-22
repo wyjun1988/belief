@@ -51,6 +51,16 @@ def main():
     ap.add_argument("--cache", nargs="+", required=True, help="*.all.npz 가 있는 디렉터리들")
     ap.add_argument("--ann", required=True)
     ap.add_argument("--topk", type=int, default=5)
+    ap.add_argument("--retr", default="sum",
+                    choices=["sum", "clip", "owl", "znorm", "thresh", "thresh2"],
+                    help="검색 규칙. ⚠️ 기본 `sum` 은 CLIP 유사도(≈0.2~0.3)와 OWL "
+                         "검출점수(0~0.5)를 **척도 확인 없이 그냥 더한다.** 그리고 "
+                         "'상위 k 중 가장 늦은 것' 이라 진짜 목격이 상위 k 밖이면 놓친다. "
+                         "znorm=물체별 순위로 정규화 후 합, "
+                         "thresh=물체별 문턱을 넘는 **가장 늦은** 프레임, "
+                         "thresh2=거기에 **연속 2프레임 지지**를 요구(단발 오검출 제거).")
+    ap.add_argument("--retr-q", type=float, default=0.90,
+                    help="thresh 계열에서 물체별 문턱(전 기록 분위수)")
     ap.add_argument("--anchor-win", type=float, default=0.0,
                     help="앵커 시간창(100ns). 0이면 창 없음. "
                          "⚠️ 60초로 좁혔더니 앵커가 서로 거의 같은 프레임이라 "
@@ -118,9 +128,40 @@ def main():
                         continue
                     li = int(rec[np.argmin(np.abs(ts[rec] - prev[-1]))])
                 else:
-                    sc = E[rec] @ Q[oi] + S[rec, oi]
-                    top = rec[np.argsort(-sc)[:args.topk]]
-                    li = int(top[np.argmax(ts[top])])
+                    c_ = E[rec] @ Q[oi]; o_ = S[rec, oi]
+                    if args.retr == "clip":
+                        sc = c_
+                    elif args.retr == "owl":
+                        sc = o_
+                    elif args.retr == "znorm":
+                        # 물체별 순위로 정규화 — 절대 척도가 다른 둘을 더하지 않는다
+                        rk = lambda v: np.argsort(np.argsort(v)) / max(len(v) - 1, 1)
+                        sc = rk(c_) + rk(o_)
+                    else:
+                        sc = c_ + o_
+                    if args.retr in ("thresh", "thresh2"):
+                        thr_o = float(np.quantile(S[:, oi], args.retr_q))
+                        fire = rec[o_ > thr_o]
+                        if args.retr == "thresh2" and len(fire) > 1:
+                            # 연속 지지 — 앞뒤 프레임 중 하나도 같이 발화해야 한다
+                            pos = {int(x): k for k, x in enumerate(rec)}
+                            keep = []
+                            for x in fire:
+                                k = pos[int(x)]
+                                nb = [o_[k - 1] if k > 0 else 0.0,
+                                      o_[k + 1] if k + 1 < len(o_) else 0.0]
+                                if max(nb) > thr_o:
+                                    keep.append(x)
+                            if keep:
+                                fire = np.array(keep)
+                        if len(fire) == 0:
+                            top = rec[np.argsort(-sc)[:args.topk]]
+                            li = int(top[np.argmax(ts[top])])
+                        else:
+                            li = int(fire[np.argmax(ts[fire])])
+                    else:
+                        top = rec[np.argsort(-sc)[:args.topk]]
+                        li = int(top[np.argmax(ts[top])])
                 seen_ok = bool(len(bts) and np.any(np.abs(bts - ts[li]) <= args.bbox_tol))
                 # 검색된 순간 물체가 GT 상 있던 자리
                 L_at = next((l for a, b, l in segl if a <= ts[li] <= b), None)

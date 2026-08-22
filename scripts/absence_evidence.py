@@ -35,12 +35,22 @@ PLACES = ["kitchen drawer", "kitchen cabinet", "counter", "kitchen island", "ref
           "nightstand", "dresser", "closet", "desk", "wall", "floor", "shelf", "bed"]
 
 
+_TXT = {}
+
+
 def clip_text(texts, device="mps"):
+    """⚠️ 모델을 **호출마다 새로 올리면 안 된다.** 종전에는 영상마다 이 함수를 불러
+    `from_pretrained` 가 47회 돌았고, HuggingFace 가 **429(Too Many Requests)** 로
+    막아 전수 실행이 통째로 죽었다. 느리기도 하다. 프로세스당 한 번만 올린다."""
     import torch
-    from transformers import CLIPTextModelWithProjection, CLIPTokenizer
-    nm = "openai/clip-vit-base-patch16"
-    tok = CLIPTokenizer.from_pretrained(nm)
-    txt = CLIPTextModelWithProjection.from_pretrained(nm, use_safetensors=True).eval().to(device)
+    key = ("openai/clip-vit-base-patch16", device)
+    if key not in _TXT:
+        from transformers import CLIPTextModelWithProjection, CLIPTokenizer
+        nm = key[0]
+        _TXT[key] = (CLIPTokenizer.from_pretrained(nm),
+                     CLIPTextModelWithProjection.from_pretrained(
+                         nm, use_safetensors=True).eval().to(device))
+    tok, txt = _TXT[key]
     out = []
     for i in range(0, len(texts), 256):
         with torch.no_grad():
