@@ -50,12 +50,18 @@ def main():
     ap.add_argument("--map-per-room", type=int, default=3)
     ap.add_argument("--size", type=int, default=384)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--prior", default=None,
+                    help="**Qwen 이 만든 배치 분포**(scripts/thor_prior_llm.py). 주면 t=0 에 "
+                         "물체를 그 분포에서 뽑은 방으로 재배치한다. "
+                         "⚠️ ProcTHOR 기본 배치는 유형 규칙이라 사전확률이 실제보다 강하고, "
+                         "그 때문에 ㊻ 에서 belief 단독이 전체 시스템을 이겼다. 편향 제거용.")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     rng = random.Random(args.seed)
     T = int(args.hours * 3600 * args.fps)
 
+    PRIOR = json.load(open(args.prior)) if args.prior else None
     import prior
     from ai2thor.controller import Controller
     from PIL import Image
@@ -83,12 +89,36 @@ def main():
         byroom = {k: v for k, v in byroom.items() if len(v) >= 3}
         if len(byroom) < args.min_rooms:
             continue
-        rt = {r["id"]: r["roomType"] for r in rooms}
         hd = os.path.join(args.out, "house_%04d" % hi)
         os.makedirs(os.path.join(hd, "map"), exist_ok=True)
         os.makedirs(os.path.join(hd, "live"), exist_ok=True)
 
-        # ── t=0 초기 맵 (설치 시 1회 — 여기서만 방 GT 를 쓴다)
+        rt = {r["id"]: r["roomType"] for r in rooms}
+        # ⚠️ 초기 맵은 **재배치 뒤**에 찍어야 한다 — 맵이 곧 씬그래프이므로
+        # 재배치 전 상태를 찍으면 시작부터 어긋난다.
+        # ── t=0 배치 다양화 (LLM 분포에서 표본)
+        if PRIOR:
+            ev = ctrl.step("Pass")
+            byt = {}
+            for rid in byroom:
+                byt.setdefault(rt[rid], []).append(rid)
+            for o in ev.metadata["objects"]:
+                if not o.get("pickupable"):
+                    continue
+                d = PRIOR.get(o["objectType"])
+                if not d:
+                    continue
+                ks = [k for k in d if k in byt]
+                if not ks:
+                    continue
+                w = np.array([d[k] for k in ks], float)
+                if w.sum() <= 0:
+                    continue
+                tgt_type = ks[int(rng.choices(range(len(ks)), weights=w / w.sum())[0])]
+                tgt = rng.choice(byt[tgt_type])
+                pt = rng.choice(byroom[tgt])
+                ctrl.step("PlaceObjectAtPoint", objectId=o["objectId"],
+                          position=dict(x=pt["x"], y=pt["y"] + 0.6, z=pt["z"]))
         mp = []
         for rid, ps in byroom.items():
             idx = np.linspace(0, len(ps) - 1, min(args.map_per_room, len(ps))).astype(int)
