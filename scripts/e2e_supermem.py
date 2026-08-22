@@ -145,6 +145,20 @@ def main():
                          "znorm 0.732 > thresh2 0.721 > sum 0.711 > owl 0.670 > "
                          "thresh 0.631 > clip 0.598.")
     ap.add_argument("--retr-q", type=float, default=0.90)
+    ap.add_argument("--cooc", action="store_true",
+                    help="**아이디어2 — 동반 물체로 관측 유효성을 판단한다.** "
+                         "'탁자·컵·리모컨이 다 보이는데 안경만 없다' 와 '탁자도 안 보인다"
+                         "(딴 데 보고 있다)' 는 완전히 다른 상황인데 지금은 구분을 못 한다. "
+                         "목격 창에서 **같이 잡힌 다른 물체들**을 기록해 두고, 재방문 "
+                         "프레임에서 그것들이 얼마나 보이는지로 **그 자리를 제대로 봤는지**를 잰다. "
+                         "⚠️ ㊵ 의 '관측 품질' 은 **목표 물체 점수만** 봐서 순환이었다 — "
+                         "동반 물체는 목표와 독립이라 그 함정이 없다. "
+                         "⚠️ 동반 집합에서 목표 물체 자신은 반드시 뺀다.")
+    ap.add_argument("--cooc-k", type=int, default=8, help="동반 물체 수")
+    ap.add_argument("--cooc-min", type=float, default=0.4,
+                    help="재방문 프레임을 쓰려면 동반 물체가 이 비율 이상 보여야 한다")
+    ap.add_argument("--cooc-q", type=float, default=0.80,
+                    help="동반 물체별 '보인다' 문턱(전 기록 분위수)")
     ap.add_argument("--oracle", nargs="*", default=[],
                     choices=["evidence", "room"])
     ap.add_argument("--multi-t", action="store_true",
@@ -247,6 +261,9 @@ def main():
     objs = [o for o in sorted(hist) if match(o)]
     Q = clip_text(objs, args.device)
     NOW = gt_.max()
+    if args.cooc:
+        WTHR = np.quantile(DET, args.cooc_q, axis=0)   # (어휘,) — 한 번만 계산
+        print("동반 물체 문턱 계산 — 어휘 %d" % len(WTHR))
     tau = args.tau_h * 3600 if args.tau_h > 0 else None
 
     # 질의 시점 — 각 세션의 마지막 프레임(그 시점까지가 기록)
@@ -331,6 +348,18 @@ def main():
             # ⚠️ `detect` 오라클은 만들지 않는다 — 부재 판정이 **곧 답**이라
             # GT 를 넣으면 구성상 1.000 이 나오는 순환이다(실측으로 확인).
             age_h = (T - gt_[li]) / 3600.0
+            # ── 동반 물체 관측 유효성
+            cq = float("nan")
+            if args.cooc and len(befw) and len(after):
+                med = np.median(DET[befw], 0)
+                cand = np.argsort(-(med - WTHR))          # 자기 문턱 대비 잘 잡힌 것부터
+                cand = [j for j in cand if j not in set(mi)][:args.cooc_k]
+                if cand:
+                    seen_a = (DET[np.ix_(after, cand)] > WTHR[cand]).mean(1)
+                    cq = float(np.mean(seen_a))
+                    ok_a = after[seen_a >= args.cooc_min]
+                    if len(ok_a) >= 3:
+                        after = ok_a                      # 제대로 본 프레임만 남긴다
             if args.matched and len(after) > 0:
                 # 목격 풀 — 그 방에서 목격 시각 이전 전부 (짝을 찾을 후보를 넓게)
                 pool = np.array([i for i in rec if rm_of[i] == r_pred and gt_[i] <= gt_[li]])
@@ -447,7 +476,7 @@ def main():
                              says_here=says_here, truly_here=bool(truly_here),
                              ok=bool(says_here == truly_here),
                              p_absent=float(pab), conf=float(conf), n_view=int(nview),
-                             obs_q=float(obsq), margin=float(margin),
+                             obs_q=float(obsq), cooc_q=float(cq), margin=float(margin),
                              absmargin=float(abs(margin)) if margin == margin else float("nan"),
                              top1_off=bool(rank_off[0] == r_true),
                              top2_off=bool(r_true in rank_off),
