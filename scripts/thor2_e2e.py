@@ -43,6 +43,16 @@ def main():
     ap.add_argument("--root", required=True)
     ap.add_argument("--cache", required=True)
     ap.add_argument("--stride", type=int, default=1, help="캐시 위에 더 성글게(1=캐시 그대로)")
+    ap.add_argument("--min-run", type=int, default=0,
+                    help="**재방문을 연속 구간 길이로 판정한다.** ⚠️ 절대 유사도는 못 쓴다 — "
+                         "맞는 방 키 0.928 vs 최고 오답 0.930, 여유 중앙 -0.0003 이라 "
+                         "임계값이 안 듣는다(안 본 방 9/9 를 '봤다' 고 했다). "
+                         "실제로 간 방은 연속 구간이 길다(체류 360초=36프레임).")
+    ap.add_argument("--room-thr", type=float, default=0.0,
+                    help="방 배정 **거부 임계값**. ⚠️ 0이면 모든 프레임이 가장 가까운 방 키에 "
+                         "배정되므로 **어느 방이든 프레임이 생기고**, 안 가본 방도 '가봤다' 가 된다"
+                         "(실측: 실제 안 본 방 9개를 9개 다 '봤다' 고 했다). "
+                         "유사도가 이 값 미만이면 '모르는 곳' 으로 두고 재방문에서 뺀다.")
     ap.add_argument("--smooth", type=int, default=5, help="시간 평활 창(프레임)")
     ap.add_argument("--wq", type=float, default=0.90)
     ap.add_argument("--ratio", type=float, default=0.6)
@@ -150,6 +160,16 @@ def main():
                 t_seen = int(tt[top].max())
                 inr_b = [i for i in upto if lab[i] == r_pred and tt[i] <= t_seen]
                 inr_a = [i for i in upto if lab[i] == r_pred and tt[i] > t_seen]
+                if args.min_run > 0 and inr_a:
+                    # 연속 구간이 짧으면 "그 방을 다시 본 것" 으로 치지 않는다
+                    run = c = 0
+                    for i in upto:
+                        if tt[i] > t_seen and lab[i] == r_pred:
+                            c += 1; run = max(run, c)
+                        else:
+                            c = 0
+                    if run < args.min_run:
+                        inr_a = []
                 sb = float(np.quantile(O[inr_b, j], args.wq)) if len(inr_b) else 0.0
                 if len(inr_a) < 2:
                     state = "b"; sa = float("nan")
