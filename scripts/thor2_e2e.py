@@ -112,7 +112,7 @@ def main():
     ap.add_argument("--wq", type=float, default=0.90)
     ap.add_argument("--ratio", type=float, default=0.6)
     ap.add_argument("--topk", type=int, default=2)
-    ap.add_argument("--loc", default="topf", choices=["topf", "roomq", "roomlift", "roomrate", "roomcount", "roomctx"],
+    ap.add_argument("--loc", default="topf", choices=["topf", "roomq", "roomlift", "roomrate", "roomcount", "roomctx", "nodeq"],
                     help="물체 위치 추정. ⚠️ 기본 `topf`(점수 상위 3프레임의 방)는 "
                          "**음성이 570장인데 argmax 를 쓴다** — AUC 0.875 여도 최고점 "
                          "3장이 오검출일 확률이 높다. "
@@ -138,6 +138,8 @@ def main():
                          "**그 물체 점수의 분위수**로 잡았다 — 같은 잡음 분포에서 뽑은 "
                          "문턱이라 누적의 이점이 사라졌다(0.393, 분위수와 동일). "
                          "검출기 자체의 동작점을 절대값으로 주면 '봤다' 를 셀 수 있다.")
+    ap.add_argument("--node-smooth", type=float, default=0.0,
+                    help="`nodeq` 에서 이웃 노드로 점수를 퍼뜨리는 정도(같은 방 노드끼리).")
     ap.add_argument("--ctx-k", type=int, default=5, help="동반 물체 수")
     ap.add_argument("--ctx-w", type=float, default=0.5, help="동반 물체 가중")
     ap.add_argument("--only-seen", action="store_true",
@@ -213,12 +215,14 @@ def main():
                 sc_room = np.stack([Snode[:, mrr == r].max(1) for r in kn], 1)
             else:
                 sc_room = el[sel] @ K.T
+            nodeassign = np.argmax(el[sel] @ em.T, 1)
             TR = None
             if args.topology:
                 _tp = json.load(open(args.topology))
                 TR = trmat(kn, args.stay, _tp.get(os.path.basename(hd), {}), args.topo_leak)
             lab = np.array(kn)[viterbi(sc_room, args.stay, tr=TR)]
         else:
+            nodeassign = np.argmax(el[sel] @ em.T, 1)
             lab = np.array([kn[int(np.argmax(K @ el[i]))] for i in sel])
             lab = smooth(lab, args.smooth)
         ok = gtr != None
@@ -290,6 +294,31 @@ def main():
                 elif args.loc == "topf":
                     top = upto[np.argsort(-O[upto, j])[:3]]
                     r_pred = Counter(lab[top]).most_common(1)[0][0]
+                    t_seen = int(tt[top].max())
+                elif args.loc == "nodeq":
+                    # ⚠️ **방 안 프레임을 분위수 하나로 뭉개면 안 된다.** 방에는 시점이
+                    # 여럿인데 물체는 한두 곳에서만 보인다 — 방 키를 평균하던 것과 같은 실수다.
+                    # 노드(=맵 프레임 시점)별로 집계하면 물체가 있는 시점에 봉우리가 선다.
+                    na = nodeassign[upto]
+                    nsc = {}
+                    for nd in set(na.tolist()):
+                        ix = upto[na == nd]
+                        if len(ix) >= 2:
+                            nsc[nd] = float(np.quantile(O[ix, j], args.wq))
+                    if not nsc:
+                        continue
+                    if args.node_smooth > 0:
+                        mrr = np.array(mrooms, object)
+                        sm2 = {}
+                        for nd, v in nsc.items():
+                            sib = [u for u in nsc if mrr[u] == mrr[nd] and u != nd]
+                            sm2[nd] = v + args.node_smooth * (
+                                np.mean([nsc[u] for u in sib]) if sib else 0.0)
+                        nsc = sm2
+                    bn = max(nsc, key=nsc.get)
+                    r_pred = np.array(mrooms, object)[bn]
+                    ix = upto[na == bn]
+                    top = ix[np.argsort(-O[ix, j])[:3]]
                     t_seen = int(tt[top].max())
                 else:
                     base = float(np.quantile(O[upto, j], args.wq))
