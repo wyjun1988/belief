@@ -80,7 +80,7 @@ def main():
     ap.add_argument("--wq", type=float, default=0.90)
     ap.add_argument("--ratio", type=float, default=0.6)
     ap.add_argument("--topk", type=int, default=2)
-    ap.add_argument("--loc", default="topf", choices=["topf", "roomq", "roomlift", "roomrate", "roomcount"],
+    ap.add_argument("--loc", default="topf", choices=["topf", "roomq", "roomlift", "roomrate", "roomcount", "roomctx"],
                     help="물체 위치 추정. ⚠️ 기본 `topf`(점수 상위 3프레임의 방)는 "
                          "**음성이 570장인데 argmax 를 쓴다** — AUC 0.875 여도 최고점 "
                          "3장이 오검출일 확률이 높다. "
@@ -106,6 +106,8 @@ def main():
                          "**그 물체 점수의 분위수**로 잡았다 — 같은 잡음 분포에서 뽑은 "
                          "문턱이라 누적의 이점이 사라졌다(0.393, 분위수와 동일). "
                          "검출기 자체의 동작점을 절대값으로 주면 '봤다' 를 셀 수 있다.")
+    ap.add_argument("--ctx-k", type=int, default=5, help="동반 물체 수")
+    ap.add_argument("--ctx-w", type=float, default=0.5, help="동반 물체 가중")
     ap.add_argument("--only-seen", action="store_true",
                     help="에이전트가 물체와 **한 번이라도 같은 방에 있었던** 질의만. "
                          "⚠️ `--oracle-find` 는 이 조건을 자동으로 걸어 표본이 줄므로, "
@@ -183,6 +185,25 @@ def main():
         # ── 질의 시각
         Q = [int(len(tt) * f) for f in np.linspace(0.4, 0.98, args.queries)]
         moves = sorted(g["moves"], key=lambda m: m["t"])
+        # ── 초기 맵에서 **동반 물체**를 배운다 (설치 시 씬그래프 attribute)
+        # ⚠️ 배회 기록에서 배우면 순환이다 — 물체를 못 찾으니 문맥도 못 배운다.
+        # 초기 맵은 정지 촬영이라 조건이 좋고, 이것이 곧 씬그래프에 저장할 정보다.
+        om = z["om"] if "om" in z.files else None
+        # ⚠️ 동반 물체는 **정적인 것만** 쓴다. 움직이는 물체를 문맥으로 쓰면
+        # 그것도 옮겨지므로 방해가 된다(사용자 지적). 침대·소파·조리대처럼
+        # 안 움직이는 것이 방을 특정하는 안정적 앵커다.
+        STATIC = set(z["static"].tolist()) if "static" in z.files else set()
+        ok_ctx = np.array([w in STATIC for w in vocab]) if STATIC else None
+        CTX = {}
+        if om is not None and args.loc == "roomctx":
+            mu = np.median(om, 0)
+            for jj in range(om.shape[1]):
+                hi = np.argsort(-om[:, jj])[:max(3, len(om) // 10)]
+                lift = om[hi].mean(0) - mu
+                lift[jj] = -1e9
+                if ok_ctx is not None:
+                    lift = np.where(ok_ctx, lift, -1e9)
+                CTX[jj] = np.argsort(-lift)[:args.ctx_k]
         for qi in Q:
             T = int(tt[qi])
             for oid, v0 in g["gt0"].items():
@@ -235,7 +256,13 @@ def main():
                         ix = upto[lab[upto] == rr]
                         if len(ix) < 3:
                             continue
-                        if args.loc == "roomcount":
+                        if args.loc == "roomctx":
+                            own = float(np.quantile(O[ix, j], args.wq))
+                            cx = CTX.get(j)
+                            ctx = float(np.mean([np.quantile(O[ix, c], args.wq)
+                                                 for c in cx])) if cx is not None and len(cx) else 0.0
+                            sc_r[rr] = own + args.ctx_w * ctx
+                        elif args.loc == "roomcount":
                             sc_r[rr] = float(np.mean(O[ix, j] > args.abs_thr))
                         elif args.loc == "roomrate":
                             thr = float(np.quantile(O[upto, j], 0.90))

@@ -24,8 +24,16 @@ def main():
     ap.add_argument("--root", required=True)
     ap.add_argument("--cache", required=True)
     ap.add_argument("--wq", type=float, default=0.90)
-    ap.add_argument("--abs-room", default="gt", choices=["gt", "pred"],
-                    help="**부재를 잴 때 방을 무엇으로 쓰나.** ⚠️ 종전 측정(AUC 0.726)은 "
+    ap.add_argument("--ctx-k", type=int, default=4, help="정적 동반 물체 수")
+    ap.add_argument("--ctx-q", type=float, default=0.70,
+                    help="그 정적 물체가 '보인다' 로 볼 분위수(초기 맵 기준)")
+    ap.add_argument("--abs-room", default="gt", choices=["gt", "pred", "ctx"],
+                    help="**부재를 잴 때 프레임을 무엇으로 고르나.** "
+                         "`ctx` = **그 물체의 정적 동반 물체가 보이는 프레임**(키워드 제외). "
+                         "방 라벨을 안 쓰므로 방 식별 오류의 영향을 받지 않는다 — "
+                         "54 에서 드러난 '부재가 방 인지에 의존해 0.726→0.53' 문제를 우회한다. "
+                         "정적 물체만 쓰는 이유: 움직이는 물체를 앵커로 쓰면 그것도 옮겨진다. "
+                         "종전 측정(AUC 0.726)은 "
                          "`gt` 였다 — 오라클 방에서 잰 값이므로 '부재는 방 인지의 영향을 "
                          "덜 받는다' 는 주장의 근거가 되지 못한다. `pred` 로 다시 잰다.")
     ap.add_argument("--stay", type=float, default=0.0, help="전이 추적 머무를 확률")
@@ -96,6 +104,19 @@ def main():
             mv = [m for m in moves if m["oid"] == oid and m["t"] <= t]
             return mv[-1]["to"] if mv else home
 
+        # ── 정적 동반 물체를 초기 맵에서 배운다 (씬그래프 attribute)
+        om = z["om"] if "om" in z.files else None
+        STATIC = set(z["static"].tolist()) if "static" in z.files else set()
+        okc = np.array([w in STATIC for w in vocab]) if STATIC else None
+        CTX = {}
+        if om is not None and okc is not None:
+            mu = np.median(om, 0)
+            for jj in range(om.shape[1]):
+                hi = np.argsort(-om[:, jj])[:max(3, len(om) // 10)]
+                lift = np.where(okc, om[hi].mean(0) - mu, -1e9)
+                lift[jj] = -1e9
+                CTX[jj] = np.argsort(-lift)[:args.ctx_k]
+
         for oid, v0 in g["gt0"].items():
             ot = v0["type"]
             if ot not in vi or not v0["room"]:
@@ -118,10 +139,19 @@ def main():
             if sc:
                 ret.append(max(sc, key=sc.get) == truer[-1])
             # ④ 부재 — 물체가 떠난 방 vs 안 떠난 방에서, 떠난 뒤 점수 하락
-            RM = gtr if args.abs_room == "gt" else lab
+            if args.abs_room == "ctx":
+                # 그 물체의 정적 동반 물체가 **보이는** 프레임만 (키워드 제외)
+                cx = CTX.get(j)
+                if cx is None or not len(cx):
+                    continue
+                thr = np.quantile(ol[:, cx], args.ctx_q, axis=0)
+                gate = (ol[:, cx] > thr).mean(1) >= 0.5
+                RM = np.where(gate, "CTX", None).astype(object)
+            else:
+                RM = gtr if args.abs_room == "gt" else lab
             mv = [m for m in moves if m["oid"] == oid]
             if mv:
-                m0 = mv[0]; R = m0["frm"]
+                m0 = mv[0]; R = "CTX" if args.abs_room == "ctx" else m0["frm"]
                 b = np.nonzero((RM == R) & (ts <= m0["t"]))[0]
                 a2 = np.nonzero((RM == R) & (ts > m0["t"]))[0]
                 if len(b) >= 3 and len(a2) >= 3:
@@ -129,7 +159,7 @@ def main():
                                  float(np.quantile(ol[b, j], args.wq))
                                  - float(np.quantile(ol[a2, j], args.wq))))
             else:
-                R = v0["room"]
+                R = "CTX" if args.abs_room == "ctx" else v0["room"]
                 ix = np.nonzero(RM == R)[0]
                 if len(ix) >= 6:
                     h = len(ix) // 2
