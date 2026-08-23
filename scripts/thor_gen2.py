@@ -151,7 +151,12 @@ def main():
             e = ctrl.step("Teleport", position=p, rotation=dict(x=0, y=y, z=0), horizon=10)
             if not e.metadata["lastActionSuccess"]:
                 continue
-            live.append(dict(t=t, room=cur))
+            # ⚠️ 프레임별 **가시 물체**를 기록한다. 2차에 이게 없어서
+            # "배회 중 검출이 얼마나 되나" 를 직접 못 쟀다(1차 맵 프레임의 0.949 는
+            # 자리마다 4방향 정지 촬영이라 조건이 다르다).
+            live.append(dict(t=t, room=cur,
+                             vis=[o["objectId"] for o in e.metadata["objects"]
+                                  if o.get("visible") and o.get("pickupable")]))
             Image.fromarray(e.frame).save(
                 os.path.join(hd, "live", "%06d.jpg" % t), quality=85)
             # 에이전트가 **다른 방**에 있을 때만 옮긴다 → 미관측

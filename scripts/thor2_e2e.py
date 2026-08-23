@@ -80,12 +80,25 @@ def main():
     ap.add_argument("--wq", type=float, default=0.90)
     ap.add_argument("--ratio", type=float, default=0.6)
     ap.add_argument("--topk", type=int, default=2)
-    ap.add_argument("--loc", default="topf", choices=["topf", "roomq", "roomlift"],
+    ap.add_argument("--loc", default="topf", choices=["topf", "roomq", "roomlift", "roomrate"],
                     help="물체 위치 추정. ⚠️ 기본 `topf`(점수 상위 3프레임의 방)는 "
                          "**음성이 570장인데 argmax 를 쓴다** — AUC 0.875 여도 최고점 "
                          "3장이 오검출일 확률이 높다. "
                          "roomq=방별 상위분위수가 가장 높은 방, "
-                         "roomlift=방별 분위수 − 그 물체의 전체 분위수(자기 기준 보정).")
+                         "roomlift=방별 분위수 − 그 물체의 전체 분위수(자기 기준 보정). "
+                         "**roomrate=방별 '문턱 넘는 프레임 비율'.** ⚠️ 분위수는 "
+                         "**프레임 수에 민감하다** — 물체가 없는 방도 프레임이 144장이면 "
+                         "오검출의 상위 분위수가 높아진다. 비율은 표본 수에 강건하다.")
+    ap.add_argument("--only-seen", action="store_true",
+                    help="에이전트가 물체와 **한 번이라도 같은 방에 있었던** 질의만. "
+                         "⚠️ `--oracle-find` 는 이 조건을 자동으로 걸어 표본이 줄므로, "
+                         "공정 비교하려면 다른 설정에도 같이 걸어야 한다.")
+    ap.add_argument("--oracle-find", action="store_true",
+                    help="**검색을 GT 로** — 물체를 마지막으로 볼 수 있었던 시점의 실제 방")
+    ap.add_argument("--oracle-revisit", action="store_true",
+                    help="**재방문 판정을 GT 로** — 그 방을 실제로 다시 봤는가")
+    ap.add_argument("--oracle-absent", action="store_true",
+                    help="**부재 판정을 GT 로** — 물체가 그 방을 실제로 떠났는가")
     ap.add_argument("--oracle-room", action="store_true",
                     help="배회 프레임의 방을 GT 로 대체 — **방 재식별 오류와 검색 오류를 가른다**")
     ap.add_argument("--queries", type=int, default=4, help="주택당 질의 시각 수")
@@ -165,9 +178,30 @@ def main():
                 gt_state = "b" if not revis else ("c" if mv else "a")
                 # ── 시스템
                 upto = np.arange(qi + 1)
-                if args.loc == "topf":
+                if args.only_seen or args.oracle_find:
+                    co = [i for i in upto
+                          if gtr[i] is not None
+                          and gtr[i] == (([m for m in moves if m["oid"] == oid and m["t"] <= tt[i]]
+                                          or [dict(to=v0["room"])])[-1]["to"])]
+                    if not co:
+                        continue
+                # ── ② 검색: 물체가 어느 방에 있(었)나
+                if args.oracle_find:
+                    # 물체와 같은 방에 있었던 마지막 시점의 실제 방
+                    seen = [i for i in upto
+                            if gtr[i] is not None
+                            and gtr[i] == (mv[-1]["to"] if [m for m in moves
+                                                           if m["oid"] == oid and m["t"] <= tt[i]]
+                                           else v0["room"])]
+                    if not seen:
+                        continue
+                    li = seen[-1]
+                    r_pred = gtr[li]; t_seen = int(tt[li])
+                    top = np.array([li])
+                elif args.loc == "topf":
                     top = upto[np.argsort(-O[upto, j])[:3]]
                     r_pred = Counter(lab[top]).most_common(1)[0][0]
+                    t_seen = int(tt[top].max())
                 else:
                     base = float(np.quantile(O[upto, j], args.wq))
                     sc_r = {}
@@ -175,31 +209,43 @@ def main():
                         ix = upto[lab[upto] == rr]
                         if len(ix) < 3:
                             continue
-                        q = float(np.quantile(O[ix, j], args.wq))
-                        sc_r[rr] = q - (base if args.loc == "roomlift" else 0.0)
+                        if args.loc == "roomrate":
+                            thr = float(np.quantile(O[upto, j], 0.90))
+                            sc_r[rr] = float(np.mean(O[ix, j] > thr))
+                        else:
+                            q = float(np.quantile(O[ix, j], args.wq))
+                            sc_r[rr] = q - (base if args.loc == "roomlift" else 0.0)
                     if not sc_r:
                         continue
                     r_pred = max(sc_r, key=sc_r.get)
                     ix = upto[lab[upto] == r_pred]
                     top = ix[np.argsort(-O[ix, j])[:3]]
-                t_seen = int(tt[top].max())
+                    t_seen = int(tt[top].max())
+                # ── ③ 재방문 · ④ 부재
+                if args.oracle_revisit:
+                    revis_sys = any(gtr[i] == r_pred for i in upto if tt[i] > t_seen)
+                else:
+                    inr_a0 = [i for i in upto if lab[i] == r_pred and tt[i] > t_seen]
+                    if args.min_run > 0 and inr_a0:
+                        run = c = 0
+                        for i in upto:
+                            if tt[i] > t_seen and lab[i] == r_pred:
+                                c += 1; run = max(run, c)
+                            else:
+                                c = 0
+                        if run < args.min_run:
+                            inr_a0 = []
+                    revis_sys = len(inr_a0) >= 2
                 inr_b = [i for i in upto if lab[i] == r_pred and tt[i] <= t_seen]
                 inr_a = [i for i in upto if lab[i] == r_pred and tt[i] > t_seen]
-                if args.min_run > 0 and inr_a:
-                    # 연속 구간이 짧으면 "그 방을 다시 본 것" 으로 치지 않는다
-                    run = c = 0
-                    for i in upto:
-                        if tt[i] > t_seen and lab[i] == r_pred:
-                            c += 1; run = max(run, c)
-                        else:
-                            c = 0
-                    if run < args.min_run:
-                        inr_a = []
                 sb = float(np.quantile(O[inr_b, j], args.wq)) if len(inr_b) else 0.0
-                if len(inr_a) < 2:
-                    state = "b"; sa = float("nan")
+                sa = float("nan")
+                if not revis_sys:
+                    state = "b"
+                elif args.oracle_absent:
+                    state = "c" if r_true != r_pred else "a"
                 else:
-                    sa = float(np.quantile(O[inr_a, j], args.wq))
+                    sa = float(np.quantile(O[inr_a, j], args.wq)) if len(inr_a) else 0.0
                     state = "c" if sa < args.ratio * sb else "a"
                 rows.append(dict(house=os.path.basename(hd), T=T, oid=oid, otype=ot,
                                  r_gt=rt.get(r_old), r_pred=rt.get(r_pred, r_pred),
