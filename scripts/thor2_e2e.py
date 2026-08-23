@@ -27,7 +27,28 @@ from collections import Counter, defaultdict
 import numpy as np
 
 
-def viterbi(S, stay, temp=0.01):
+def trmat(kn, stay, adj, leak):
+    """방 전이 행렬. adj 가 있으면 **문으로 연결된 방**에만 질량을 준다."""
+    K = len(kn); P = np.zeros((K, K))
+    for i, ri in enumerate(kn):
+        nb = [j for j, rj in enumerate(kn)
+              if j != i and (rj in adj.get(ri, []) if adj else True)]
+        non = [j for j in range(K) if j != i and j not in nb]
+        rest = 1 - stay
+        if nb:
+            for j in nb:
+                P[i, j] = rest * (1 - leak) / len(nb)
+            for j in non:
+                P[i, j] = rest * leak / max(len(non), 1)
+        else:
+            for j in non:
+                P[i, j] = rest / max(len(non), 1)
+        P[i, i] = stay
+    P = np.maximum(P, 1e-9); P /= P.sum(1, keepdims=True)
+    return np.log(P)
+
+
+def viterbi(S, stay, temp=0.01, tr=None):
     """**방을 프레임마다 독립으로 맞히지 않는다 — 전이를 추적한다.**
     사람은 방을 순간이동하지 않는다; 문을 지나야 바뀐다. 중앙값 평활은 이것의
     조잡한 판본이다. 실측: 독립 argmax 0.469 · 평활 0.554 · **전이추적 0.825**.
@@ -35,8 +56,9 @@ def viterbi(S, stay, temp=0.01):
     Z = (S - S.max(1, keepdims=True)) / temp
     logem = Z - np.log(np.exp(Z).sum(1, keepdims=True) + 1e-12)
     T, K = logem.shape
-    tr = np.full((K, K), np.log((1 - stay) / max(K - 1, 1)))
-    np.fill_diagonal(tr, np.log(stay))
+    if tr is None:
+        tr = np.full((K, K), np.log((1 - stay) / max(K - 1, 1)))
+        np.fill_diagonal(tr, np.log(stay))
     dp = logem[0].copy(); bp = np.zeros((T, K), int)
     for t in range(1, T):
         m = dp[:, None] + tr
@@ -63,6 +85,11 @@ def main():
     ap.add_argument("--root", required=True)
     ap.add_argument("--cache", required=True)
     ap.add_argument("--stride", type=int, default=1, help="캐시 위에 더 성글게(1=캐시 그대로)")
+    ap.add_argument("--topology", default=None,
+                    help="방 인접 그래프(문 연결). ⚠️ 56 에서 무효였던 이유는 방 노드가 "
+                         "**하나뿐**이라 전이 제약이 걸릴 자리가 없어서였다. "
+                         "--place-node 와 함께 쓰면 이득이 난다(0.886 → 0.895).")
+    ap.add_argument("--topo-leak", type=float, default=0.03)
     ap.add_argument("--place-node", action="store_true",
                     help="**방 키를 평균 벡터 하나가 아니라 여러 노드로.** ⚠️ 방마다 맵 프레임 "
                          "12~120장을 한 벡터로 평균하면 여러 방향에서 본 모습이 뭉개진다 — "
@@ -186,7 +213,11 @@ def main():
                 sc_room = np.stack([Snode[:, mrr == r].max(1) for r in kn], 1)
             else:
                 sc_room = el[sel] @ K.T
-            lab = np.array(kn)[viterbi(sc_room, args.stay)]
+            TR = None
+            if args.topology:
+                _tp = json.load(open(args.topology))
+                TR = trmat(kn, args.stay, _tp.get(os.path.basename(hd), {}), args.topo_leak)
+            lab = np.array(kn)[viterbi(sc_room, args.stay, tr=TR)]
         else:
             lab = np.array([kn[int(np.argmax(K @ el[i]))] for i in sel])
             lab = smooth(lab, args.smooth)

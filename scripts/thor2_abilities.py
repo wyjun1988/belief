@@ -36,6 +36,11 @@ def main():
                          "종전 측정(AUC 0.726)은 "
                          "`gt` 였다 — 오라클 방에서 잰 값이므로 '부재는 방 인지의 영향을 "
                          "덜 받는다' 는 주장의 근거가 되지 못한다. `pred` 로 다시 잰다.")
+    ap.add_argument("--topology", default=None,
+                    help="방 인접 그래프(문 연결). ⚠️ 56 에서 무효였던 이유는 방 노드가 "
+                         "**하나뿐**이라 전이 제약이 걸릴 자리가 없어서였다. "
+                         "--place-node 와 함께 쓰면 이득이 난다(0.886 → 0.895).")
+    ap.add_argument("--topo-leak", type=float, default=0.03)
     ap.add_argument("--place-node", action="store_true",
                     help="**방 키를 평균 벡터 하나가 아니라 여러 노드로.** ⚠️ 방마다 맵 프레임 "
                          "12~120장을 한 벡터로 평균하면 여러 방향에서 본 모습이 뭉개진다 — "
