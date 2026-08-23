@@ -24,6 +24,11 @@ def main():
     ap.add_argument("--root", required=True)
     ap.add_argument("--cache", required=True)
     ap.add_argument("--wq", type=float, default=0.90)
+    ap.add_argument("--abs-room", default="gt", choices=["gt", "pred"],
+                    help="**부재를 잴 때 방을 무엇으로 쓰나.** ⚠️ 종전 측정(AUC 0.726)은 "
+                         "`gt` 였다 — 오라클 방에서 잰 값이므로 '부재는 방 인지의 영향을 "
+                         "덜 받는다' 는 주장의 근거가 되지 못한다. `pred` 로 다시 잰다.")
+    ap.add_argument("--stay", type=float, default=0.0, help="전이 추적 머무를 확률")
     ap.add_argument("--min-run", type=int, default=0,
                     help="**연속 구간 길이로 재방문을 판정한다.** ⚠️ 절대 유사도는 못 쓴다 — "
                          "실측: 맞는 방 키 0.928 vs 최고 오답 0.930, 여유 중앙 -0.0003. "
@@ -60,9 +65,24 @@ def main():
         gtr = np.array([gtl.get(int(t), None) for t in ts])
         # 예측 방 (RGB 만 + 시간 평활)
         sim = el @ K.T
-        best = np.argmax(sim, 1)
-        lab = np.array([kn[b] if sim[i, b] >= args.room_thr else None
-                        for i, b in enumerate(best)], object)
+        if args.stay > 0:
+            Z = (sim - sim.max(1, keepdims=True)) / 0.01
+            logem = Z - np.log(np.exp(Z).sum(1, keepdims=True) + 1e-12)
+            T_, K_ = logem.shape
+            tr = np.full((K_, K_), np.log((1 - args.stay) / max(K_ - 1, 1)))
+            np.fill_diagonal(tr, np.log(args.stay))
+            dp = logem[0].copy(); bp = np.zeros((T_, K_), int)
+            for t in range(1, T_):
+                m = dp[:, None] + tr
+                bp[t] = np.argmax(m, 0); dp = m.max(0) + logem[t]
+            path = np.zeros(T_, int); path[-1] = int(np.argmax(dp))
+            for t in range(T_ - 1, 0, -1):
+                path[t - 1] = bp[t, path[t]]
+            lab = np.array(kn, object)[path]
+        else:
+            best = np.argmax(sim, 1)
+            lab = np.array([kn[b] if sim[i, b] >= args.room_thr else None
+                            for i, b in enumerate(best)], object)
         if args.smooth > 1:
             sm = lab.copy()
             for i in range(len(lab)):
@@ -98,18 +118,19 @@ def main():
             if sc:
                 ret.append(max(sc, key=sc.get) == truer[-1])
             # ④ 부재 — 물체가 떠난 방 vs 안 떠난 방에서, 떠난 뒤 점수 하락
+            RM = gtr if args.abs_room == "gt" else lab
             mv = [m for m in moves if m["oid"] == oid]
             if mv:
                 m0 = mv[0]; R = m0["frm"]
-                b = np.nonzero((gtr == R) & (ts <= m0["t"]))[0]
-                a2 = np.nonzero((gtr == R) & (ts > m0["t"]))[0]
+                b = np.nonzero((RM == R) & (ts <= m0["t"]))[0]
+                a2 = np.nonzero((RM == R) & (ts > m0["t"]))[0]
                 if len(b) >= 3 and len(a2) >= 3:
                     absn.append(("moved",
                                  float(np.quantile(ol[b, j], args.wq))
                                  - float(np.quantile(ol[a2, j], args.wq))))
             else:
                 R = v0["room"]
-                ix = np.nonzero(gtr == R)[0]
+                ix = np.nonzero(RM == R)[0]
                 if len(ix) >= 6:
                     h = len(ix) // 2
                     absn.append(("static",
