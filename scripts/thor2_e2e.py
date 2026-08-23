@@ -27,6 +27,26 @@ from collections import Counter, defaultdict
 import numpy as np
 
 
+def viterbi(S, stay, temp=0.01):
+    """**방을 프레임마다 독립으로 맞히지 않는다 — 전이를 추적한다.**
+    사람은 방을 순간이동하지 않는다; 문을 지나야 바뀐다. 중앙값 평활은 이것의
+    조잡한 판본이다. 실측: 독립 argmax 0.469 · 평활 0.554 · **전이추적 0.825**.
+    ⚠️ 방 키 유사도의 여유가 0.000 수준이라 **온도로 나눠** 로그확률로 만들어야 한다."""
+    Z = (S - S.max(1, keepdims=True)) / temp
+    logem = Z - np.log(np.exp(Z).sum(1, keepdims=True) + 1e-12)
+    T, K = logem.shape
+    tr = np.full((K, K), np.log((1 - stay) / max(K - 1, 1)))
+    np.fill_diagonal(tr, np.log(stay))
+    dp = logem[0].copy(); bp = np.zeros((T, K), int)
+    for t in range(1, T):
+        m = dp[:, None] + tr
+        bp[t] = np.argmax(m, 0); dp = m.max(0) + logem[t]
+    path = np.zeros(T, int); path[-1] = int(np.argmax(dp))
+    for t in range(T - 1, 0, -1):
+        path[t - 1] = bp[t, path[t]]
+    return path
+
+
 def smooth(lab, w):
     """시간 연속성 — 창 안 최빈값으로 평활. 실제로 순간이동하지 않으므로 정당하다."""
     if w <= 1:
@@ -43,6 +63,9 @@ def main():
     ap.add_argument("--root", required=True)
     ap.add_argument("--cache", required=True)
     ap.add_argument("--stride", type=int, default=1, help="캐시 위에 더 성글게(1=캐시 그대로)")
+    ap.add_argument("--stay", type=float, default=0.0,
+                    help="**전이 추적(Viterbi)의 머무를 확률.** 0이면 끔(종전 방식). "
+                         "0.99 권장 — 방 식별 0.469 → 0.825.")
     ap.add_argument("--min-run", type=int, default=0,
                     help="**재방문을 연속 구간 길이로 판정한다.** ⚠️ 절대 유사도는 못 쓴다 — "
                          "맞는 방 키 0.928 vs 최고 오답 0.930, 여유 중앙 -0.0003 이라 "
@@ -114,6 +137,8 @@ def main():
         gtr = np.array([gtl.get(int(t), None) for t in tt])
         if args.oracle_room:
             lab = np.array([x if x else kn[0] for x in gtr])
+        elif args.stay > 0:
+            lab = np.array(kn)[viterbi(el[sel] @ K.T, args.stay)]
         else:
             lab = np.array([kn[int(np.argmax(K @ el[i]))] for i in sel])
             lab = smooth(lab, args.smooth)
