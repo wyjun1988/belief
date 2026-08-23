@@ -146,6 +146,10 @@ def main():
                     help="에이전트가 물체와 **한 번이라도 같은 방에 있었던** 질의만. "
                          "⚠️ `--oracle-find` 는 이 조건을 자동으로 걸어 표본이 줄므로, "
                          "공정 비교하려면 다른 설정에도 같이 걸어야 한다.")
+    ap.add_argument("--find-mix", type=float, default=0.0,
+                    help="**검색을 이 확률로 GT 로 대체한다**(부분 오라클). "
+                         "0=우리 것만, 1=완전 오라클. 검색 정확도를 원하는 수준으로 맞춰 "
+                         "'검색을 X 까지 올리면 최종 답이 얼마인가' 를 잰다.")
     ap.add_argument("--oracle-find", action="store_true",
                     help="**검색을 GT 로** — 물체를 마지막으로 볼 수 있었던 시점의 실제 방")
     ap.add_argument("--oracle-revisit", action="store_true",
@@ -271,7 +275,7 @@ def main():
                 upto = np.arange(qi + 1)
                 if args.cond2 > 0 and float(np.quantile(O[upto, j], 0.99)) < args.cond2:
                     continue          # 기록 어디서도 안 잡히는 물체는 관측으로 답할 수 없다
-                if args.only_seen or args.oracle_find:
+                if args.only_seen or args.oracle_find or args.find_mix > 0:
                     co = [i for i in upto
                           if gtr[i] is not None
                           and gtr[i] == (([m for m in moves if m["oid"] == oid and m["t"] <= tt[i]]
@@ -279,7 +283,14 @@ def main():
                     if not co:
                         continue
                 # ── ② 검색: 물체가 어느 방에 있(었)나
-                if args.oracle_find:
+                use_oracle = args.oracle_find
+                if 0.0 < args.find_mix < 1.0:
+                    # 질의마다 결정적으로(재현성) 섞는다
+                    h = abs(hash((os.path.basename(hd), int(T), oid))) % 10000
+                    use_oracle = (h / 10000.0) < args.find_mix
+                elif args.find_mix >= 1.0:
+                    use_oracle = True
+                if use_oracle:
                     # 물체와 같은 방에 있었던 마지막 시점의 실제 방
                     seen = [i for i in upto
                             if gtr[i] is not None

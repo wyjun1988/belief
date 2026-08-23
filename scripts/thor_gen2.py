@@ -48,6 +48,8 @@ def main():
     ap.add_argument("--dwell", type=int, default=90, help="한 방 체류 초(평균)")
     ap.add_argument("--moves", type=int, default=10, help="세션 중 이동 사건 수")
     ap.add_argument("--map-per-room", type=int, default=3)
+    ap.add_argument("--vis-dist", type=float, default=20.0,
+                    help="가시성 판정 거리. 기본 1.5m 는 '보인다' 를 거리로 잘라버린다.")
     ap.add_argument("--size", type=int, default=384)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--prior", default=None,
@@ -66,7 +68,13 @@ def main():
     from ai2thor.controller import Controller
     from PIL import Image
     ds = prior.load_dataset("procthor-10k")["train"]
-    ctrl = Controller(scene=ds[0], width=args.size, height=args.size, quality="Low")
+    # ⚠️ **visibilityDistance 를 반드시 올려야 한다.** 기본 1.5 m 라서
+    # 방 건너편에 뻔히 보이는 물체가 전부 `visible: False` 로 라벨된다
+    # (실측: 한 장면에서 pickupable 52개 중 visible=True 가 **0개**, 가장 가까운 것이 1.6 m).
+    # 그 GT 로 검출을 채점하면 멀리 있는 물체를 잡을 때마다 **오검출로 세어진다.**
+    ctrl = Controller(scene=ds[0], width=args.size, height=args.size, quality="Low",
+                      visibilityDistance=args.vis_dist,
+                      renderInstanceSegmentation=True)
     made = 0
     for hi in range(len(ds)):
         if made >= args.houses:
@@ -154,9 +162,29 @@ def main():
             # ⚠️ 프레임별 **가시 물체**를 기록한다. 2차에 이게 없어서
             # "배회 중 검출이 얼마나 되나" 를 직접 못 쟀다(1차 맵 프레임의 0.949 는
             # 자리마다 4방향 정지 촬영이라 조건이 다르다).
-            live.append(dict(t=t, room=cur,
-                             vis=[o["objectId"] for o in e.metadata["objects"]
-                                  if o.get("visible") and o.get("pickupable")]))
+            # 물체까지의 수평거리도 같이 남긴다. vis_dist 를 20m 로 풀면 물체가
+            # **옆방에서도 보이므로** "보인 프레임의 에이전트 방" 을 물체의 방으로
+            # 읽으면 안 된다 — 거리별로 그 대응이 언제 깨지는지 재려면 거리가 필요하다.
+            # 물체까지의 거리와 **화면상 bbox 중심**을 남긴다. vis_dist 를 20m 로 풀면
+            # 물체가 옆방에서도 보이므로 "보인 프레임의 에이전트 방" 을 물체의 방으로
+            # 읽으면 안 된다(실측 일치 0.257). 대신 최초 맵에서 depth 로 위치를 박아둔
+            # **정적 물체를 앵커로** 쓰려면, 타겟과 앵커의 화면상 거리가 필요하다.
+            ap = e.metadata["agent"]["position"]
+            box = e.instance_detections2D
+            vd = {}; vs = {}; vc = {}
+            for o in e.metadata["objects"]:
+                if not o.get("visible"):
+                    continue
+                oid = o["objectId"]; op = o["position"]
+                d = round(((op["x"] - ap["x"]) ** 2 + (op["z"] - ap["z"]) ** 2) ** .5, 2)
+                b = box.get(oid)
+                c = [int((b[0] + b[2]) / 2), int((b[1] + b[3]) / 2)] if b is not None else None
+                if o.get("pickupable"):
+                    vd[oid] = d; vc[oid] = c
+                else:
+                    vs[oid] = c
+            live.append(dict(t=t, room=cur, vis=list(vd), dist=vd, ctr=vc,
+                             anch=vs, apos=[round(ap["x"], 2), round(ap["z"], 2)]))
             Image.fromarray(e.frame).save(
                 os.path.join(hd, "live", "%06d.jpg" % t), quality=85)
             # 에이전트가 **다른 방**에 있을 때만 옮긴다 → 미관측
