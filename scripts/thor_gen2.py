@@ -137,7 +137,15 @@ def main():
                     if e.metadata["lastActionSuccess"]:
                         Image.fromarray(e.frame).save(
                             os.path.join(hd, "map", "%04d.jpg" % len(mp)), quality=88)
-                        mp.append(dict(room=rid, yaw=y))
+                        # 씬그래프를 처음 만들 때 **물체의 bbox 도 같이 남긴다.**
+                        # 질의 시점에 이 crop 을 이미지 질의(exemplar)로 쓰기 위해서다 —
+                        # 글자 "머그컵" 이 아니라 **그 머그컵** 을 찾아야 한다.
+                        bx = e.instance_detections2D
+                        mb = {o["objectId"]: [int(v) for v in bx[o["objectId"]]]
+                              for o in e.metadata["objects"]
+                              if o.get("visible") and o.get("pickupable")
+                              and bx.get(o["objectId"]) is not None}
+                        mp.append(dict(room=rid, yaw=y, box=mb))
         ev = ctrl.step("Pass")
         gt0 = {o["objectId"]: dict(type=o["objectType"],
                                    room=room_of((o["position"]["x"], o["position"]["z"]), rooms))
