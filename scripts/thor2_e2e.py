@@ -47,6 +47,14 @@ def main():
     ap.add_argument("--wq", type=float, default=0.90)
     ap.add_argument("--ratio", type=float, default=0.6)
     ap.add_argument("--topk", type=int, default=2)
+    ap.add_argument("--loc", default="topf", choices=["topf", "roomq", "roomlift"],
+                    help="물체 위치 추정. ⚠️ 기본 `topf`(점수 상위 3프레임의 방)는 "
+                         "**음성이 570장인데 argmax 를 쓴다** — AUC 0.875 여도 최고점 "
+                         "3장이 오검출일 확률이 높다. "
+                         "roomq=방별 상위분위수가 가장 높은 방, "
+                         "roomlift=방별 분위수 − 그 물체의 전체 분위수(자기 기준 보정).")
+    ap.add_argument("--oracle-room", action="store_true",
+                    help="배회 프레임의 방을 GT 로 대체 — **방 재식별 오류와 검색 오류를 가른다**")
     ap.add_argument("--queries", type=int, default=4, help="주택당 질의 시각 수")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
@@ -91,11 +99,14 @@ def main():
         K = np.stack(keys)
         # ── 배회 프레임을 RGB 만으로 방에 배정 + 시간 평활
         sel = np.arange(0, len(ts), args.stride)
-        lab = np.array([kn[int(np.argmax(K @ el[i]))] for i in sel])
-        lab = smooth(lab, args.smooth)
         tt = ts[sel]; O = ol[sel]
         gtl = {m["t"]: m["room"] for m in g["live"]}
         gtr = np.array([gtl.get(int(t), None) for t in tt])
+        if args.oracle_room:
+            lab = np.array([x if x else kn[0] for x in gtr])
+        else:
+            lab = np.array([kn[int(np.argmax(K @ el[i]))] for i in sel])
+            lab = smooth(lab, args.smooth)
         ok = gtr != None
         if ok.sum():
             racc.append(float(np.mean(lab[ok] == gtr[ok])))
@@ -119,8 +130,23 @@ def main():
                 gt_state = "b" if not revis else ("c" if mv else "a")
                 # ── 시스템
                 upto = np.arange(qi + 1)
-                top = upto[np.argsort(-O[upto, j])[:3]]
-                r_pred = Counter(lab[top]).most_common(1)[0][0]
+                if args.loc == "topf":
+                    top = upto[np.argsort(-O[upto, j])[:3]]
+                    r_pred = Counter(lab[top]).most_common(1)[0][0]
+                else:
+                    base = float(np.quantile(O[upto, j], args.wq))
+                    sc_r = {}
+                    for rr in set(lab[upto]):
+                        ix = upto[lab[upto] == rr]
+                        if len(ix) < 3:
+                            continue
+                        q = float(np.quantile(O[ix, j], args.wq))
+                        sc_r[rr] = q - (base if args.loc == "roomlift" else 0.0)
+                    if not sc_r:
+                        continue
+                    r_pred = max(sc_r, key=sc_r.get)
+                    ix = upto[lab[upto] == r_pred]
+                    top = ix[np.argsort(-O[ix, j])[:3]]
                 t_seen = int(tt[top].max())
                 inr_b = [i for i in upto if lab[i] == r_pred and tt[i] <= t_seen]
                 inr_a = [i for i in upto if lab[i] == r_pred and tt[i] > t_seen]
