@@ -80,7 +80,7 @@ def main():
     ap.add_argument("--wq", type=float, default=0.90)
     ap.add_argument("--ratio", type=float, default=0.6)
     ap.add_argument("--topk", type=int, default=2)
-    ap.add_argument("--loc", default="topf", choices=["topf", "roomq", "roomlift", "roomrate"],
+    ap.add_argument("--loc", default="topf", choices=["topf", "roomq", "roomlift", "roomrate", "roomcount"],
                     help="물체 위치 추정. ⚠️ 기본 `topf`(점수 상위 3프레임의 방)는 "
                          "**음성이 570장인데 argmax 를 쓴다** — AUC 0.875 여도 최고점 "
                          "3장이 오검출일 확률이 높다. "
@@ -89,6 +89,23 @@ def main():
                          "**roomrate=방별 '문턱 넘는 프레임 비율'.** ⚠️ 분위수는 "
                          "**프레임 수에 민감하다** — 물체가 없는 방도 프레임이 144장이면 "
                          "오검출의 상위 분위수가 높아진다. 비율은 표본 수에 강건하다.")
+    ap.add_argument("--targets", default=None,
+                    help="**타겟 물체 목록**(thor_detectability.json) — 유형별 '보일 때 검출도'. "
+                         "⚠️ 이 필터는 **다른 자료**(thor2v, 가시성 GT 보유)에서 정하고 "
+                         "여기에 적용한다 — 같은 자료에서 정하면 누수다. "
+                         "연필 0.01 · 시계 0.01 처럼 보일 때조차 안 잡히는 물체는 "
+                         "관측으로 답할 수 없으므로 타겟에서 뺀다.")
+    ap.add_argument("--target-thr", type=float, default=0.10)
+    ap.add_argument("--cond2", type=float, default=0.0,
+                    help="**조건② 를 검색에도 적용한다.** 그 물체가 기록 전체에서 이 값도 "
+                         "못 넘으면 질의에서 뺀다. ⚠️ 부재에는 계속 걸었는데 검색에는 "
+                         "안 걸고 있었다 — 실측: 보일 때 검출도 상위 25%% 물체는 검색 0.762, "
+                         "하위 25%%(연필·시계·빵, 검출도 0.01)는 0.333.")
+    ap.add_argument("--abs-thr", type=float, default=0.30,
+                    help="`roomcount` 용 **절대 문턱**. ⚠️ `roomrate` 는 문턱을 "
+                         "**그 물체 점수의 분위수**로 잡았다 — 같은 잡음 분포에서 뽑은 "
+                         "문턱이라 누적의 이점이 사라졌다(0.393, 분위수와 동일). "
+                         "검출기 자체의 동작점을 절대값으로 주면 '봤다' 를 셀 수 있다.")
     ap.add_argument("--only-seen", action="store_true",
                     help="에이전트가 물체와 **한 번이라도 같은 방에 있었던** 질의만. "
                          "⚠️ `--oracle-find` 는 이 조건을 자동으로 걸어 표본이 줄므로, "
@@ -105,6 +122,11 @@ def main():
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
+    TARGETS = None
+    if args.targets:
+        d = json.load(open(args.targets))
+        TARGETS = {k for k, v in d.items() if v >= args.target_thr}
+        print("타겟 물체 %d종 (문턱 %.2f)" % (len(TARGETS), args.target_thr))
     houses = sorted(glob.glob(os.path.join(args.root, "house_*")))
     prior = defaultdict(Counter); seen_in = defaultdict(set)
     gts = {}
@@ -167,6 +189,8 @@ def main():
                 ot = v0["type"]
                 if ot not in vi or not v0["room"]:
                     continue
+                if TARGETS is not None and ot not in TARGETS:
+                    continue
                 j = vi[ot]
                 mv = [m for m in moves if m["oid"] == oid and m["t"] <= T]
                 r_true = mv[-1]["to"] if mv else v0["room"]
@@ -178,6 +202,8 @@ def main():
                 gt_state = "b" if not revis else ("c" if mv else "a")
                 # ── 시스템
                 upto = np.arange(qi + 1)
+                if args.cond2 > 0 and float(np.quantile(O[upto, j], 0.99)) < args.cond2:
+                    continue          # 기록 어디서도 안 잡히는 물체는 관측으로 답할 수 없다
                 if args.only_seen or args.oracle_find:
                     co = [i for i in upto
                           if gtr[i] is not None
@@ -209,7 +235,9 @@ def main():
                         ix = upto[lab[upto] == rr]
                         if len(ix) < 3:
                             continue
-                        if args.loc == "roomrate":
+                        if args.loc == "roomcount":
+                            sc_r[rr] = float(np.mean(O[ix, j] > args.abs_thr))
+                        elif args.loc == "roomrate":
                             thr = float(np.quantile(O[upto, j], 0.90))
                             sc_r[rr] = float(np.mean(O[ix, j] > thr))
                         else:
