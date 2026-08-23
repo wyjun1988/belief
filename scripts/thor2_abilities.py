@@ -36,6 +36,11 @@ def main():
                          "종전 측정(AUC 0.726)은 "
                          "`gt` 였다 — 오라클 방에서 잰 값이므로 '부재는 방 인지의 영향을 "
                          "덜 받는다' 는 주장의 근거가 되지 못한다. `pred` 로 다시 잰다.")
+    ap.add_argument("--place-node", action="store_true",
+                    help="**방 키를 평균 벡터 하나가 아니라 여러 노드로.** ⚠️ 방마다 맵 프레임 "
+                         "12~120장을 한 벡터로 평균하면 여러 방향에서 본 모습이 뭉개진다 — "
+                         "맞는 방 0.928 vs 최고 오답 0.930(여유 0.000). 노드별 최대유사도를 "
+                         "방 점수로 쓰면 다봉 분포가 살아난다. 실측 방 식별 0.825 → 0.886.")
     ap.add_argument("--stay", type=float, default=0.0, help="전이 추적 머무를 확률")
     ap.add_argument("--min-run", type=int, default=0,
                     help="**연속 구간 길이로 재방문을 판정한다.** ⚠️ 절대 유사도는 못 쓴다 — "
@@ -72,7 +77,12 @@ def main():
         gtl = {m["t"]: m["room"] for m in g["live"]}
         gtr = np.array([gtl.get(int(t), None) for t in ts])
         # 예측 방 (RGB 만 + 시간 평활)
-        sim = el @ K.T
+        if args.place_node:
+            mrr = np.array(mrooms, object) if "mrooms" in dir() else np.array(mr, object)
+            Sn = el @ em.T
+            sim = np.stack([Sn[:, mrr == r].max(1) for r in kn], 1)
+        else:
+            sim = el @ K.T
         if args.stay > 0:
             Z = (sim - sim.max(1, keepdims=True)) / 0.01
             logem = Z - np.log(np.exp(Z).sum(1, keepdims=True) + 1e-12)

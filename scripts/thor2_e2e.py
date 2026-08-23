@@ -63,6 +63,11 @@ def main():
     ap.add_argument("--root", required=True)
     ap.add_argument("--cache", required=True)
     ap.add_argument("--stride", type=int, default=1, help="캐시 위에 더 성글게(1=캐시 그대로)")
+    ap.add_argument("--place-node", action="store_true",
+                    help="**방 키를 평균 벡터 하나가 아니라 여러 노드로.** ⚠️ 방마다 맵 프레임 "
+                         "12~120장을 한 벡터로 평균하면 여러 방향에서 본 모습이 뭉개진다 — "
+                         "맞는 방 0.928 vs 최고 오답 0.930(여유 0.000). 노드별 최대유사도를 "
+                         "방 점수로 쓰면 다봉 분포가 살아난다. 실측 방 식별 0.825 → 0.886.")
     ap.add_argument("--stay", type=float, default=0.0,
                     help="**전이 추적(Viterbi)의 머무를 확률.** 0이면 끔(종전 방식). "
                          "0.99 권장 — 방 식별 0.469 → 0.825.")
@@ -175,7 +180,13 @@ def main():
         if args.oracle_room:
             lab = np.array([x if x else kn[0] for x in gtr])
         elif args.stay > 0:
-            lab = np.array(kn)[viterbi(el[sel] @ K.T, args.stay)]
+            if args.place_node:
+                mrr = np.array(mrooms, object)
+                Snode = el[sel] @ em.T
+                sc_room = np.stack([Snode[:, mrr == r].max(1) for r in kn], 1)
+            else:
+                sc_room = el[sel] @ K.T
+            lab = np.array(kn)[viterbi(sc_room, args.stay)]
         else:
             lab = np.array([kn[int(np.argmax(K @ el[i]))] for i in sel])
             lab = smooth(lab, args.smooth)
