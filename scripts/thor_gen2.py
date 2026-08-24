@@ -68,6 +68,18 @@ def main():
     # 별도 numpy RNG 를 쓴다. 같은 seed 에서 갈라지므로 재현성은 유지된다.
     nrng = np.random.default_rng(args.seed)
 
+    def bytype(seq, table, rtmap, dflt=.25):
+        """방 **유형** 확률을 방 **인스턴스** 가중으로 편다.
+
+        ⚠️ 유형 확률을 인스턴스마다 그대로 주면 유형 분포가 깨진다. ProcTHOR 집은
+        화장실·침실이 여럿이라, 화장실 3개에 각각 0.15 를 주면 합이 0.45 가 된다.
+        실측에서 그렇게 물렸다(거실 의도 0.40 → 실측 0.22, 화장실 0.15 → 0.28).
+        유형 몫을 **그 유형의 방 개수로 나눠** 인스턴스에 배분한다."""
+        n = {}
+        for r in seq:
+            n[rtmap.get(r)] = n.get(rtmap.get(r), 0) + 1
+        return [table.get(rtmap.get(r), dflt) / max(n.get(rtmap.get(r), 1), 1) for r in seq]
+
     def wpick(seq, w):
         """가중 추출. w 가 비거나 합이 0 이면 균등."""
         a = np.asarray(w, float)
@@ -178,8 +190,8 @@ def main():
         #  (2) 방마다 재방문 확률이 같아져 (b)"있을 것이다" 가 비현실적으로 고르게 난다.
         #      실제 가정에서 화장실 체류는 짧고 거실은 길다.
         rids = sorted(byroom)
-        rw = ([MOVE["dwell"].get(rt[r], .25) for r in rids] if MOVE
-              else [1.0] * len(rids))            # 방 체류 가중 (Qwen)
+        rw = (bytype(rids, MOVE["dwell"], rt) if MOVE
+              else [1.0] * len(rids))            # 방 체류 가중 (Qwen, 유형→인스턴스)
         cur = wpick(rids, rw)
         move_at = sorted(rng.sample(range(int(T * 0.1), T), min(args.moves, T)))
         live, events = [], []
@@ -236,8 +248,7 @@ def main():
                 # 목적지는 **배치 사전확률과 다르다.** 머그컵은 부엌에 놓이지만
                 # 옮겨지면 거실에서 발견된다. 그래서 dest 를 따로 물었다.
                 dd = MOVE["dest"].get(state[oid]["type"], {}) if MOVE else {}
-                tgt = wpick(pool, [dd.get(rt[r], .25) for r in pool] if dd
-                            else [1.0] * len(pool))
+                tgt = wpick(pool, bytype(pool, dd, rt) if dd else [1.0] * len(pool))
                 pt = rng.choice(byroom[tgt])
                 r2 = ctrl.step("PlaceObjectAtPoint", objectId=oid,
                                position=dict(x=pt["x"], y=pt["y"] + 0.6, z=pt["z"]))
