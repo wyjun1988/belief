@@ -1,0 +1,376 @@
+{
+ "dwell": {
+  "Kitchen": 0.25,
+  "LivingRoom": 0.4,
+  "Bedroom": 0.2,
+  "Bathroom": 0.15
+ },
+ "mobility": {
+  "AlarmClock": 0.05,
+  "Apple": 0.6,
+  "BaseballBat": 0.1,
+  "BasketBall": 0.4,
+  "Book": 0.75,
+  "Bottle": 0.9,
+  "Bowl": 0.45,
+  "Box": 0.2,
+  "Bread": 0.55,
+  "ButterKnife": 0.3,
+  "CD": 0.4,
+  "Candle": 0.5,
+  "CellPhone": 0.95,
+  "CreditCard": 0.9,
+  "Cup": 0.7,
+  "DeskLamp": 0.2,
+  "DishSponge": 0.4,
+  "Egg": 0.6,
+  "Fork": 0.5,
+  "Kettle": 0.3,
+  "KeyChain": 0.98,
+  "Knife": 0.45,
+  "Ladle": 0.35,
+  "Laptop": 0.85,
+  "Lettuce": 0.9,
+  "Mug": 0.8,
+  "Newspaper": 0.95,
+  "Pan": 0.7,
+  "PaperTowelRoll": 0.4,
+  "Pen": 0.85,
+  "Pencil": 0.85,
+  "PepperShaker": 0.6,
+  "Pillow": 0.65,
+  "Plate": 0.75,
+  "Plunger": 0.3,
+  "Pot": 0.5,
+  "Potato": 0.2,
+  "RemoteControl": 0.9,
+  "SaltShaker": 0.5,
+  "SoapBar": 0.85,
+  "SoapBottle": 0.85,
+  "Spoon": 0.6,
+  "SprayBottle": 0.7,
+  "Statue": 0.05,
+  "TeddyBear": 0.75,
+  "TennisRacket": 0.95,
+  "TissueBox": 0.9,
+  "ToiletPaper": 0.3,
+  "Tomato": 0.9,
+  "Vase": 0.3,
+  "Watch": 0.95,
+  "WineBottle": 0.6
+ },
+ "dest": {
+  "AlarmClock": {
+   "Kitchen": 0.045454545454545456,
+   "LivingRoom": 0.045454545454545456,
+   "Bedroom": 0.9090909090909091,
+   "Bathroom": 0.0
+  },
+  "Apple": {
+   "Kitchen": 0.25,
+   "LivingRoom": 0.37499999999999994,
+   "Bedroom": 0.3125,
+   "Bathroom": 0.0625
+  },
+  "BaseballBat": {
+   "Kitchen": 0.25,
+   "LivingRoom": 0.25,
+   "Bedroom": 0.5,
+   "Bathroom": 0.0
+  },
+  "BasketBall": {
+   "Kitchen": 0.05263157894736842,
+   "LivingRoom": 0.631578947368421,
+   "Bedroom": 0.2631578947368421,
+   "Bathroom": 0.05263157894736842
+  },
+  "Book": {
+   "Kitchen": 0.11764705882352941,
+   "LivingRoom": 0.2941176470588235,
+   "Bedroom": 0.5294117647058824,
+   "Bathroom": 0.058823529411764705
+  },
+  "Bottle": {
+   "Kitchen": 0.2,
+   "LivingRoom": 0.35,
+   "Bedroom": 0.15,
+   "Bathroom": 0.3
+  },
+  "Bowl": {
+   "Kitchen": 0.3125,
+   "LivingRoom": 0.43749999999999994,
+   "Bedroom": 0.18749999999999997,
+   "Bathroom": 0.0625
+  },
+  "Box": {
+   "Kitchen": 0.25,
+   "LivingRoom": 0.5,
+   "Bedroom": 0.25,
+   "Bathroom": 0.0
+  },
+  "Bread": {
+   "Kitchen": 0.4285714285714285,
+   "LivingRoom": 0.2857142857142857,
+   "Bedroom": 0.21428571428571425,
+   "Bathroom": 0.07142857142857142
+  },
+  "ButterKnife": {
+   "Kitchen": 0.6666666666666666,
+   "LivingRoom": 0.22222222222222224,
+   "Bedroom": 0.11111111111111112,
+   "Bathroom": 0.0
+  },
+  "CD": {
+   "Kitchen": 0.08333333333333334,
+   "LivingRoom": 0.4166666666666667,
+   "Bedroom": 0.5,
+   "Bathroom": 0.0
+  },
+  "Candle": {
+   "Kitchen": 0.16666666666666669,
+   "LivingRoom": 0.5833333333333334,
+   "Bedroom": 0.16666666666666669,
+   "Bathroom": 0.08333333333333334
+  },
+  "CellPhone": {
+   "Kitchen": 0.15,
+   "LivingRoom": 0.3,
+   "Bedroom": 0.3,
+   "Bathroom": 0.25
+  },
+  "CreditCard": {
+   "Kitchen": 0.1,
+   "LivingRoom": 0.25,
+   "Bedroom": 0.45,
+   "Bathroom": 0.2
+  },
+  "Cup": {
+   "Kitchen": 0.2,
+   "LivingRoom": 0.45,
+   "Bedroom": 0.2,
+   "Bathroom": 0.15
+  },
+  "DeskLamp": {
+   "Kitchen": 0.0,
+   "LivingRoom": 0.6,
+   "Bedroom": 0.35,
+   "Bathroom": 0.05
+  },
+  "DishSponge": {
+   "Kitchen": 0.6,
+   "LivingRoom": 0.0,
+   "Bedroom": 0.0,
+   "Bathroom": 0.4
+  },
+  "Egg": {
+   "Kitchen": 0.5,
+   "LivingRoom": 0.0,
+   "Bedroom": 0.3,
+   "Bathroom": 0.2
+  },
+  "Fork": {
+   "Kitchen": 0.5,
+   "LivingRoom": 0.1,
+   "Bedroom": 0.1,
+   "Bathroom": 0.3
+  },
+  "Kettle": {
+   "Kitchen": 0.7000000000000001,
+   "LivingRoom": 0.0,
+   "Bedroom": 0.20000000000000004,
+   "Bathroom": 0.10000000000000002
+  },
+  "KeyChain": {
+   "Kitchen": 0.1,
+   "LivingRoom": 0.2,
+   "Bedroom": 0.5,
+   "Bathroom": 0.2
+  },
+  "Knife": {
+   "Kitchen": 0.6,
+   "LivingRoom": 0.0,
+   "Bedroom": 0.1,
+   "Bathroom": 0.3
+  },
+  "Ladle": {
+   "Kitchen": 0.7,
+   "LivingRoom": 0.0,
+   "Bedroom": 0.0,
+   "Bathroom": 0.3
+  },
+  "Laptop": {
+   "Kitchen": 0.05,
+   "LivingRoom": 0.3,
+   "Bedroom": 0.5,
+   "Bathroom": 0.15
+  },
+  "Lettuce": {
+   "Kitchen": 0.2,
+   "LivingRoom": 0.8,
+   "Bedroom": 0.0,
+   "Bathroom": 0.0
+  },
+  "Mug": {
+   "Kitchen": 0.3,
+   "LivingRoom": 0.5,
+   "Bedroom": 0.15,
+   "Bathroom": 0.05
+  },
+  "Newspaper": {
+   "Kitchen": 0.0,
+   "LivingRoom": 0.6000000000000001,
+   "Bedroom": 0.30000000000000004,
+   "Bathroom": 0.10000000000000002
+  },
+  "Pan": {
+   "Kitchen": 0.8,
+   "LivingRoom": 0.2,
+   "Bedroom": 0.0,
+   "Bathroom": 0.0
+  },
+  "PaperTowelRoll": {
+   "Kitchen": 0.2,
+   "LivingRoom": 0.1,
+   "Bedroom": 0.0,
+   "Bathroom": 0.7
+  },
+  "Pen": {
+   "Kitchen": 0.05,
+   "LivingRoom": 0.3,
+   "Bedroom": 0.55,
+   "Bathroom": 0.1
+  },
+  "Pencil": {
+   "Kitchen": 0.05,
+   "LivingRoom": 0.25,
+   "Bedroom": 0.55,
+   "Bathroom": 0.15
+  },
+  "PepperShaker": {
+   "Kitchen": 0.7499999999999999,
+   "LivingRoom": 0.25,
+   "Bedroom": 0.0,
+   "Bathroom": 0.0
+  },
+  "Pillow": {
+   "Kitchen": 0.0,
+   "LivingRoom": 0.12500000000000003,
+   "Bedroom": 0.875,
+   "Bathroom": 0.0
+  },
+  "Plate": {
+   "Kitchen": 0.4,
+   "LivingRoom": 0.6,
+   "Bedroom": 0.0,
+   "Bathroom": 0.0
+  },
+  "Plunger": {
+   "Kitchen": 0.0,
+   "LivingRoom": 0.0,
+   "Bedroom": 0.0,
+   "Bathroom": 1.0
+  },
+  "Pot": {
+   "Kitchen": 1.0,
+   "LivingRoom": 0.0,
+   "Bedroom": 0.0,
+   "Bathroom": 0.0
+  },
+  "Potato": {
+   "Kitchen": 0.95,
+   "LivingRoom": 0.03,
+   "Bedroom": 0.01,
+   "Bathroom": 0.01
+  },
+  "RemoteControl": {
+   "Kitchen": 0.1,
+   "LivingRoom": 0.4,
+   "Bedroom": 0.4,
+   "Bathroom": 0.1
+  },
+  "SaltShaker": {
+   "Kitchen": 0.8,
+   "LivingRoom": 0.15,
+   "Bedroom": 0.03,
+   "Bathroom": 0.02
+  },
+  "SoapBar": {
+   "Kitchen": 0.1,
+   "LivingRoom": 0.1,
+   "Bedroom": 0.1,
+   "Bathroom": 0.7
+  },
+  "SoapBottle": {
+   "Kitchen": 0.05,
+   "LivingRoom": 0.05,
+   "Bedroom": 0.05,
+   "Bathroom": 0.85
+  },
+  "Spoon": {
+   "Kitchen": 0.7000000000000001,
+   "LivingRoom": 0.20000000000000004,
+   "Bedroom": 0.08000000000000002,
+   "Bathroom": 0.020000000000000004
+  },
+  "SprayBottle": {
+   "Kitchen": 0.15,
+   "LivingRoom": 0.1,
+   "Bedroom": 0.1,
+   "Bathroom": 0.65
+  },
+  "Statue": {
+   "Kitchen": 0.0,
+   "LivingRoom": 0.8,
+   "Bedroom": 0.15,
+   "Bathroom": 0.05
+  },
+  "TeddyBear": {
+   "Kitchen": 0.0,
+   "LivingRoom": 0.2,
+   "Bedroom": 0.65,
+   "Bathroom": 0.15
+  },
+  "TennisRacket": {
+   "Kitchen": 0.0,
+   "LivingRoom": 0.6666666666666666,
+   "Bedroom": 0.3333333333333333,
+   "Bathroom": 0.0
+  },
+  "TissueBox": {
+   "Kitchen": 0.2,
+   "LivingRoom": 0.45,
+   "Bedroom": 0.25,
+   "Bathroom": 0.1
+  },
+  "ToiletPaper": {
+   "Kitchen": 0.0,
+   "LivingRoom": 0.0,
+   "Bedroom": 0.0,
+   "Bathroom": 1.0
+  },
+  "Tomato": {
+   "Kitchen": 0.0,
+   "LivingRoom": 0.6,
+   "Bedroom": 0.2,
+   "Bathroom": 0.2
+  },
+  "Vase": {
+   "Kitchen": 0.0,
+   "LivingRoom": 0.7,
+   "Bedroom": 0.1,
+   "Bathroom": 0.2
+  },
+  "Watch": {
+   "Kitchen": 0.0,
+   "LivingRoom": 0.3,
+   "Bedroom": 0.4,
+   "Bathroom": 0.3
+  },
+  "WineBottle": {
+   "Kitchen": 0.1,
+   "LivingRoom": 0.5,
+   "Bedroom": 0.15,
+   "Bathroom": 0.25
+  }
+ }
+}

@@ -43,11 +43,25 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--houses", type=int, default=8)
     ap.add_argument("--min-rooms", type=int, default=4)
+    # ⚠️ **한국 주거 환경에 맞춘다.** ProcTHOR 에는 방이 10개 넘는 집이 섞여 있고,
+    # 그런 집이 들어가면 후보 방이 많아져 앵커 국소화의 천장이 무너진다
+    # (3주택 0.897 → 20주택 0.621). 침실 4개짜리 집에서 "어느 침실" 을 가르는 것은
+    # 우리 시나리오가 아니다. 화장실 뺀 방 2~6, 화장실 포함 8 이하로 제한한다.
+    ap.add_argument("--max-rooms", type=int, default=8,
+                    help="화장실 포함 전체 방 수 상한")
+    ap.add_argument("--max-nonbath", type=int, default=6,
+                    help="화장실 뺀 방 수 상한")
+    ap.add_argument("--min-nonbath", type=int, default=2,
+                    help="화장실 뺀 방 수 하한")
     ap.add_argument("--hours", type=float, default=2.0)
     ap.add_argument("--fps", type=float, default=1.0)
     ap.add_argument("--dwell", type=int, default=90, help="한 방 체류 초(평균)")
     ap.add_argument("--moves", type=int, default=10, help="세션 중 이동 사건 수")
     ap.add_argument("--map-per-room", type=int, default=3)
+    ap.add_argument("--platform", default=None, choices=[None, "cloud"],
+                    help="리눅스 헤드리스 GPU 에서는 `cloud`(CloudRendering). "
+                         "Unity 창이 없으므로 이걸 안 주면 컨트롤러가 뜨지 않는다. "
+                         "Vulkan 드라이버가 필요하다 — `vulkaninfo` 로 먼저 확인할 것.")
     ap.add_argument("--move", default=None,
                     help="Qwen 움직임 사전확률(scripts/thor_move_llm.py). 주면 방 체류·"
                          "물체 이동성향·이동 목적지를 현실 분포로 뽑는다. 없으면 균등.")
@@ -101,7 +115,11 @@ def main():
     # 방 건너편에 뻔히 보이는 물체가 전부 `visible: False` 로 라벨된다
     # (실측: 한 장면에서 pickupable 52개 중 visible=True 가 **0개**, 가장 가까운 것이 1.6 m).
     # 그 GT 로 검출을 채점하면 멀리 있는 물체를 잡을 때마다 **오검출로 세어진다.**
-    ctrl = Controller(scene=ds[0], width=args.size, height=args.size, quality="Low",
+    kw = {}
+    if args.platform == "cloud":
+        from ai2thor.platform import CloudRendering
+        kw["platform"] = CloudRendering
+    ctrl = Controller(scene=ds[0], width=args.size, height=args.size, quality="Low", **kw,
                       visibilityDistance=args.vis_dist,
                       renderInstanceSegmentation=True)
     made = 0
@@ -109,7 +127,9 @@ def main():
         if made >= args.houses:
             break
         h = ds[hi]
-        if len(h["rooms"]) < args.min_rooms:
+        nb = sum(1 for r in h["rooms"] if r["roomType"] != "Bathroom")
+        if not (args.min_rooms <= len(h["rooms"]) <= args.max_rooms
+                and args.min_nonbath <= nb <= args.max_nonbath):
             continue
         try:
             ctrl.reset(scene=h)
@@ -124,7 +144,7 @@ def main():
             if rid:
                 byroom.setdefault(rid, []).append(p)
         byroom = {k: v for k, v in byroom.items() if len(v) >= 3}
-        if len(byroom) < args.min_rooms:
+        if not (args.min_rooms <= len(byroom) <= args.max_rooms):
             continue
         hd = os.path.join(args.out, "house_%04d" % hi)
         os.makedirs(os.path.join(hd, "map"), exist_ok=True)

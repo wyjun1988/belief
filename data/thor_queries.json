@@ -1,0 +1,311 @@
+{
+ "AlarmClock": [
+  "alarm clock",
+  "digital alarm clock",
+  "round white clock",
+  "clock on nightstand"
+ ],
+ "Apple": [
+  "apple",
+  "red shiny apple",
+  "green fruit",
+  "apple on table"
+ ],
+ "BaseballBat": [
+  "baseball bat",
+  "wooden baseball bat",
+  "long aluminum bat",
+  "bat in rack"
+ ],
+ "BasketBall": [
+  "basket ball",
+  "orange textured ball",
+  "giant rubber ball",
+  "ball on floor"
+ ],
+ "Book": [
+  "book",
+  "hardcover novel",
+  "stack of books",
+  "open book on desk"
+ ],
+ "Bottle": [
+  "bottle",
+  "clear glass bottle",
+  "plastic water bottle",
+  "wine bottle on shelf"
+ ],
+ "Bowl": [
+  "bowl",
+  "ceramic soup bowl",
+  "metal mixing bowl",
+  "bowl on counter"
+ ],
+ "Box": [
+  "box",
+  "cardboard shipping box",
+  "small gift box",
+  "tape storage box"
+ ],
+ "Bread": [
+  "bread",
+  "loaf of white bread",
+  "baguette in bag",
+  "slice on plate"
+ ],
+ "ButterKnife": [
+  "butter knife",
+  "silver butter knife",
+  "plastic spreader",
+  "knife on table"
+ ],
+ "CD": [
+  "c d",
+  "shiny disc in case",
+  "metallic album cover",
+  "stacked plastic discs"
+ ],
+ "Candle": [
+  "candle",
+  "white wax pillar",
+  "lit taper with flame",
+  "glass jar candle"
+ ],
+ "CellPhone": [
+  "cell phone",
+  "black smartphone screen",
+  "silver mobile device",
+  "phone on table"
+ ],
+ "Cloth": [
+  "cloth",
+  "folded white towel",
+  "red fabric drape",
+  "clean kitchen rag"
+ ],
+ "CreditCard": [
+  "credit card",
+  "plastic payment card",
+  "gold bank card",
+  "white credit slip"
+ ],
+ "Cup": [
+  "cup",
+  "ceramic coffee mug",
+  "glass drinking tumbler",
+  "blue plastic cup"
+ ],
+ "DeskLamp": [
+  "desk lamp",
+  "black adjustable lamp",
+  "wooden desk light",
+  "led table lamp"
+ ],
+ "DishSponge": [
+  "dish sponge",
+  "yellow scrubby sponge",
+  "green cleaning pad",
+  "wet foam block"
+ ],
+ "Egg": [
+  "egg",
+  "white farm egg",
+  "brown shell egg",
+  "dozen carton eggs"
+ ],
+ "Fork": [
+  "fork",
+  "metal dinner fork",
+  "silver eating utensil",
+  "tined silverware"
+ ],
+ "Kettle": [
+  "kettle",
+  "metal kitchen kettle",
+  "white electric kettle",
+  "stainless steel kettle"
+ ],
+ "KeyChain": [
+  "key chain",
+  "metal keychain",
+  "leather keychain",
+  "plastic keychain"
+ ],
+ "Knife": [
+  "knife",
+  "bladed kitchen knife",
+  "wooden handled knife",
+  "sharp chef knife"
+ ],
+ "Ladle": [
+  "ladle",
+  "wooden soup ladle",
+  "metal serving ladle",
+  "long handle ladle"
+ ],
+ "Laptop": [
+  "laptop",
+  "open silver laptop",
+  "black closed laptop",
+  "white laptop on desk"
+ ],
+ "Lettuce": [
+  "lettuce",
+  "green leafy lettuce",
+  "crisp salad lettuce",
+  "bunch of lettuce"
+ ],
+ "Mug": [
+  "mug",
+  "white ceramic mug",
+  "blue handled mug",
+  "coffee filled mug"
+ ],
+ "Newspaper": [
+  "newspaper",
+  "folded newspaper",
+  "black and white paper",
+  "stack of newspapers"
+ ],
+ "Pan": [
+  "pan",
+  "nonstick frying pan",
+  "black skillet",
+  "metal cooking pan"
+ ],
+ "PaperTowelRoll": [
+  "paper towel roll",
+  "white paper towel roll",
+  "full paper towel roll",
+  "hanging paper towel roll"
+ ],
+ "Pen": [
+  "pen",
+  "black plastic writing tool",
+  "metal tip stationery",
+  "desk writing instrument"
+ ],
+ "Pencil": [
+  "pencil",
+  "wooden yellow writing stick",
+  "graphite tip tool",
+  "school desk writing utensil"
+ ],
+ "PepperShaker": [
+  "pepper shaker",
+  "black ceramic spice jar",
+  "ground pepper container",
+  "table dining condiment"
+ ],
+ "Pillow": [
+  "pillow",
+  "fluffy white bed cushion",
+  "soft fabric resting pad",
+  "bedroom sleeping support"
+ ],
+ "Plate": [
+  "plate",
+  "white ceramic dinner dish",
+  "round food serving tray",
+  "table eating vessel"
+ ],
+ "Plunger": [
+  "plunger",
+  "red rubber drain tool",
+  "white plastic toilet aid",
+  "bathroom plumbing fixture"
+ ],
+ "Pot": [
+  "pot",
+  "shiny stainless steel cooking vessel",
+  "silver kitchen cooking pan",
+  "stove heating container"
+ ],
+ "Potato": [
+  "potato",
+  "brown earthy root vegetable",
+  "peeled white tuber",
+  "baked golden potato"
+ ],
+ "RemoteControl": [
+  "remote control",
+  "black plastic tv controller",
+  "gray electronic device",
+  "sofa entertainment gadget"
+ ],
+ "SaltShaker": [
+  "salt shaker",
+  "glass clear spice jar",
+  "white salt container",
+  "table dining condiment"
+ ],
+ "SoapBar": [
+  "soap bar",
+  "white rectangular bar",
+  "soap on holder",
+  "bathroom sink item"
+ ],
+ "SoapBottle": [
+  "soap bottle",
+  "clear liquid bottle",
+  "soap dispenser pump",
+  "bathroom shelf item"
+ ],
+ "Spoon": [
+  "spoon",
+  "metal eating utensil",
+  "silver spoon in bowl",
+  "kitchen counter tool"
+ ],
+ "SprayBottle": [
+  "spray bottle",
+  "plastic trigger spray",
+  "cleaning fluid container",
+  "bathroom or kitchen item"
+ ],
+ "Statue": [
+  "statue",
+  "stone decorative figure",
+  "classical bust on stand",
+  "living room display"
+ ],
+ "TeddyBear": [
+  "teddy bear",
+  "soft plush toy",
+  "brown stuffed bear",
+  "bedside or couch item"
+ ],
+ "TennisRacket": [
+  "tennis racket",
+  "strung sports paddle",
+  "black racket with strings",
+  "gym or wall item"
+ ],
+ "TissueBox": [
+  "tissue box",
+  "folded paper container",
+  "white tissue pack",
+  "living room table item"
+ ],
+ "ToiletPaper": [
+  "toilet paper",
+  "rolled white paper",
+  "toilet paper roll on holder",
+  "bathroom stall item"
+ ],
+ "Tomato": [
+  "tomato",
+  "red round vegetable",
+  "ripe fruit on counter",
+  "kitchen salad ingredient"
+ ],
+ "Vase": [
+  "vase"
+ ],
+ "Watch": [
+  "watch"
+ ],
+ "WineBottle": [
+  "wine bottle"
+ ]
+}
