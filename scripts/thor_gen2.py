@@ -48,6 +48,9 @@ def main():
     ap.add_argument("--dwell", type=int, default=90, help="한 방 체류 초(평균)")
     ap.add_argument("--moves", type=int, default=10, help="세션 중 이동 사건 수")
     ap.add_argument("--map-per-room", type=int, default=3)
+    ap.add_argument("--move", default=None,
+                    help="Qwen 움직임 사전확률(scripts/thor_move_llm.py). 주면 방 체류·"
+                         "물체 이동성향·이동 목적지를 현실 분포로 뽑는다. 없으면 균등.")
     ap.add_argument("--vis-dist", type=float, default=20.0,
                     help="가시성 판정 거리. 기본 1.5m 는 '보인다' 를 거리로 잘라버린다.")
     ap.add_argument("--size", type=int, default=384)
@@ -61,9 +64,23 @@ def main():
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     rng = random.Random(args.seed)
+    # ⚠️ `rng` 는 random.Random 이라 가중 추출(p=)을 못 받는다. 가중이 필요한 곳만
+    # 별도 numpy RNG 를 쓴다. 같은 seed 에서 갈라지므로 재현성은 유지된다.
+    nrng = np.random.default_rng(args.seed)
+
+    def wpick(seq, w):
+        """가중 추출. w 가 비거나 합이 0 이면 균등."""
+        a = np.asarray(w, float)
+        if len(a) != len(seq) or not np.isfinite(a).all() or a.sum() <= 0:
+            return seq[nrng.integers(len(seq))]
+        return seq[nrng.choice(len(seq), p=a / a.sum())]
     T = int(args.hours * 3600 * args.fps)
 
     PRIOR = json.load(open(args.prior)) if args.prior else None
+    MOVE = json.load(open(args.move)) if args.move else None
+    if MOVE:
+        print("움직임 사전확률: 체류 " + " ".join("%s %.2f" % (k, v)
+              for k, v in MOVE["dwell"].items()), flush=True)
     import prior
     from ai2thor.controller import Controller
     from PIL import Image
@@ -153,15 +170,24 @@ def main():
         gt0 = {k: v for k, v in gt0.items() if v["room"]}
 
         # ── 1fps 배회 (RGB 만) + 미관측 이동
+        # ⚠️ 예전엔 방·물체·목적지가 **전부 균등 난수**였다. 배치만 Qwen 으로
+        # 현실화하고 움직임을 균등으로 두면 두 군데가 망가진다:
+        #  (1) 목적지가 균등이면 belief 가 원리적으로 이동 물체를 못 맞힌다.
+        #      실제로는 머그컵이 부엌→거실로 가지 부엌→화장실로 가지 않는다.
+        #      belief 몫이 전체의 38% 인데 그 성능이 실제보다 나쁘게 측정된다.
+        #  (2) 방마다 재방문 확률이 같아져 (b)"있을 것이다" 가 비현실적으로 고르게 난다.
+        #      실제 가정에서 화장실 체류는 짧고 거실은 길다.
         rids = sorted(byroom)
-        cur = rng.choice(rids)
+        rw = ([MOVE["dwell"].get(rt[r], .25) for r in rids] if MOVE
+              else [1.0] * len(rids))            # 방 체류 가중 (Qwen)
+        cur = wpick(rids, rw)
         move_at = sorted(rng.sample(range(int(T * 0.1), T), min(args.moves, T)))
         live, events = [], []
         state = dict(gt0)
         mi = 0
         for t in range(T):
             if rng.random() < 1.0 / args.dwell:
-                cur = rng.choice(rids)
+                cur = wpick(rids, rw)
             p = rng.choice(byroom[cur])
             y = rng.choice((0, 45, 90, 135, 180, 225, 270, 315))
             e = ctrl.step("Teleport", position=p, rotation=dict(x=0, y=y, z=0), horizon=10)
@@ -201,8 +227,17 @@ def main():
                 cands = [o for o, v in state.items() if v["room"] and v["room"] != cur]
                 if not cands:
                     continue
-                oid = rng.choice(cands)
-                tgt = rng.choice([r for r in rids if r != state[oid]["room"]])
+                # 물체별 **이동 성향**으로 뽑는다 — 머그컵은 자주, 야구방망이는 거의 안.
+                oid = wpick(cands, [MOVE["mobility"].get(state[o]["type"], .5)
+                                    for o in cands] if MOVE else [1.0] * len(cands))
+                pool = [r for r in rids if r != state[oid]["room"]]
+                if not pool:
+                    continue
+                # 목적지는 **배치 사전확률과 다르다.** 머그컵은 부엌에 놓이지만
+                # 옮겨지면 거실에서 발견된다. 그래서 dest 를 따로 물었다.
+                dd = MOVE["dest"].get(state[oid]["type"], {}) if MOVE else {}
+                tgt = wpick(pool, [dd.get(rt[r], .25) for r in pool] if dd
+                            else [1.0] * len(pool))
                 pt = rng.choice(byroom[tgt])
                 r2 = ctrl.step("PlaceObjectAtPoint", objectId=oid,
                                position=dict(x=pt["x"], y=pt["y"] + 0.6, z=pt["z"]))
