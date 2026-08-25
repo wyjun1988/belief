@@ -65,6 +65,10 @@ def main():
     ap.add_argument("--move", default=None,
                     help="Qwen 움직임 사전확률(scripts/thor_move_llm.py). 주면 방 체류·"
                          "물체 이동성향·이동 목적지를 현실 분포로 뽑는다. 없으면 균등.")
+    ap.add_argument("--mapwalk", action="store_true",
+                    help="t=0 배치 직후 매핑 워크(연속 걷기 + GT뎁스)를 찍는다. "
+                         "이 순서여야 **타겟이 검출 맵에 들어온다** — 독립 스크립트는 "
+                         "reset 때문에 이동 물체가 기본 위치로 돌아간다.")
     ap.add_argument("--vis-dist", type=float, default=20.0,
                     help="가시성 판정 거리. 기본 1.5m 는 '보인다' 를 거리로 잘라버린다.")
     ap.add_argument("--size", type=int, default=384)
@@ -200,6 +204,18 @@ def main():
                                    room=room_of((o["position"]["x"], o["position"]["z"]), rooms))
                for o in ev.metadata["objects"] if o.get("pickupable")}
         gt0 = {k: v for k, v in gt0.items() if v["room"]}
+
+        if args.mapwalk:
+            import sys as _sys
+            _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from thor_mapwalk import walk as _walk
+            nmw = _walk(ctrl, os.path.join(hd, "mapwalk"),
+                        {r["id"]: [(c["x"], c["z"]) for c in r["floorPolygon"]]
+                         for r in rooms},
+                        [[d.get("room0"), d.get("room1")] for d in h.get("doors", [])
+                         if d.get("room0") and d.get("room1")],
+                        args.size, gt_depth=True)
+            print("  매핑워크 %d프레임" % nmw, flush=True)
 
         # ── 1fps 배회 (RGB 만) + 미관측 이동
         # ⚠️ 예전엔 방·물체·목적지가 **전부 균등 난수**였다. 배치만 Qwen 으로

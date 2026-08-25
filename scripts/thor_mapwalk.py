@@ -22,6 +22,85 @@ import numpy as np
 from PIL import Image
 
 
+
+def walk(ctrl, out, polys, doors, size, grid_skip=2, scan_every=6, gt_depth=False):
+    """한 집에서 매핑 워크를 실행해 out/ 에 프레임·포즈·(뎁스)·bbox 를 남긴다.
+
+    ⚠️ `thor_gen2 --mapwalk` 가 **t=0 배치 직후** 이 함수를 부른다. 독립 스크립트로
+    house 를 reset 하면 이동 물체가 기본 위치로 돌아가 타겟 초기 방을 검출로 못
+    만든다 — 배치 → 매핑워크 → 배회 순서일 때만 타겟이 검출 맵에 들어온다."""
+    import numpy as np
+    from PIL import Image
+
+    def _in(x, z, pts):
+        c = False; n = len(pts)
+        for i in range(n):
+            x1, z1 = pts[i]; x2, z2 = pts[(i + 1) % n]
+            if (z1 > z) != (z2 > z) and x < (x2-x1)*(z-z1)/(z2-z1+1e-12) + x1:
+                c = not c
+        return c
+
+    pos = ctrl.step("GetReachablePositions").metadata["actionReturn"] or []
+    byroom = {}
+    for p in pos:
+        for r, pts in polys.items():
+            if _in(p["x"], p["z"], pts):
+                byroom.setdefault(r, []).append(p); break
+    adjr = {}
+    for a, b in doors:
+        adjr.setdefault(a, set()).add(b); adjr.setdefault(b, set()).add(a)
+    rids = [r for r in sorted(byroom) if byroom[r]]
+    if not rids:
+        return 0
+    order, seen, q = [], set(), [rids[0]]
+    while q:
+        r = q.pop(0)
+        if r in seen or r not in byroom:
+            continue
+        seen.add(r); order.append(r)
+        q += sorted(adjr.get(r, ()))
+    order += [r for r in rids if r not in seen]
+    os.makedirs(out, exist_ok=True)
+    if gt_depth:
+        os.makedirs(os.path.join(out, "depth"), exist_ok=True)
+    rec = []; state = dict(k=0, cur=None)
+
+    def shoot(p, yaw, room, scan):
+        e = ctrl.step("Teleport", position=p, rotation=dict(x=0, y=yaw, z=0), horizon=10)
+        if not e.metadata["lastActionSuccess"]:
+            return
+        k = state["k"]
+        Image.fromarray(e.frame).save(os.path.join(out, "%05d.jpg" % k), quality=88)
+        if gt_depth and e.depth_frame is not None:
+            np.save(os.path.join(out, "depth", "%05d.npy" % k),
+                    e.depth_frame.astype(np.float16))
+        bx = e.instance_detections2D
+        rec.append(dict(k=k, room=room, scan=scan,
+                        pos=[round(p["x"], 3), round(p["z"], 3)], yaw=int(yaw),
+                        box={o["objectId"]: [int(x) for x in bx[o["objectId"]]]
+                             for o in e.metadata["objects"]
+                             if o.get("visible") and bx.get(o["objectId"]) is not None}))
+        state["k"] = k + 1; state["cur"] = p
+
+    for r in order:
+        pts = byroom[r][::grid_skip] or byroom[r]
+        left = pts[:]; here = state["cur"] or left[0]
+        tour = []
+        while left:
+            left.sort(key=lambda p: (p["x"]-here["x"])**2 + (p["z"]-here["z"])**2)
+            here = left.pop(0); tour.append(here)
+        for i, p in enumerate(tour):
+            nxt = tour[i+1] if i+1 < len(tour) else p
+            yaw = float(np.degrees(np.arctan2(nxt["x"]-p["x"], nxt["z"]-p["z"]))) % 360
+            shoot(p, round(yaw), r, False)
+            if i % scan_every == 0:
+                for dy in range(45, 360, 45):
+                    shoot(p, round((yaw+dy) % 360), r, True)
+    json.dump(dict(frames=rec, fov=90.0, size=size, order=order),
+              open(os.path.join(out, "walk.json"), "w"))
+    return state["k"]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)

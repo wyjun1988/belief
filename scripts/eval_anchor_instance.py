@@ -17,6 +17,11 @@ ROOT = os.environ.get("THOR_ROOT", "data/thor3")
 A3P = os.environ.get("A3_PREFIX", "/tmp/a3_")
 QCP = os.environ.get("QC_PREFIX", "/tmp/qc_")
 GTF = os.environ.get("GTFRAME", "1") == "1"
+# 방별 타입표의 출처: gt = scene_meta(GT 맵) · owl = initmap_owl.json (검출로 구축)
+# ⚠️ owl 이어도 개체 앵커의 방(aroom)은 아직 GT 다 — ax_ exemplar 가 GT objectId 에
+# 묶여 있어서다. 검출 개체로 완전히 벗기려면 initmap 군집에서 exemplar 를 다시
+# 뽑아야 한다(프레임 필요). 이 눈금은 **타입표 오염의 영향**만 분리한다.
+MAPSRC = os.environ.get("MAPSRC", "gt")
 AXP = os.environ.get("AX_PREFIX", "/tmp/ax_")
 K = 10
 
@@ -51,10 +56,18 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     xy = np.stack([XP[:, ai] // pw, XP[:, ai] % pw], -1)            # (프레임, 앵커, yx)
     py, px = P // pw, P % pw
     rids = sorted({v["room"] for v in sm["static"].values()})
-    # 타입 가방 기준선용
+    # 타입 가방 기준선용 — MAPSRC 에 따라 GT 맵 또는 검출 맵
     rtypes = {}
-    for v in sm["static"].values():
-        rtypes.setdefault(v["room"], Counter())[v["type"]] += 1
+    if MAPSRC == "owl":
+        im = os.path.join(os.path.realpath(hd), "initmap_owl.json")
+        if not os.path.exists(im): continue
+        for i2 in json.load(open(im)):
+            rtypes.setdefault(i2["room"], Counter())[i2["type"]] += 1
+        for r in rids:
+            rtypes.setdefault(r, Counter())
+    else:
+        for v in sm["static"].values():
+            rtypes.setdefault(v["room"], Counter())[v["type"]] += 1
     allt = set().union(*[set(c) for c in rtypes.values()])
     idf = {t: 1.0/max(sum(t in rtypes.get(r, ()) for r in rids), 1) for t in allt}
     adj = {r: set() for r in rids}
