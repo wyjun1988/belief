@@ -65,6 +65,18 @@ def main():
     ap.add_argument("--move", default=None,
                     help="Qwen 움직임 사전확률(scripts/thor_move_llm.py). 주면 방 체류·"
                          "물체 이동성향·이동 목적지를 현실 분포로 뽑는다. 없으면 균등.")
+    ap.add_argument("--stress", action="store_true",
+                    help="현실화 스트레스: 배회 중 주기적 조명 랜덤화 + 프레임에 "
+                         "노출 드리프트·노이즈·블러. **매핑워크는 깨끗하게 두고** "
+                         "배회만 오염시킨다 — 맵은 한 번 정성껏 찍고 이후 조건이 "
+                         "변하는 실제 상황의 재현. 부재 신호(점수 하락)가 조명 변화와 "
+                         "구분되는지가 핵심 시험이다.")
+    ap.add_argument("--light-every", type=int, default=600,
+                    help="몇 초(프레임)마다 조명을 다시 뽑나")
+    ap.add_argument("--min-objects", type=int, default=0,
+                    help="집 스펙의 물체 수 하한 — 잡동사니 많은 집만 고른다. "
+                         "런타임에 물체를 추가하는 API 가 없어 필터가 정공법이다. "
+                         "실측 분포(한국형 필터 하): 중앙 85 · 75분위 102 · 90분위 129")
     ap.add_argument("--mapwalk", action="store_true",
                     help="t=0 배치 직후 매핑 워크(연속 걷기 + GT뎁스)를 찍는다. "
                          "이 순서여야 **타겟이 검출 맵에 들어온다** — 독립 스크립트는 "
@@ -131,6 +143,10 @@ def main():
         if made >= args.houses:
             break
         h = ds[hi]
+        def _cnt(objs):
+            return sum(1 + _cnt(o.get("children", [])) for o in objs)
+        if args.min_objects and _cnt(h.get("objects", [])) < args.min_objects:
+            continue
         nb = sum(1 for r in h["rooms"] if r["roomType"] != "Bathroom")
         if not (args.min_rooms <= len(h["rooms"]) <= args.max_rooms
                 and args.min_nonbath <= nb <= args.max_nonbath):
@@ -225,6 +241,7 @@ def main():
         #      belief 몫이 전체의 38% 인데 그 성능이 실제보다 나쁘게 측정된다.
         #  (2) 방마다 재방문 확률이 같아져 (b)"있을 것이다" 가 비현실적으로 고르게 난다.
         #      실제 가정에서 화장실 체류는 짧고 거실은 길다.
+        expo = 1.0                      # 노출 드리프트 (스트레스)
         rids = sorted(byroom)
         rw = (bytype(rids, MOVE["dwell"], rt) if MOVE
               else [1.0] * len(rids))            # 방 체류 가중 (Qwen, 유형→인스턴스)
@@ -267,8 +284,27 @@ def main():
                     vs[oid] = c
             live.append(dict(t=t, room=cur, vis=list(vd), dist=vd, ctr=vc,
                              anch=vs, apos=[round(ap["x"], 2), round(ap["z"], 2)]))
-            Image.fromarray(e.frame).save(
-                os.path.join(hd, "live", "%06d.jpg" % t), quality=85)
+            fr = e.frame
+            if args.stress:
+                if t and t % args.light_every == 0:
+                    try:
+                        ctrl.step("RandomizeLighting", brightness=(0.5, 1.5),
+                                  randomizeColor=True, hue=(0, 1), saturation=(0, 0.4))
+                    except Exception:
+                        pass
+                # 노출은 천천히 흐른다 — 프레임마다 독립이면 자기보정이 그냥 이긴다
+                expo = float(np.clip(expo + nrng.normal(0, .02), .7, 1.3))
+                fr = fr.astype(np.float32) * expo
+                fr += nrng.normal(0, float(nrng.uniform(2, 6)), fr.shape)
+                fr = np.clip(fr, 0, 255).astype(np.uint8)
+                im = Image.fromarray(fr)
+                if nrng.random() < .25:
+                    from PIL import ImageFilter
+                    im = im.filter(ImageFilter.GaussianBlur(float(nrng.uniform(.5, 1.2))))
+                im.save(os.path.join(hd, "live", "%06d.jpg" % t), quality=85)
+            else:
+                Image.fromarray(fr).save(
+                    os.path.join(hd, "live", "%06d.jpg" % t), quality=85)
             # 에이전트가 **다른 방**에 있을 때만 옮긴다 → 미관측
             while mi < len(move_at) and move_at[mi] <= t:
                 mi += 1
