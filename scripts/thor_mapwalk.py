@@ -23,7 +23,8 @@ from PIL import Image
 
 
 
-def walk(ctrl, out, polys, doors, size, grid_skip=2, scan_every=6, gt_depth=False):
+def walk(ctrl, out, polys, doors, size, grid_skip=2, scan_every=6, gt_depth=False,
+         byroom=None):
     """한 집에서 매핑 워크를 실행해 out/ 에 프레임·포즈·(뎁스)·bbox 를 남긴다.
 
     ⚠️ `thor_gen2 --mapwalk` 가 **t=0 배치 직후** 이 함수를 부른다. 독립 스크립트로
@@ -40,12 +41,17 @@ def walk(ctrl, out, polys, doors, size, grid_skip=2, scan_every=6, gt_depth=Fals
                 c = not c
         return c
 
-    pos = ctrl.step("GetReachablePositions").metadata["actionReturn"] or []
-    byroom = {}
-    for p in pos:
-        for r, pts in polys.items():
-            if _in(p["x"], p["z"], pts):
-                byroom.setdefault(r, []).append(p); break
+    if byroom is None:
+        # ⚠️ GetReachablePositions 는 **에이전트 현 위치에서 걸어서 닿는 곳**만 준다.
+        # t=0 배치가 물건을 문간에 떨어뜨리면 옆방이 통째로 사라진다(실측: 방 4개
+        # 집에서 방문 순서가 ['room|6'] 하나, 9프레임). gen2 는 **배치 전에** 계산한
+        # byroom 을 넘겨야 한다 — Teleport 는 경로가 막혀도 성공하므로 그걸로 충분하다.
+        pos = ctrl.step("GetReachablePositions").metadata["actionReturn"] or []
+        byroom = {}
+        for p in pos:
+            for r, pts in polys.items():
+                if _in(p["x"], p["z"], pts):
+                    byroom.setdefault(r, []).append(p); break
     adjr = {}
     for a, b in doors:
         adjr.setdefault(a, set()).add(b); adjr.setdefault(b, set()).add(a)

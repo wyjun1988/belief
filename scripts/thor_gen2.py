@@ -214,7 +214,7 @@ def main():
                          for r in rooms},
                         [[d.get("room0"), d.get("room1")] for d in h.get("doors", [])
                          if d.get("room0") and d.get("room1")],
-                        args.size, gt_depth=True)
+                        args.size, gt_depth=True, byroom=byroom)
             print("  매핑워크 %d프레임" % nmw, flush=True)
 
         # ── 1fps 배회 (RGB 만) + 미관측 이동
