@@ -56,7 +56,30 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         for k, r in enumerate(rids):
             if t in rtypes.get(r, ()): M[c - nT, k] = idf[t]
     post = (S[:, nT:] * (S[:, nT:] >= .05)) @ M
-    pred_room = np.array(rids, object)[post.argmax(1)]
+    if os.environ.get("VITERBI", "0") == "1":
+        # ── 시간 연속성 — 사람은 순간이동하지 않는다. §57 의 Viterbi 를 이식 ──
+        # 방출: 방 사후확률(정규화) · 전이: 유지 0.95, 이웃 방 분배, 비이웃 미세
+        K = len(rids)
+        em = post / (post.sum(1, keepdims=True) + 1e-9)
+        tr = np.full((K, K), 1e-4)
+        for a2, r in enumerate(rids):
+            tr[a2, a2] = 0.95
+            nbr = [b2 for b2, r2 in enumerate(rids) if r2 in adj.get(r, ())]
+            for b2 in nbr:
+                tr[a2, b2] = 0.05 / max(len(nbr), 1)
+        tr /= tr.sum(1, keepdims=True)
+        lt = np.log(tr); le = np.log(em + 1e-9)
+        dp = le[0].copy(); bk = np.zeros((len(ts), K), int)
+        for i2 in range(1, len(ts)):
+            cand = dp[:, None] + lt
+            bk[i2] = cand.argmax(0)
+            dp = cand.max(0) + le[i2]
+        path = np.zeros(len(ts), int); path[-1] = dp.argmax()
+        for i2 in range(len(ts) - 2, -1, -1):
+            path[i2] = bk[i2 + 1, path[i2 + 1]]
+        pred_room = np.array(rids, object)[path]
+    else:
+        pred_room = np.array(rids, object)[post.argmax(1)]
     A["ok"] += int((pred_room == arm).sum()); A["n"] += len(arm)
     py, px = P // pw, P % pw
     moves = sorted(g["moves"], key=lambda m: m["t"])
@@ -108,7 +131,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             elif gtrev and not prrev: D["fn"] += 1
             else: D["tn"] += 1
         # ── E 부재 (앵커 게이팅 하락) ──
-        inr = np.where(arm == sg)[0]
+        inr = np.where((arm if os.environ.get("EROOM", "gt") == "gt"
+                        else pred_room) == sg)[0]
         if len(inr) >= 9:
             e = inr[:len(inr)//3]; l = inr[-len(inr)//3:]
             k2 = max(3, len(e)//3)
