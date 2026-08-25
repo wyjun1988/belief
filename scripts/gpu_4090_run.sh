@@ -38,11 +38,16 @@ THOR_ROOT="$OUT" CACHE_PREFIX=/tmp/a3_ $PY -u scripts/exp_anchowl.py "$STRIDE"
 echo "=== [3/4] 이미지·글자 질의 캐시  $(date +%H:%M) ==="
 THOR_ROOT="$OUT" QCACHE_PREFIX=/tmp/qc_ STRIDE="$STRIDE" $PY -u scripts/exp_imgq.py
 
+echo "=== [3.5/4] 앵커 개체 exemplar 캐시  $(date +%H:%M) ==="
+# 앵커를 글자(타입)로만 찾으면 "어느 의자인지" 를 모른다. 그 탓에 배치 증거·2차 검색이
+# 모두 막혔다(0.644→0.613, 0.625→0.522). 개체 exemplar 는 재생성 없이 만들 수 있다.
+THOR_ROOT="$OUT" ACACHE_PREFIX=/tmp/ax_ STRIDE="$STRIDE" $PY -u scripts/exp_anchor_exemplar.py
+
 echo "=== [4/4] 수확  $(date +%H:%M) ==="
 # scene_meta 가 없으면 받은 쪽에서 분석이 불가능하다. 생성 단계가 이미 넣지만
 # 옛 데이터를 섞어 돌린 경우를 대비해 한 번 더 채운다(있으면 건너뛴다).
 $PY scripts/export_scene_meta.py --root "$OUT" || true
-$PY scripts/harvest.py --root "$OUT" --cache /tmp --out harvest_$(date +%m%d).tar.gz --keep-geom
+$PY scripts/harvest.py --root "$OUT" --cache /tmp --prefix a3_,qc_,ax_ --out harvest_$(date +%m%d).tar.gz --keep-geom
 
 echo "=== 완료 $(date +%H:%M) ==="
 ls -lh harvest_*.tar.gz

@@ -284,8 +284,11 @@ def main():
             polys={r["id"]: [[c["x"], c["z"]] for c in r["floorPolygon"]] for r in h["rooms"]},
             doors=[[d.get("room0"), d.get("room1")] for d in h.get("doors", [])
                    if d.get("room0") and d.get("room1")],
+            # ⚠️ **3D 좌표도 남긴다.** 앵커를 가방(어떤 타입이 보이나)으로만 쓰면
+            # 배치 정보를 버리게 된다. "소파 왼쪽에 TV" 는 {소파, TV} 보다 변별력이 크다.
             static={o["objectId"]: dict(
                         type=o["objectType"],
+                        pos=[round(o["position"]["x"], 2), round(o["position"]["z"], 2)],
                         room=room_of((o["position"]["x"], o["position"]["z"]), rooms))
                     for o in ev_m.metadata["objects"] if not o.get("pickupable")})
         meta["static"] = {k: v for k, v in meta["static"].items() if v["room"]}

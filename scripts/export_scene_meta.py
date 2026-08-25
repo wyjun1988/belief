@@ -55,7 +55,9 @@ def main():
                 continue
             r = room_of(o["position"])
             if r:
-                static[o["objectId"]] = dict(type=o["objectType"], room=r)
+                static[o["objectId"]] = dict(
+                    type=o["objectType"], room=r,
+                    pos=[round(o["position"]["x"], 2), round(o["position"]["z"], 2)])
         g["scene_meta"] = dict(
             polys=polys, static=static,
             doors=[[d.get("room0"), d.get("room1")] for d in h.get("doors", [])
