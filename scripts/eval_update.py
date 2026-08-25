@@ -18,6 +18,8 @@ from collections import Counter
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "이미지"
 ROOT = os.environ.get("THOR_ROOT", "data/thor3")
+A3P = os.environ.get("A3_PREFIX", "/tmp/a3_")
+QCP = os.environ.get("QC_PREFIX", "/tmp/qc_")
 PR = json.load(open("data/thor_prior.json"))
 MV = json.load(open("data/thor_move.json"))
 
@@ -26,7 +28,7 @@ def load():
     rows = []
     for hd in sorted(glob.glob(ROOT + "/house_*")):
         hn = os.path.basename(os.path.realpath(hd))
-        fa, fq = "/tmp/a3_%s.npz" % hn, "/tmp/qc_%s.npz" % hn
+        fa, fq = A3P + "%s.npz" % hn, QCP + "%s.npz" % hn
         if not (os.path.exists(fa) and os.path.exists(fq)):
             continue
         za = np.load(fa, allow_pickle=True); zq = np.load(fq, allow_pickle=True)

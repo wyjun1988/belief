@@ -16,6 +16,8 @@ import json, glob, os, numpy as np
 from collections import Counter
 
 ROOT = os.environ.get("THOR_ROOT", "data/thor3")
+A3P = os.environ.get("A3_PREFIX", "/tmp/a3_")
+QCP = os.environ.get("QC_PREFIX", "/tmp/qc_")
 K = 10
 PR = json.load(open("data/thor_prior.json"))
 
@@ -29,7 +31,7 @@ def ci(a):
 rows = []
 for hd in sorted(glob.glob(ROOT + "/house_*")):
     hn = os.path.basename(os.path.realpath(hd))
-    fa, fq = "/tmp/a3_%s.npz" % hn, "/tmp/qc_%s.npz" % hn
+    fa, fq = A3P + "%s.npz" % hn, QCP + "%s.npz" % hn
     if not (os.path.exists(fa) and os.path.exists(fq)): continue
     za = np.load(fa, allow_pickle=True); zq = np.load(fq, allow_pickle=True)
     S, P, ph, pw, ts = za["s"], za["p"], int(za["ph"]), int(za["pw"]), za["ts"]
@@ -81,12 +83,24 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             tot = sum(sc.values()) + 1e-9
             for r in rids: acc[r] += w * sc[r] / tot
         find_room = max(acc, key=acc.get)
-        # 부재 증거: 씬그래프 방 프레임의 앞 1/3 vs 뒤 1/3 (시간 오라클 없음)
+        # 부재 증거: **앵커 게이팅판** (849표본에서 AUC 0.781 로 확정된 기제).
+        # 초기 구간에서 물체가 잘 보인 프레임의 정적 점수 = 자리 서명.
+        # 이후 프레임 중 **그 자리가 화면에 있는 것만** 골라 점수 하락을 잰다 —
+        # "안 보인다" 와 "그 자리를 안 봤다" 를 가른다(조건③). 시간 오라클 없음.
         inr = np.where(arm == sg)[0]
         drop = None
         if len(inr) >= 9:
             e = inr[:len(inr)//3]; l = inr[-len(inr)//3:]
-            drop = float(np.quantile(TS[e], .9) - np.quantile(TS[l], .9))
+            AS = S[:, nT:]
+            k2 = max(3, len(e)//3)
+            sig = AS[e[np.argsort(-TS[e])[:k2]]].mean(0)
+            sig /= (np.linalg.norm(sig) + 1e-9)
+            pe = AS[e] @ sig / (np.linalg.norm(AS[e], axis=1) + 1e-9)
+            pl = AS[l] @ sig / (np.linalg.norm(AS[l], axis=1) + 1e-9)
+            thp = np.quantile(pe, .7)
+            ge = e[pe >= thp]; gl = l[pl >= thp]
+            if len(ge) >= 3 and len(gl) >= 3:
+                drop = float(np.quantile(TS[ge], .9) - np.quantile(TS[gl], .9))
         # belief: 씬그래프 방 제외 argmax
         bel = max(((PR.get(v0["type"], {}).get(rt[r], .25)/max(nrt[rt[r]], 1), r)
                    for r in rids if r != sg))[1]

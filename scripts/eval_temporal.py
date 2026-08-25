@@ -17,6 +17,8 @@ import json, glob, os, sys, numpy as np
 from collections import Counter
 
 ROOT = os.environ.get("THOR_ROOT", "data/thor3")
+A3P = os.environ.get("A3_PREFIX", "/tmp/a3_")
+QCP = os.environ.get("QC_PREFIX", "/tmp/qc_")
 MODE = sys.argv[1] if len(sys.argv) > 1 else "합"
 K = int(os.environ.get("TOPK", "10"))
 HL = float(os.environ.get("HALFLIFE", "900"))     # 시간가중 반감기(초)
@@ -32,7 +34,7 @@ def ci(a):
 res = {}
 for hd in sorted(glob.glob(ROOT + "/house_*")):
     hn = os.path.basename(os.path.realpath(hd))
-    fq = "/tmp/qc_%s.npz" % hn
+    fq = QCP + "%s.npz" % hn
     if not os.path.exists(fq): continue
     z = np.load(fq, allow_pickle=True)
     st, si, ts, tg = z["st"], z["si"], z["ts"], list(z["tg"])
