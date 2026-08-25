@@ -32,6 +32,12 @@ $PY -u scripts/thor_gen2.py --houses "$HOUSES" --hours "$HOURS" --moves "$MOVES"
   --min-rooms 4 --max-rooms 8 --max-nonbath 6 --min-nonbath 2 \
   --prior data/thor_prior.json --move data/thor_move.json --out "$OUT"
 
+echo "=== [1.5/4] 매핑 워크 (초기 맵 촬영 이동)  $(date +%H:%M) ==="
+# 기존 맵 프레임은 순간이동 정지샷이라 mono-depth 파이프라인(DA3·SfM)에 못 넣는다.
+# 사람이 집을 둘러보듯 걷는 연속 궤적(걸음 0.25m + 방마다 360° 스캔)을 찍는다.
+# GT 뎁스는 상한 대조용 — 실전 눈금은 같은 프레임을 DA3 로 다시 푼 것이다.
+$PY -u scripts/thor_mapwalk.py --root "$OUT" --gt-depth ${PLATFORM_FLAG:---platform cloud}
+
 echo "=== [2/4] 앵커 캐시 (stride $STRIDE)  $(date +%H:%M) ==="
 THOR_ROOT="$OUT" CACHE_PREFIX=/tmp/a3_ $PY -u scripts/exp_anchowl.py "$STRIDE"
 
