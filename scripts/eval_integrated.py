@@ -17,6 +17,7 @@ from collections import Counter
 
 ROOT = os.environ.get("THOR_ROOT", "data/thor3")
 A3P = os.environ.get("A3_PREFIX", "/tmp/a3_")
+SG_SRC = os.environ.get("SG_SRC", "gt")   # gt | owl — 씬그래프 초기 방의 출처
 QCP = os.environ.get("QC_PREFIX", "/tmp/qc_")
 K = 10
 PR = json.load(open("data/thor_prior.json"))
@@ -39,6 +40,15 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     QT, QS, STx = list(zq["tg"]), zq["si"], zq["st"]
     g = json.load(open(hd + "/gt.json")); sm = g.get("scene_meta")
     if not sm: continue
+    sg_det = {}
+    if SG_SRC == "owl":
+        imf = os.path.join(os.path.realpath(hd), "initmap_owl.json")
+        if not os.path.exists(imf): continue
+        best_t = {}
+        for i2 in json.load(open(imf)):
+            if i2["w"] > best_t.get(i2["type"], (0,))[0]:
+                best_t[i2["type"]] = (i2["w"], i2["room"])
+        sg_det = {t: r for t, (w, r) in best_t.items()}
     live = {m["t"]: m for m in g["live"]}
     rt = g["room_types"]; rids = sorted(rt)
     nrt = Counter(rt[r] for r in rids)
@@ -59,7 +69,12 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         if not v0["room"] or cnt[v0["type"]] > 1 or v0["type"] not in vocab: continue
         ti = vocab.index(v0["type"])
         mv = [x for x in moves if x["oid"] == oid]
-        tgt = mv[-1]["to"] if mv else v0["room"]; sg = v0["room"]
+        tgt = mv[-1]["to"] if mv else v0["room"]
+        if SG_SRC == "owl":
+            sg = sg_det.get(v0["type"])
+            if sg is None: continue          # 초기맵이 놓친 타겟 — 커버리지로 보고
+        else:
+            sg = v0["room"]
         TS = QS[:, j] + STx[:, j]
         base = float(np.median(TS))
         top = np.argsort(-TS)[:K]

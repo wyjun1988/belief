@@ -83,6 +83,12 @@ def main():
         pr = Owlv2Processor.from_pretrained(CK)
         md = Owlv2ForObjectDetection.from_pretrained(CK).to(DEV).eval()
         stat = json.load(open("data/thor_static_types.json"))
+        # 타겟 타입도 어휘에 넣는다 (사용자가 자기 물건 목록을 아는 설정)
+        tgt_types = set()
+        for hd0 in glob.glob(os.path.join(args.root, "house_*")):
+            gg = json.load(open(os.path.join(os.path.realpath(hd0), "gt.json")))
+            tgt_types |= {v["type"] for v in gg.get("gt0", {}).values()}
+        stat = sorted(set(stat) | tgt_types)
         def words(t): return "".join(" "+c.lower() if c.isupper() else c for c in t).strip()
         ti = pr(text=[["a photo of a " + words(t) for t in stat]],
                 images=[Image.new("RGB", (256, 256), (128,)*3)], return_tensors="pt").to(DEV)
@@ -108,13 +114,17 @@ def main():
             D = np.load(dp).astype(np.float32)
             if args.mode == "gtbox":
                 for oid, b in fr.get("box", {}).items():
-                    if oid not in sm["static"]: continue
+                    # ⚠️ 타겟도 함께 맵핑한다 — thor5 부터 매핑워크가 배치 **직후**에
+                    # 돌므로 타겟의 초기 방(sg)을 검출로 만들 수 있다. 경우 1 의
+                    # "씬그래프에 적힌 방" 이 GT 를 벗는 마지막 조각이다.
+                    tt = (sm["static"][oid]["type"] if oid in sm["static"]
+                          else g["gt0"][oid]["type"] if oid in g.get("gt0", {}) else None)
+                    if tt is None: continue
                     cx, cy = (b[0]+b[2])//2, (b[1]+b[3])//2
                     d = float(np.median(D[max(0,cy-2):cy+3, max(0,cx-2):cx+3]))
                     if not (0.3 < d < 12): continue
                     x, z = backproject(cx, cy, d, fr["pos"], fr["yaw"], W)
-                    t = sm["static"][oid]["type"]
-                    obs.setdefault(t, []).append((x, z, 1.0))
+                    obs.setdefault(tt, []).append((x, z, 1.0))
                     if "pos" in sm["static"][oid]:
                         gx, gz = sm["static"][oid]["pos"]
                         errs.append(float(np.hypot(x-gx, z-gz)))
@@ -145,12 +155,26 @@ def main():
                                      room=room, w=round(float(wt), 2)))
         json.dump(inst, open(os.path.join(rd, "initmap_%s.json" % args.mode), "w"))
         # ── 채점: GT 정적 지도 대비 방별 타입표 정밀도/재현율 ──
+        # 타겟 sg 채점 — 타입 단일 타겟의 최대가중 군집 방 vs gt0 방
+        from collections import Counter as _C
+        cnt0 = _C(v["type"] for v in g.get("gt0", {}).values())
+        sgok = sgn = 0
+        best_t = {}
+        for i2 in inst:
+            if i2["w"] > best_t.get(i2["type"], (0,))[0]:
+                best_t[i2["type"]] = (i2["w"], i2["room"])
+        for oid, v in g.get("gt0", {}).items():
+            if not v.get("room") or cnt0[v["type"]] > 1: continue
+            sgn += 1
+            if v["type"] in best_t and best_t[v["type"]][1] == v["room"]:
+                sgok += 1
         gtset = {(v["room"], v["type"]) for v in sm["static"].values()}
         dset = {(i["room"], i["type"]) for i in inst}
         pr_ = len(gtset & dset) / max(len(dset), 1)
         rc_ = len(gtset & dset) / max(len(gtset), 1)
-        msg = "  %s · 개체 %d · (방,타입) 정밀 %.2f 재현 %.2f" \
-              % (os.path.basename(hd), len(inst), pr_, rc_)
+        msg = "  %s · 개체 %d · (방,타입) 정밀 %.2f 재현 %.2f · **타겟sg %.2f (%d/%d)**" \
+              % (os.path.basename(hd), len(inst), pr_, rc_,
+                 sgok/max(sgn,1), sgok, sgn)
         if errs:
             errs_all += errs
             msg += " · 역투영 오차 중앙 %.2fm" % np.median(errs)
