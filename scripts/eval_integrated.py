@@ -18,6 +18,7 @@ from collections import Counter
 ROOT = os.environ.get("THOR_ROOT", "data/thor3")
 A3P = os.environ.get("A3_PREFIX", "/tmp/a3_")
 SG_SRC = os.environ.get("SG_SRC", "gt")   # gt | owl — 씬그래프 초기 방의 출처
+AXP = os.environ.get("AX_PREFIX", "")     # 있으면 §78 결합(타입가방+개체앵커) 국소화
 QCP = os.environ.get("QC_PREFIX", "/tmp/qc_")
 K = 10
 PR = json.load(open("data/thor_prior.json"))
@@ -35,6 +36,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     fa, fq = A3P + "%s.npz" % hn, QCP + "%s.npz" % hn
     if not (os.path.exists(fa) and os.path.exists(fq)): continue
     za = np.load(fa, allow_pickle=True); zq = np.load(fq, allow_pickle=True)
+    ZX = None
+    if AXP and os.path.exists(AXP + hn + ".npz"):
+        ZX = np.load(AXP + hn + ".npz", allow_pickle=True)
     S, P, ph, pw, ts = za["s"], za["p"], int(za["ph"]), int(za["pw"]), za["ts"]
     vocab, nT = list(za["vocab"]), int(za["nT"])
     QT, QS, STx = list(zq["tg"]), zq["si"], zq["st"]
@@ -61,6 +65,15 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     for a, b in sm["doors"]:
         if a in adj and b in adj: adj[a].add(b); adj[b].add(a)
     py, px = P // pw, P % pw
+    if ZX is not None:
+        anames = list(ZX["anch"])
+        aroom_i = {k: sm["static"][a]["room"] for k, a in enumerate(anames)
+                   if a in sm["static"]}
+        XS = ZX["s"][:, list(aroom_i)]
+        Xrooms = [aroom_i[k] for k in aroom_i]
+        XSc = XS - np.median(XS, axis=0, keepdims=True)
+        XPp = ZX["p"][:, list(aroom_i)]
+        xy_ = np.stack([XPp // pw, XPp % pw], -1)
     arm = np.array([live[t]["room"] for t in ts])
     moves = sorted(g["moves"], key=lambda m: m["t"])
     cnt = Counter(v["type"] for v in g["gt0"].values())
@@ -95,6 +108,16 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             nb = {arm[i]} | adj.get(arm[i], set())
             for r in rids:
                 if r not in nb: sc[r] *= .25
+            if ZX is not None:
+                # §78 결합 — 개체 앵커(방이 하나로 정해짐)의 표를 더한다 (θ=0.15)
+                on = np.where(XSc[i] >= 0.15)[0]
+                si_ = {r: 0.0 for r in rids}
+                for k2 in on:
+                    d = np.hypot(xy_[i, k2, 0]-cy, xy_[i, k2, 1]-cx)
+                    si_[Xrooms[k2]] += float(XSc[i, k2]) / (1.0 + d/6.0)
+                t2 = sum(si_.values())
+                if t2 > 0:
+                    for r in rids: sc[r] = sc[r]/(sum(sc.values())+1e-9) + si_[r]/t2
             tot = sum(sc.values()) + 1e-9
             for r in rids: acc[r] += w * sc[r] / tot
         find_room = max(acc, key=acc.get)
