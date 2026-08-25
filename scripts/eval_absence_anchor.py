@@ -35,7 +35,7 @@ def ci(a):
 rows = []
 for hd in sorted(glob.glob(ROOT + "/house_*")):
     hn = os.path.basename(os.path.realpath(hd))
-    fa, fq = "/tmp/a3_%s.npz" % hn, "/tmp/q3_%s.npz" % hn
+    fa, fq = "/tmp/a3_%s.npz" % hn, "/tmp/qc_%s.npz" % hn
     if not (os.path.exists(fa) and os.path.exists(fq)): continue
     za = np.load(fa, allow_pickle=True); zq = np.load(fq, allow_pickle=True)
     S, ts, vocab, nT = za["s"], za["ts"], list(za["vocab"]), int(za["nT"])

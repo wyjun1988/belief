@@ -21,7 +21,12 @@ import argparse, glob, json, os, shutil, subprocess, sys
 
 
 def slim(g, keep_geom):
+    """⚠️ `scene_meta`(방 폴리곤·문 연결·정적 물체의 방)는 **반드시 남긴다.**
+    없으면 받은 쪽에서 `import prior` 로 막혀 분석 자체가 안 된다."""
     out = dict(g)
+    assert g.get("scene_meta"), (
+        "scene_meta 없음 — scripts/export_scene_meta.py 를 먼저 돌려라. "
+        "이게 없으면 가져가도 분석을 못 한다.")
     live = []
     for m in g.get("live", []):
         r = dict(t=m["t"], room=m["room"], vis=m.get("vis", []))

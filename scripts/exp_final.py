@@ -4,9 +4,6 @@ import json, glob, os, numpy as np
 from collections import Counter
 import sys
 MODE = sys.argv[1] if len(sys.argv) > 1 else "이미지"
-import prior
-from ai2thor.controller import Controller
-ds = prior.load_dataset("procthor-10k")["train"]
 
 def inside(x, z, pts):
     c = False; n = len(pts)
@@ -19,32 +16,33 @@ def room_of(x, z, polys):
         if inside(x, z, pts): return rid
     return None
 
-ctrl = None
 res = {}
-for hd in sorted(glob.glob("data/thor2z/house_*")):
-    hn = os.path.basename(hd)
-    z = np.load("/tmp/anchcache_%s.npz" % hn, allow_pickle=True)
+for hd in sorted(glob.glob("data/thor3/house_*")):
+    hn = os.path.basename(os.path.realpath(hd))
+    z = np.load("/tmp/a3_%s.npz" % hn, allow_pickle=True)
     S, P, ph, pw, ts = z["s"], z["p"], int(z["ph"]), int(z["pw"]), z["ts"]
     vocab = list(z["vocab"]); nT = int(z["nT"])
     # ── 타겟 점수만 **이미지 exemplar** 로 교체한다. 앵커(정적물체)는 글자 그대로 ──
-    q = np.load("/tmp/imgq_%s.npz" % hn, allow_pickle=True)
+    q = np.load("/tmp/qc_%s.npz" % hn, allow_pickle=True)
     QT = list(q["tg"]); QS = q["si"]; QTS = list(q["ts"])
     assert QTS == list(ts), "프레임 정렬 불일치"
-    g = json.load(open(os.path.join(hd, "gt.json"))); h = ds[g["house"]]
-    polys = {r["id"]: [(c["x"], c["z"]) for c in r["floorPolygon"]] for r in h["rooms"]}
-    ctrl = Controller(scene=h, width=64, height=64, quality="Low") if ctrl is None else ctrl
-    ctrl.reset(scene=h)
+    g = json.load(open(os.path.join(hd, "gt.json")))
+    # ⚠️ `prior`/`ai2thor` 를 다시 띄우지 않는다. 방 폴리곤·문 연결·정적 물체의 방은
+    # 생성 시 `scene_meta` 에 저장된다(`thor_gen2.py`). 옛 데이터는
+    # `scripts/export_scene_meta.py` 로 채운다. 그래야 캐시만 가져온 곳에서도 분석된다.
+    sm = g.get("scene_meta")
+    assert sm, "scene_meta 없음 — scripts/export_scene_meta.py 를 먼저 돌려라"
+    rt = g["room_types"]
     rtypes = {}
-    for o in ctrl.last_event.metadata["objects"]:
-        if o.get("pickupable"): continue
-        r = room_of(o["position"]["x"], o["position"]["z"], polys)
-        if r: rtypes.setdefault(r, Counter())[o["objectType"]] += 1
+    for oid, v in sm["static"].items():
+        rtypes.setdefault(v["room"], Counter())[v["type"]] += 1
     rids = sorted(rtypes)
-    idf = {t: 1.0/sum(t in rtypes[r] for r in rids) for t in set().union(*[set(rtypes[r]) for r in rids])}
+    idf = {t: 1.0/sum(t in rtypes[r] for r in rids)
+           for t in set().union(*[set(rtypes[r]) for r in rids])}
     adj = {r: set() for r in rids}
-    for d in h.get("doors", []):
-        a, b = d.get("room0"), d.get("room1")
-        if a in adj and b in adj: adj[a].add(b); adj[b].add(a)
+    for a, b in sm["doors"]:
+        if a in adj and b in adj:
+            adj[a].add(b); adj[b].add(a)
     live = {m["t"]: m for m in g["live"]}
     arm = np.array([live[t]["room"] if t in live else "" for t in ts])
     moves = sorted(g["moves"], key=lambda m: m["t"])

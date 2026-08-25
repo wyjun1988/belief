@@ -39,6 +39,9 @@ echo "=== [3/4] 이미지·글자 질의 캐시  $(date +%H:%M) ==="
 THOR_ROOT="$OUT" QCACHE_PREFIX=/tmp/qc_ STRIDE="$STRIDE" $PY -u scripts/exp_imgq.py
 
 echo "=== [4/4] 수확  $(date +%H:%M) ==="
+# scene_meta 가 없으면 받은 쪽에서 분석이 불가능하다. 생성 단계가 이미 넣지만
+# 옛 데이터를 섞어 돌린 경우를 대비해 한 번 더 채운다(있으면 건너뛴다).
+$PY scripts/export_scene_meta.py --root "$OUT" || true
 $PY scripts/harvest.py --root "$OUT" --cache /tmp --out harvest_$(date +%m%d).tar.gz --keep-geom
 
 echo "=== 완료 $(date +%H:%M) ==="

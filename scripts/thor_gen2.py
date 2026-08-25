@@ -275,7 +275,22 @@ def main():
                 if r2.metadata["lastActionSuccess"]:
                     events.append(dict(t=t, oid=oid, frm=state[oid]["room"], to=tgt))
                     state[oid] = dict(state[oid]); state[oid]["room"] = tgt
-        json.dump(dict(house=hi, rooms=[dict(id=r["id"], type=r["roomType"]) for r in rooms],
+        # ⚠️ **분석에 필요한 씬 메타를 여기서 같이 저장한다.** 방 폴리곤·문 연결·
+        # 정적 물체의 방은 `prior`/`ai2thor` 를 다시 띄워야 얻을 수 있는데, 캐시만
+        # 가져가는 원격 실행에서는 그게 불가능하다. 실제로 물렸다 — 4090 산출물을
+        # 받아도 `import prior` 에서 막힌다.
+        ev_m = ctrl.step("Pass")
+        meta = dict(
+            polys={r["id"]: [[c["x"], c["z"]] for c in r["floorPolygon"]] for r in h["rooms"]},
+            doors=[[d.get("room0"), d.get("room1")] for d in h.get("doors", [])
+                   if d.get("room0") and d.get("room1")],
+            static={o["objectId"]: dict(
+                        type=o["objectType"],
+                        room=room_of((o["position"]["x"], o["position"]["z"]), rooms))
+                    for o in ev_m.metadata["objects"] if not o.get("pickupable")})
+        meta["static"] = {k: v for k, v in meta["static"].items() if v["room"]}
+        json.dump(dict(house=hi, scene_meta=meta,
+                       rooms=[dict(id=r["id"], type=r["roomType"]) for r in rooms],
                        room_types=rt, map=mp, live=live, gt0=gt0,
                        moves=events, gt_end=state, fps=args.fps, T=T),
                   open(os.path.join(hd, "gt.json"), "w"))

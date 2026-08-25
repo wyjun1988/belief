@@ -140,6 +140,23 @@ THOR_ROOT=data/thor4 python scripts/eval_update.py 이미지
 THOR_ROOT=data/thor4 python scripts/eval_absence_anchor.py 이미지
 ```
 
+## ⚠️ `scene_meta` — 이게 없으면 가져와도 분석이 안 된다
+
+방 폴리곤·문 연결·정적 물체의 방은 `prior`/`ai2thor` 를 다시 띄워야 얻는다.
+**캐시만 가져온 곳에서는 불가능하다** — 실제로 물렸다.
+
+`thor_gen2.py` 가 이제 생성 시 `gt.json["scene_meta"]` 에 저장하고, 드라이버가
+[4/4] 직전에 `export_scene_meta.py` 로 한 번 더 확인한다. `harvest.py` 는 없으면
+**중단한다**(assert). 그러니 정상 경로에서는 신경 쓸 것이 없다.
+
+옛 데이터를 손으로 다룰 때만:
+```bash
+python scripts/export_scene_meta.py --root data/thor4
+```
+
+⚠️ macOS 에서 ai2thor 는 Unity 빌드를 받을 때 **`wget` 을 쓴다.** 기본 탑재가
+아니라 `brew install wget` 이 필요하다(리눅스는 대개 있다).
+
 ## 알려진 함정
 
 1. **`visibilityDistance` 기본 1.5 m** — 스크립트가 20 으로 넣는다. 직접 부를 때
