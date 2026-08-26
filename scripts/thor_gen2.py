@@ -137,7 +137,10 @@ def main():
         kw["platform"] = CloudRendering
     ctrl = Controller(scene=ds[0], width=args.size, height=args.size, quality="Low", **kw,
                       visibilityDistance=args.vis_dist,
-                      renderInstanceSegmentation=True)
+                      renderInstanceSegmentation=True,
+                      # ⚠️ 매핑워크 GT 뎁스에 필요 — 빠뜨리면 walk() 가 **조용히**
+                      # 뎁스를 건너뛴다(실제로 thor5·thor6 이 뎁스 0장으로 나왔다)
+                      renderDepthImage=True)
     made = 0
     for hi in range(len(ds)):
         if made >= args.houses:

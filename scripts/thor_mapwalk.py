@@ -77,6 +77,9 @@ def walk(ctrl, out, polys, doors, size, grid_skip=2, scan_every=6, gt_depth=Fals
             return
         k = state["k"]
         Image.fromarray(e.frame).save(os.path.join(out, "%05d.jpg" % k), quality=88)
+        if gt_depth and e.depth_frame is None and state["k"] == 0:
+            raise RuntimeError("gt_depth 요청됐는데 depth_frame 이 None — "
+                               "Controller 에 renderDepthImage=True 를 켜라")
         if gt_depth and e.depth_frame is not None:
             np.save(os.path.join(out, "depth", "%05d.npy" % k),
                     e.depth_frame.astype(np.float16))
