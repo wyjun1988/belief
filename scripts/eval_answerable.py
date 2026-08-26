@@ -210,8 +210,35 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     out.append(i)
                     if len(out) == 3: break
             return loc_of(out) if out else find_recent
-        find_v75 = simver(0.56, 0.02)     # s_ab 로짓 기각 0.98 실측
-        find_v75f = simver(0.42, 0.01)    # s_ab 로짓 기각 0.99 실측
+        find_v75 = simver(0.42, 0.01)     # 독립 FA 모형 (기각 0.99)
+        # ── FA 상관 모형: 오검출 = 같은 혼동물의 반복. 후보 프레임의 패치 위치에서
+        # 가장 가까운 GT 개체를 정체로 삼고, **개체 단위로** 한 번 속으면 그 개체의
+        # 모든 목격을 수용한다 (비관 모형) ──
+        def ident(i):
+            m = live[ts[i]]
+            cx = (P[i, ti] % pw + .5) / pw * 384
+            cy = (P[i, ti] // pw + .5) / ph * 384
+            best = (1e9, None)
+            for o2, c in list((m.get("ctr") or {}).items()) +                          list((m.get("anch") or {}).items()):
+                if not c: continue
+                d = np.hypot(c[0]-cx, c[1]-cy)
+                if d < best[0]: best = (d, o2)
+            return best[1] if best[0] < 40 else "bg%d" % (i // 20)
+        def simcorr(p_acc, p_id):
+            coin = {}
+            out = []
+            for i in cands:
+                if vis[i]:
+                    ok = _vr.random() < p_acc
+                else:
+                    k = ident(i)
+                    if k not in coin: coin[k] = _vr.random() < p_id
+                    ok = coin[k]
+                if ok:
+                    out.append(i)
+                    if len(out) == 3: break
+            return loc_of(out) if out else find_recent
+        find_v75f = simcorr(0.42, 0.05)   # 개체당 5% 로 속음 (상관 비관)
         rows.append(dict(tier=tier, sg=sg, tgt=tgt, find=find, find_recent=find_recent,
                          find_ov=find_ov, find_v75=find_v75, find_v75f=find_v75f,
                          find_event=find_event, find_onset=find_onset, find_ctr=find_ctr, drop=drop, bel=bel))
