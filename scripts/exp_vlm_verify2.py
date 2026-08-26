@@ -48,7 +48,9 @@ items = [json.loads(l) for l in open(PAIRS + "/meta.jsonl")]
 base = os.path.dirname(PAIRS + "/")
 L = lambda p: Image.open(os.path.join(base, os.path.basename(p))).convert("RGB")
 
-for mode in ("pair", "2afc", "norm"):
+OUTJ = os.environ.get("OUT_JSONL", "")
+logf = open(OUTJ, "w") if OUTJ else None
+for mode in ("2afc", "norm", "3afc"):
     tp = np_ = fp = nn = 0
     for m in items:
         cand = L(m["cand"])
@@ -62,11 +64,23 @@ for mode in ("pair", "2afc", "norm"):
             ans = gen([cand], "Which object is in this image: (A) %s or (B) %s? "
                       "Answer only A or B." % (a, b))
             y = ans.startswith("a") or a.split()[0] in ans
+        elif mode == "3afc":
+            # (C) 둘 다 아님 — 2AFC 의 기각력을 유지하며 오검출(제3의 물체·배경)을
+            # C 로 흘려보낸다. 수용 = A 선택.
+            a = NORM.get(m["label"], m["label"]).replace("_", " ")
+            b = NORM.get(m["alt"], m["alt"]).replace("_", " ")
+            ans = gen([cand], "Which is in this image: (A) %s, (B) %s, or "
+                      "(C) neither? Answer only A, B, or C." % (a, b))
+            y = ans.startswith("a")
         else:
             a = NORM.get(m["label"], m["label"]).replace("_", " ")
             y = gen([cand], "Is there a %s in this image? Answer only yes or no."
                     % a).startswith("yes")
+        if logf:
+            logf.write(json.dumps(dict(mode=mode, cand=os.path.basename(m["cand"]),
+                                       truth=m["truth"], y=int(y))) + "\n")
         if m["truth"]: np_ += 1; tp += y
         else: nn += 1; fp += y
     print("[%s] 진짜 수용 **%.3f** (%d/%d) · 가짜 기각 **%.3f** (%d/%d)"
           % (mode, tp/max(np_,1), tp, np_, 1-fp/max(nn,1), nn-fp, nn), flush=True)
+if logf: logf.close()
