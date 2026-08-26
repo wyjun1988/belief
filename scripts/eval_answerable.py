@@ -210,8 +210,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     out.append(i)
                     if len(out) == 3: break
             return loc_of(out) if out else find_recent
-        find_v75 = simver(0.75, 0.00)     # (구) 소표본 낙관치
-        find_v75f = simver(0.67, 0.115)   # 9B 400쌍 실측 — 3AFC 0.67/기각0.885
+        find_v75 = simver(0.56, 0.02)     # s_ab 로짓 기각 0.98 실측
+        find_v75f = simver(0.42, 0.01)    # s_ab 로짓 기각 0.99 실측
         rows.append(dict(tier=tier, sg=sg, tgt=tgt, find=find, find_recent=find_recent,
                          find_ov=find_ov, find_v75=find_v75, find_v75f=find_v75f,
                          find_event=find_event, find_onset=find_onset, find_ctr=find_ctr, drop=drop, bel=bel))
