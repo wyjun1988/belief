@@ -19,6 +19,13 @@ A3P = os.environ.get("A3_PREFIX", "/tmp/h4/cache/a3_")
 QCP = os.environ.get("QC_PREFIX", "/tmp/h4/cache/qc_")
 AXP = os.environ.get("AX_PREFIX", "/tmp/h4/cache/ax_")
 PR = json.load(open("data/thor_prior.json"))
+# 조건①′: 혼동 타입(실측 FP 해부에서 50회+ 쌍)이 같은 집에 있으면 타겟에서 제외.
+# 사용자 지정 — "노트북처럼 비슷한 물체나 중복 물체가 없는 것"이 우리 시나리오 타겟.
+CLEAN = os.environ.get("CLEAN", "0") == "1"
+CONF = {}
+if CLEAN:
+    for a, b in json.load(open("data/thor_confusable.json")):
+        CONF.setdefault(a, set()).add(b); CONF.setdefault(b, set()).add(a)
 
 rows = []
 for hd in sorted(glob.glob(ROOT + "/house_*")):
@@ -58,6 +65,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     for j, oid in enumerate(QT):
         v0 = g["gt0"][oid]
         if not v0["room"] or cnt[v0["type"]] > 1 or v0["type"] not in vocab: continue
+        if CLEAN:
+            house_types = set(cnt) | {v["type"] for v in sm["static"].values()}
+            if CONF.get(v0["type"], set()) & house_types: continue
         ti = vocab.index(v0["type"])
         mv = [x for x in moves if x["oid"] == oid]
         tgt = mv[-1]["to"] if mv else v0["room"]; sg = v0["room"]
@@ -67,6 +77,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         tier = ("T1" if mv and seen_new else "T2" if mv and revis
                 else "T3" if mv else "T4r" if revis else "T4u")
         TS = QS[:, j] + STx[:, j]
+        vis = np.array([oid in live[t].get("vis", []) for t in ts])
         base = float(np.median(TS)); top = np.argsort(-TS)[:10]
         acc = {r: 0.0 for r in rids}
         for i in top:
@@ -129,6 +140,46 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         top50 = np.argsort(-TS)[:50]
         recent = sorted(top50, key=lambda i: -ts[i])[:5]
         find_recent = loc_of(recent)
+        th2 = np.quantile(TS, 0.98)
+        okm = np.ones(len(TS), bool)
+        for c in range(nT):
+            if c == ti: continue
+            okm &= ~((P[:, c] == P[:, ti]) & (S[:, c] > S[:, ti]))
+        cand_c = [i for i in np.where((TS >= th2) & okm)[0]]
+        recent_c = sorted(cand_c, key=lambda i: -ts[i])[:5]
+        find_ctr = loc_of(recent_c) if recent_c else find_recent
+        # ── 군집(사건) 단위: 진짜 목격은 몰려 다니고 오검출은 고립된다 ──
+        # 문턱 통과 프레임을 시간 간격 90초 이내로 묶고, 크기 2+ 군집만 남긴 뒤
+        # **가장 최신 군집**의 방을 답한다. (사용자 제안: 1차로 거르고 시간 반영)
+        th_ = np.quantile(TS, 0.98)
+
+        hits = sorted(np.where(TS >= th_)[0], key=lambda i: ts[i])
+        evs = []
+        for i in hits:
+            if evs and ts[i] - ts[evs[-1][-1]] <= 90:
+                evs[-1].append(i)
+            else:
+                evs.append([i])
+        evs = [e for e in evs if len(e) >= 2]
+        find_event = loc_of(evs[-1][-5:]) if evs else find_recent
+        # ── 시간 분포 전체를 읽는다 (사용자 제안의 확장) ──
+        # 문턱 통과 목격들을 프레임별로 국소화해 방-시간 수열을 만들고,
+        #   이동의 서명   = 어떤 방이 **중간부터 새로 나타나** 끝까지 이어짐
+        #   오검출의 서명 = 처음부터 끝까지 계속 있음 (혼동 물체도 정지해 있으므로)
+        # → 마지막 1/3 에 목격이 있는 방 중 **첫 등장이 가장 늦은** 방을 답한다.
+        hr = [(ts[i], loc_of([i])) for i in hits]
+        hr = [(t, r) for t, r in hr if r]
+        cnt_r = Counter(r for _, r in hr)
+        hr2 = [(t, r) for t, r in hr if cnt_r[r] >= 2]      # 총 2회 미만 방은 잡음
+        find_onset = find_recent
+        if hr2:
+            tcut = hr2[0][0] + (hr2[-1][0] - hr2[0][0]) * 2 / 3
+            tail_rooms = {r for t, r in hr2 if t >= tcut}
+            if tail_rooms:
+                first = {}
+                for t, r in hr2:
+                    if r in tail_rooms and r not in first: first[r] = t
+                find_onset = max(first, key=first.get)
         inr = np.where(arm == sg)[0]
         drop = None
         if len(inr) >= 9:
@@ -142,8 +193,16 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 drop = float(np.quantile(TS[ge], .9) - np.quantile(TS[gl], .9))
         bel = max(((PR.get(v0["type"], {}).get(rt[r], .25)/max(nrt[rt[r]],1), r)
                    for r in rids if r != sg))[1]
+        # ── 오라클 검증기 상한: 낮은 문턱(q0.80, 회수 0.986) + 완벽 검증 + 최신 3장 ──
+        # VLM 이 시뮬 렌더에서 필터 급이 안 되므로(최고 0.60/0.70), 검증기 슬롯의
+        # 상한을 GT 로 잰다. 이 값이 실촬영 검증기에게 요구할 스펙이다.
+        th3 = np.quantile(TS, 0.80)
+        cands = sorted(np.where(TS >= th3)[0], key=lambda i: -ts[i])
+        ver = [i for i in cands if vis[i]][:3]
+        find_ov = loc_of(ver) if ver else find_recent
         rows.append(dict(tier=tier, sg=sg, tgt=tgt, find=find, find_recent=find_recent,
-                         drop=drop, bel=bel))
+                         find_ov=find_ov,
+                         find_event=find_event, find_onset=find_onset, find_ctr=find_ctr, drop=drop, bel=bel))
 
 drops = [r["drop"] for r in rows if r["drop"] is not None]
 ta = float(np.quantile(drops, .95))
@@ -162,13 +221,17 @@ for t in ("T1", "T2", "T3", "T4r", "T4u"):
     cur = np.mean([sys_ans(r) == r["tgt"] for r in rs])
     fnd = np.mean([r["find"] == r["tgt"] for r in rs])
     fr_ = np.mean([r["find_recent"] == r["tgt"] for r in rs])
+    fe_ = np.mean([r["find_event"] == r["tgt"] for r in rs])
+    fo_ = np.mean([r["find_onset"] == r["tgt"] for r in rs])
+    fc_ = np.mean([r["find_ctr"] == r["tgt"] for r in rs])
+    fv_ = np.mean([r["find_ov"] == r["tgt"] for r in rs])
     ideal = {"T1": 1.0, "T2": np.mean([r["bel"] == r["tgt"] for r in rs]),
              "T3": np.mean([r["bel"] == r["tgt"] for r in rs]),
              "T4r": 1.0, "T4u": 1.0}[t]
     idef = {"T1": "목격 프레임을 찾으면 1.0", "T2": "완벽 부재 + belief",
             "T3": "belief 가 상한", "T4r": "기록 유지 = 1.0", "T4u": "기록 유지 = 1.0"}[t]
-    print("%-26s %-5d **%.3f**  %-8.3f 최신 **%.3f**  %-8.3f %s"
-          % (lab[t], len(rs), cur, fnd, fr_, ideal, idef))
+    print("%-26s %-5d 시스템 %.3f | 상위10 %.3f 최신 %.3f 오라클검증 **%.3f** | 이상 %.3f"
+          % (lab[t], len(rs), cur, fnd, fr_, fv_, ideal))
 ans = [r for r in rows if r["tier"] != "T3"]
 print("\n**답 가능 문제만(T3 제외) 현시스템: %.3f** (n=%d)"
       % (np.mean([sys_ans(r) == r["tgt"] for r in ans]), len(ans)))
