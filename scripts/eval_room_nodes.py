@@ -49,6 +49,10 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     for i in range(len(ts) - 2, -1, -1): path[i] = bk[i + 1, path[i + 1]]
     predv = np.array(rids, object)[path]
     res["viterbi"][0] += int((predv == arm).sum()); res["viterbi"][1] += len(arm)
+    sp = os.path.expanduser(os.environ.get("SAVE_PREFIX", ""))
+    if sp:
+        np.savez_compressed(sp + hn + ".npz", room=predv, ts=ts)
+
 print("=== 방 인지 · CLIP 노드 방출 (%s) ===" % ROOT)
 for k, (ok, n) in res.items():
     print("  %-8s **%.3f**  (n=%d)" % (k, ok / max(n, 1), n))

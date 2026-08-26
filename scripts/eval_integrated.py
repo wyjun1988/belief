@@ -75,6 +75,12 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         XPp = ZX["p"][:, list(aroom_i)]
         xy_ = np.stack([XPp // pw, XPp % pw], -1)
     arm = np.array([live[t]["room"] for t in ts])
+    _rp = os.path.expanduser(os.environ.get("ROOM_PREFIX", ""))
+    if _rp:
+        # ⚠️ 방 라벨을 CLIP 노드+Viterbi 예측으로 통째 교체 — GT 방 잔재 제거.
+        _rz = np.load(_rp + hn + ".npz", allow_pickle=True)
+        assert list(_rz["ts"]) == list(ts), "프레임 정렬 불일치"
+        arm = _rz["room"]
     moves = sorted(g["moves"], key=lambda m: m["t"])
     cnt = Counter(v["type"] for v in g["gt0"].values())
     for j, oid in enumerate(QT):

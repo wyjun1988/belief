@@ -48,6 +48,12 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     for a, b in sm["doors"]:
         if a in adj and b in adj: adj[a].add(b); adj[b].add(a)
     arm = np.array([live[t]["room"] for t in ts])
+    _rp = os.path.expanduser(os.environ.get("ROOM_PREFIX", ""))
+    if _rp:
+        # ⚠️ 방 라벨을 CLIP 노드+Viterbi 예측으로 통째 교체 — GT 방 잔재 제거.
+        _rz = np.load(_rp + hn + ".npz", allow_pickle=True)
+        assert list(_rz["ts"]) == list(ts), "프레임 정렬 불일치"
+        arm = _rz["room"]
     # ── A 방 인지: 정적 점수 행렬 → 방 사후확률 (행렬화) ──
     M = np.zeros((len(vocab) - nT, len(rids)))
     for c in range(nT, len(vocab)):
