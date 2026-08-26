@@ -200,8 +200,20 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         cands = sorted(np.where(TS >= th3)[0], key=lambda i: -ts[i])
         ver = [i for i in cands if vis[i]][:3]
         find_ov = loc_of(ver) if ver else find_recent
+        # ── 불완전 검증기 모의: 9B 실측 수준 (진짜 수용 0.75 · 가짜 수용 p_fa) ──
+        _vr = np.random.default_rng(hash(oid) % 2**31)
+        def simver(p_acc, p_fa):
+            out = []
+            for i in cands:
+                ok = (_vr.random() < p_acc) if vis[i] else (_vr.random() < p_fa)
+                if ok:
+                    out.append(i)
+                    if len(out) == 3: break
+            return loc_of(out) if out else find_recent
+        find_v75 = simver(0.75, 0.00)     # 가정용 실측 (기각 1.00)
+        find_v75f = simver(0.75, 0.20)    # 공구급 (기각 0.80)
         rows.append(dict(tier=tier, sg=sg, tgt=tgt, find=find, find_recent=find_recent,
-                         find_ov=find_ov,
+                         find_ov=find_ov, find_v75=find_v75, find_v75f=find_v75f,
                          find_event=find_event, find_onset=find_onset, find_ctr=find_ctr, drop=drop, bel=bel))
 
 drops = [r["drop"] for r in rows if r["drop"] is not None]
@@ -225,13 +237,15 @@ for t in ("T1", "T2", "T3", "T4r", "T4u"):
     fo_ = np.mean([r["find_onset"] == r["tgt"] for r in rs])
     fc_ = np.mean([r["find_ctr"] == r["tgt"] for r in rs])
     fv_ = np.mean([r["find_ov"] == r["tgt"] for r in rs])
+    f75 = np.mean([r["find_v75"] == r["tgt"] for r in rs])
+    f75f = np.mean([r["find_v75f"] == r["tgt"] for r in rs])
     ideal = {"T1": 1.0, "T2": np.mean([r["bel"] == r["tgt"] for r in rs]),
              "T3": np.mean([r["bel"] == r["tgt"] for r in rs]),
              "T4r": 1.0, "T4u": 1.0}[t]
     idef = {"T1": "목격 프레임을 찾으면 1.0", "T2": "완벽 부재 + belief",
             "T3": "belief 가 상한", "T4r": "기록 유지 = 1.0", "T4u": "기록 유지 = 1.0"}[t]
-    print("%-26s %-5d 시스템 %.3f | 상위10 %.3f 최신 %.3f 오라클검증 **%.3f** | 이상 %.3f"
-          % (lab[t], len(rs), cur, fnd, fr_, fv_, ideal))
+    print("%-26s %-5d 시스템 %.3f | 상위10 %.3f 최신 %.3f 오라클 %.3f | 검증기0.75/기각1.0 **%.3f** · /기각0.8 %.3f | 이상 %.3f"
+          % (lab[t], len(rs), cur, fnd, fr_, fv_, f75, f75f, ideal))
 ans = [r for r in rows if r["tier"] != "T3"]
 print("\n**답 가능 문제만(T3 제외) 현시스템: %.3f** (n=%d)"
       % (np.mean([sys_ans(r) == r["tgt"] for r in ans]), len(ans)))
