@@ -43,11 +43,20 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     out = OUT + hn + ".npz"
     if os.path.exists(out): continue
     wf = os.path.join(rd, "mapwalk", "walk.json")
-    if not os.path.exists(wf): continue
-    w = json.load(open(wf))
-    fr = w["frames"][::MWSTRIDE]
-    mwp = [os.path.join(rd, "mapwalk", "%05d.jpg" % f["k"]) for f in fr]
-    mwr = [f["room"] for f in fr]
+    if os.path.exists(wf):
+        w = json.load(open(wf))
+        fr = w["frames"][::MWSTRIDE]
+        mwp = [os.path.join(rd, "mapwalk", "%05d.jpg" % f["k"]) for f in fr]
+        mwr = [f["room"] for f in fr]
+    else:
+        # ⚠️ 매핑워크가 없는 판(thor4 — H100 불칸 부재로 생성 불가)은 **텔레포트 맵
+        # 프레임**을 노드로 쓴다. gt.json["map"] 이 프레임별 방 라벨을 갖고 있다.
+        # §57 이 실제로 쓴 구성이 이것이다(방마다 3지점 × 4방향 = 12노드).
+        g0 = json.load(open(os.path.join(rd, "gt.json")))
+        mp = sorted(glob.glob(os.path.join(rd, "map", "*.jpg")))
+        if not mp or len(g0.get("map", [])) != len(mp): continue
+        mwp = mp
+        mwr = [m["room"] for m in g0["map"]]
     lv = sorted(glob.glob(os.path.join(rd, "live", "*.jpg")))[::STRIDE]
     ts = [int(os.path.basename(p)[:-4]) for p in lv]
     ME = emb(mwp); LE = emb(lv)
