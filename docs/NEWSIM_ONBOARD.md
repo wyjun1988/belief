@@ -54,11 +54,19 @@ THOR_ROOT=data/newsim/epN A3_PREFIX=... QC_PREFIX=... python scripts/eval_paths.
 | 초기맵 뎁스 | 단안 전제 — 아래 참조 |
 | 생성측 요청 명세 | docs/NEWSIM_EPISODES_20260826.md (bbox GT 요청은 투영 자급으로 해소) |
 
-## 뎁스 방침 (2026-08-27 확정)
+## 입력 경계 (2026-08-27 확정 — 두 번 정정 끝)
 
-⚠️ **스테레오 폐기** — ego_right/stereo_calibration 은 테스트용이었고 이후
-에피소드는 **ego_left 단안만** 온다. 초기맵 뎁스 대안 우선순위:
+**시스템 입력은 `ego_left.mp4` 하나다.** 스테레오는 폐기(테스트용이었음)이고,
+카메라 포즈·scene_graph·GT 스트림도 전부 **채점용 GT** — 시스템에 입력하면 안 된다.
+(투영 키트는 GT 생성 도구로만: bbox/가시성 GT, 캘리브레이션 쌍)
 
-1. **다시점 삼각측량** — 카메라 포즈가 틱마다 오므로, 정적 물체를 서로 다른
-   시점의 검출 2회+ 로 교차하면 뎁스 모델 없이 3D 가 나온다 (선호)
-2. DA3 단안 뎁스 (기존 실배포 설계) — 삼각측량이 안 되는 경우의 보강
+초기맵 사슬 = 기존 실촬영 파이프라인 그대로:
+
+```
+left 영상 → DA3 단안 뎁스 → 물체 랜드마크 증분 SfM (포즈·스케일 자급)
+          → 검출 역투영 → 초기맵
+(보유: align_depth.py · incremental_sfm.py · refine_bootstrap.py · build_graph.py)
+```
+
+채점: SfM 포즈 vs 시뮬 GT 포즈, 초기맵 vs scene_graph — **새 시뮬은 이 사슬을
+처음으로 GT 대비 정량 채점할 수 있는 환경**이기도 하다(실촬영엔 포즈 GT 가 없었다).
