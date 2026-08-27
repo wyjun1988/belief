@@ -89,8 +89,8 @@ for SZ in 384 768 1024; do
 done
 ```
 
-**판정선**: `res*_scores.jsonl` 의 s_ab AUC 가 **0.85+** 이면 그 해상도로 진행.
-(384 는 0.62 로 알려져 있다 — 비교 기준)
+**판정 완료 (2026-08-27)**: 384 → 0.621 · **768 → 0.944** · 1024 → 0.946.
+**768 로 확정**(1024 는 포화, 렌더비만 증가). 아래 §2 의 `--size` 를 768 로.
 
 ## 2. 대량 생성 (판정 후, 반나절)
 
@@ -99,7 +99,7 @@ done
 ```bash
 $PY -u scripts/thor_gen2.py --houses 100 --hours 4 --moves 40 \
   --min-rooms 4 --max-rooms 8 --max-nonbath 6 --min-nonbath 2 \
-  --size R --dwell 600 --seed 901 --vis-dist 20 --platform cloud --mapwalk \
+  --size 768 --dwell 600 --seed 901 --vis-dist 20 --platform cloud --mapwalk \
   --prior data/thor_prior.json --move data/thor_move.json --out data/thor7
 # 캐시 4종
 THOR_ROOT=data/thor7 CACHE_PREFIX=/tmp/t7_a_ $KX -u scripts/exp_anchowl.py 4

@@ -210,7 +210,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     out.append(i)
                     if len(out) == 3: break
             return loc_of(out) if out else find_recent
-        find_v75 = simver(0.42, 0.01)     # 독립 FA 모형 (기각 0.99)
+        # 768px 실측(AUC 0.944 · @5 0.842)의 기각 0.99 운용점 — 384px(0.42) 대비
+        find_v75 = simver(0.62, 0.01)
         # ── FA 상관 모형: 오검출 = 같은 혼동물의 반복. 후보 프레임의 패치 위치에서
         # 가장 가까운 GT 개체를 정체로 삼고, **개체 단위로** 한 번 속으면 그 개체의
         # 모든 목격을 수용한다 (비관 모형) ──
