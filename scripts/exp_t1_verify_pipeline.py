@@ -23,7 +23,7 @@ A3P = os.environ.get("A3_PREFIX", "/tmp/a3_")
 QCP = os.environ.get("QC_PREFIX", "/tmp/qc_")
 TH = float(os.environ.get("TH", "0.875"))
 OUTJ = os.environ.get("OUT_JSONL", "t1_verified.jsonl")
-MAXWALK = int(os.environ.get("MAXWALK", "25"))
+MAXWALK = int(os.environ.get("MAXWALK", "20"))
 pr = AutoProcessor.from_pretrained(MODEL)
 md = AutoModelForImageTextToText.from_pretrained(
     MODEL, dtype=torch.bfloat16, device_map="auto").eval()
@@ -83,10 +83,11 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             alt_c = int(np.argsort(-S[i, :nT])[1] if np.argsort(-S[i, :nT])[0] == ti
                         else np.argsort(-S[i, :nT])[0])
             s = sab(c, words(v0["type"]), words(vocab[alt_c]))
-            if s >= TH:
-                ver.append(int(i))
-                if len(ver) == 3: break
-        out.write(json.dumps(dict(house=hn, oid=oid, verified=ver, walked=walked)) + "\n")
+            # ⚠️ 조기중단·문턱판정 제거 — **점수만 기록**하고 문턱은 로컬에서 스윕한다.
+            # (1차 실행에서 실사 문턱 0.875 가 시뮬 로짓 분포에 안 맞아 전부 통과 —
+            # 검증 프레임 진짜 비율 0.32, T1 0.365 로 통계 이하. 도메인별 캘리브레이션 필수)
+            ver.append([int(i), round(s, 3)])
+        out.write(json.dumps(dict(house=hn, oid=oid, scored=ver, walked=walked)) + "\n")
         out.flush()
     print(hn, "완료", flush=True)
 out.close()
