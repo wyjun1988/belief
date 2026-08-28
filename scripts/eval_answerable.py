@@ -22,6 +22,16 @@ PR = json.load(open("data/thor_prior.json"))
 # 조건①′: 혼동 타입(실측 FP 해부에서 50회+ 쌍)이 같은 집에 있으면 타겟에서 제외.
 # 사용자 지정 — "노트북처럼 비슷한 물체나 중복 물체가 없는 것"이 우리 시나리오 타겟.
 CLEAN = os.environ.get("CLEAN", "0") == "1"
+# 실검증 주입 — exp_t1_verify_pipeline 산출 jsonl + 현지 스윕 문턱(rtx7_sweep)
+VJ = os.environ.get("VERIFY_JSONL")
+VTH = float(os.environ.get("VERIFY_TH", "0"))
+VSC = None
+if VJ:
+    VSC = {}
+    for _l in open(VJ):
+        _d = json.loads(_l)
+        VSC[(_d["house"], _d["oid"])] = _d["scored"]
+    print("실검증 %d타겟 적재 · 문턱 %+.3f" % (len(VSC), VTH), flush=True)
 CONF = {}
 if CLEAN:
     for a, b in json.load(open("data/thor_confusable.json")):
@@ -240,8 +250,16 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     if len(out) == 3: break
             return loc_of(out) if out else find_recent
         find_v75f = simcorr(0.42, 0.05)   # 개체당 5% 로 속음 (상관 비관)
+        # ── 실검증: 기록된 후보 점수(최신순)에 문턱 적용, 3장에서 정지 — 모의와 동일 규칙 ──
+        find_vre = None
+        if VSC is not None:
+            _rec = VSC.get((hn, oid))
+            if _rec is not None:
+                _acc = [int(i) for i, s_ in _rec if s_ >= VTH][:3]
+                find_vre = loc_of(_acc) if _acc else find_recent
         rows.append(dict(tier=tier, sg=sg, tgt=tgt, find=find, find_recent=find_recent,
                          find_ov=find_ov, find_v75=find_v75, find_v75f=find_v75f,
+                         find_vre=(find_vre if VSC is not None else None),
                          find_event=find_event, find_onset=find_onset, find_ctr=find_ctr, drop=drop, bel=bel))
 
 drops = [r["drop"] for r in rows if r["drop"] is not None]
@@ -272,8 +290,11 @@ for t in ("T1", "T2", "T3", "T4r", "T4u"):
              "T4r": 1.0, "T4u": 1.0}[t]
     idef = {"T1": "목격 프레임을 찾으면 1.0", "T2": "완벽 부재 + belief",
             "T3": "belief 가 상한", "T4r": "기록 유지 = 1.0", "T4u": "기록 유지 = 1.0"}[t]
-    print("%-26s %-5d 시스템 %.3f | 상위10 %.3f 최신 %.3f 오라클 %.3f | 검증기0.75/기각1.0 **%.3f** · /기각0.8 %.3f | 이상 %.3f"
-          % (lab[t], len(rs), cur, fnd, fr_, fv_, f75, f75f, ideal))
+    vre = [r for r in rs if r.get("find_vre") is not None]
+    fre = (" | 실검 **%.3f**(n=%d)" % (np.mean([r["find_vre"] == r["tgt"] for r in vre]), len(vre))
+           if vre else "")
+    print("%-26s %-5d 시스템 %.3f | 상위10 %.3f 최신 %.3f 오라클 %.3f | 검증기0.75/기각1.0 **%.3f** · /기각0.8 %.3f | 이상 %.3f%s"
+          % (lab[t], len(rs), cur, fnd, fr_, fv_, f75, f75f, ideal, fre))
 ans = [r for r in rows if r["tier"] != "T3"]
 print("\n**답 가능 문제만(T3 제외) 현시스템: %.3f** (n=%d)"
       % (np.mean([sys_ans(r) == r["tgt"] for r in ans]), len(ans)))

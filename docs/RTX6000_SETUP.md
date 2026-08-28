@@ -118,12 +118,18 @@ THOR_ROOT=data/thor7_t7view A3_PREFIX=/tmp/t7_a_ QC_PREFIX=/tmp/t7_q_ \
   OUT_JSONL=t1_scores_t7.jsonl $KX -u scripts/exp_t1_verify_pipeline.py
 ```
 
-**역할 분담** — 이 장비: 생성 + 캐시 + 검증기 채점(프레임·GPU 의존 전부).
-로컬 기준 머신(M1 Max): 문턱 스윕 + 최종 채점(eval_answerable 등 — numpy 판
-편차 4%p 때문에 최종 수치는 기준 머신에서만 낸다).
+**판정까지 전부 이 서버에서 한다** (자동 체인 6단계) — 문턱 스윕
+(`rtx7_sweep.py`, 캘리브레이션 = 1단계의 `res768_scores.jsonl`) → 실검증 주입
+채점(`eval_answerable.py` 의 `VERIFY_JSONL`/`VERIFY_TH`) → `results_t7.txt`.
+§89 는 "그 도메인의 쌍 점수로 문턱을 재라"는 뜻이지 머신 얘기가 아니므로
+현지 스윕으로 충족된다.
 
-가져올 것 3개: `harvest_t7.tar.gz` · `t1_scores_t7.jsonl` ·
-`res768_scores.jsonl`(1단계 산출물 — 문턱 스윕의 캘리브레이션 기준).
+⚠️ **thor7 수치는 새 시리즈다** — 768px 신규 데이터 + RTX(numpy 2.x) 산출.
+구 384px 표와 절대값 비교 금지(기계 편차 4%p 전력도 있음). 표 **안** 비교
+(시스템 vs 기준선 vs 실검 vs 오라클)는 전부 같은 조건이라 유효하다.
+
+가져올 것: **`results_t7.txt` 텍스트가 판정의 전부다** (실검 열).
+`t1_scores_t7.jsonl`(재스윕용) · `harvest_t7.tar.gz`(보관·후속 분석용)는 여유 될 때.
 
 가져올 것: `res*_scores.jsonl`(1단계) → 판정 후 `harvest_t7.tar.gz`(수백 MB).
 **프레임은 서버에 둔다** — 우리 분석은 전부 캐시 위에서 돈다.

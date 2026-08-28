@@ -50,17 +50,32 @@ THOR_ROOT=$VIEW CLIP_PREFIX=$CACHE_DIR/${PREFIX}c_  STRIDE=4   $KX -u scripts/ex
 
 # ── 4. harvest ──
 OUT=harvest_${PREFIX%_}.tar.gz
-$KX scripts/harvest.py --root "$VIEW" --cache "$CACHE_DIR" --prefix "$PREFIX" \
+[ -f "$OUT" ] || $KX scripts/harvest.py --root "$VIEW" --cache "$CACHE_DIR" --prefix "$PREFIX" \
   --out "$OUT" --keep-geom
-echo "[finish] harvest 완료: $OUT"
+echo "[finish] harvest: $OUT"
 
 # ── 5. 검증기 채점 (프레임이 이 서버에만 있어 여기서만 가능한 단계) ──
 # 타입단일 이동 타겟의 후보 프레임을 실크롭 2AFC 로짓으로 전부 채점해 기록.
-# 문턱 판정은 로컬 스윕(§89). 크롭 상자 W/3 = 해상도 실험(AUC 0.944)과 동일 기하.
+# 문턱 판정은 6단계에서 현지 스윕(§89). 크롭 상자 W/3 = 해상도 실험과 동일 기하.
 # MODEL 기본 9B — 0.944 캘리브레이션이 9B 측정치라 유지. 4B 로 바꾸려면
 # 기존 /tmp/pairs768 을 4B 로 재채점해 동급 확인부터 (exp_vlm_verify3, 몇 분).
 TSC=t1_scores_${PREFIX%_}.jsonl
-MODEL=${MODEL:-Qwen/Qwen3.5-9B} THOR_ROOT=$VIEW \
+[ -f "$TSC" ] || MODEL=${MODEL:-Qwen/Qwen3.5-9B} THOR_ROOT=$VIEW \
   A3_PREFIX=$CACHE_DIR/${PREFIX}a_ QC_PREFIX=$CACHE_DIR/${PREFIX}q_ \
   OUT_JSONL=$TSC $KX -u scripts/exp_t1_verify_pipeline.py
-echo "[finish] 끝 — DriveSyncFiles 로 올릴 것: $OUT · $TSC · res768_scores.jsonl(1단계 것, 문턱 스윕용)"
+
+# ── 6. 문턱 스윕 + 최종 채점 — 판정까지 이 서버에서 (§89 는 "그 도메인 점수로
+#      문턱을 재라"는 뜻이지 머신 얘기가 아니다). 캘리브레이션은 1단계 해상도
+#      실험의 쌍 점수(res768_scores.jsonl) — 같은 생성기·해상도·모델·크롭 기하.
+CAL=${CAL:-res768_scores.jsonl}
+RES=results_${PREFIX%_}.txt
+if [ -f "$CAL" ]; then
+  TH=$($KX scripts/rtx7_sweep.py "$CAL" --pick 0.99 | tee /dev/stderr | tail -1)
+  THOR_ROOT=$VIEW A3_PREFIX=$CACHE_DIR/${PREFIX}a_ QC_PREFIX=$CACHE_DIR/${PREFIX}q_ \
+    AX_PREFIX=$CACHE_DIR/${PREFIX}x_ VERIFY_JSONL=$TSC VERIFY_TH=$TH \
+    $KX -u scripts/eval_answerable.py | tee "$RES"
+  echo "[finish] 끝 — 판정은 $RES 의 '실검' 열. 올릴 것: $RES(작음) · $TSC · 보관용 $OUT"
+else
+  echo "[finish] ⚠ 캘리브레이션 $CAL 없음 — 판정 생략. 1단계 산출물 경로를 CAL= 로 주고"
+  echo "         bash scripts/rtx7_finish.sh 재실행 (완료 단계는 전부 스킵된다)"
+fi
