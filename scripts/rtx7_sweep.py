@@ -13,9 +13,20 @@ import numpy as np
 f = sys.argv[1]
 pick = float(sys.argv[sys.argv.index("--pick") + 1]) if "--pick" in sys.argv else 0.99
 rec = [json.loads(l) for l in open(f) if l.strip()]
+def _auc(ch):
+    p_ = np.array([r[ch] for r in rec if r["truth"] and ch in r])
+    n_ = np.array([r[ch] for r in rec if not r["truth"] and ch in r])
+    if not (len(p_) and len(n_)): return None
+    sc_ = np.concatenate([p_, n_]); o_ = np.argsort(sc_, kind="mergesort")
+    rk_ = np.empty(len(sc_)); rk_[o_] = np.arange(1, len(sc_) + 1)
+    return (rk_[:len(p_)].sum() - len(p_) * (len(p_) + 1) / 2) / (len(p_) * len(n_))
+
 pos = np.array([r["s_ab"] for r in rec if r["truth"]])
 neg = np.array([r["s_ab"] for r in rec if not r["truth"]])
 assert len(pos) and len(neg), "양·음성 쌍이 모두 있어야 한다"
+# 채널 3종 전부 보고 — "0.944 가 어느 채널이었나" 류 혼선을 즉시 드러낸다
+print("채널별 AUC: " + " · ".join("%s %.3f" % (c, _auc(c))
+      for c in ("s_yn", "s_ab", "s_ac") if _auc(c) is not None))
 
 sc = np.concatenate([pos, neg])
 o = np.argsort(sc, kind="mergesort")

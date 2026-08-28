@@ -15,7 +15,7 @@ from collections import Counter
 
 ROOT = os.environ.get("THOR_ROOT", "data/res384")
 OUT = os.environ.get("OUT", "/tmp/pairs")
-CROP = int(os.environ.get("CROP", "128"))
+CROP = int(os.environ.get("CROP", "0"))   # 0 = 프레임 폭의 1/3 자동 (기하 통일)
 N = int(os.environ.get("N", "200"))
 os.makedirs(OUT, exist_ok=True)
 rng = np.random.default_rng(0)
@@ -36,7 +36,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         o1, o2 = rng.choice(oids, 2, replace=False)
         if typ[o1] == typ[o2]: continue
         im = Image.open(lv[m["t"]]).convert("RGB")
-        W = im.width; h = CROP // 2
+        W = im.width; h = (CROP if CROP else W // 3) // 2
         def crop(o):
             cx, cy = m["ctr"][o]
             return im.crop((max(0, cx-h), max(0, cy-h),
@@ -49,4 +49,4 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         meta.append(dict(cand=f2, enroll=f2, label=words(typ[o1]),
                          alt=words(typ[o2]), truth=0)); k += 1
 open(os.path.join(OUT, "meta.jsonl"), "w").write("\n".join(json.dumps(m) for m in meta))
-print("쌍 %d → %s (크롭 %dpx)" % (k, OUT, CROP))
+print("쌍 %d → %s (크롭 %s)" % (k, OUT, CROP if CROP else "W/3 자동"))
