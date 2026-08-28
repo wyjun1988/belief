@@ -52,4 +52,15 @@ THOR_ROOT=$VIEW CLIP_PREFIX=$CACHE_DIR/${PREFIX}c_  STRIDE=4   $KX -u scripts/ex
 OUT=harvest_${PREFIX%_}.tar.gz
 $KX scripts/harvest.py --root "$VIEW" --cache "$CACHE_DIR" --prefix "$PREFIX" \
   --out "$OUT" --keep-geom
-echo "[finish] 끝 — $OUT 을 DriveSyncFiles 로 올릴 것"
+echo "[finish] harvest 완료: $OUT"
+
+# ── 5. 검증기 채점 (프레임이 이 서버에만 있어 여기서만 가능한 단계) ──
+# 타입단일 이동 타겟의 후보 프레임을 실크롭 2AFC 로짓으로 전부 채점해 기록.
+# 문턱 판정은 로컬 스윕(§89). 크롭 상자 W/3 = 해상도 실험(AUC 0.944)과 동일 기하.
+# MODEL 기본 9B — 0.944 캘리브레이션이 9B 측정치라 유지. 4B 로 바꾸려면
+# 기존 /tmp/pairs768 을 4B 로 재채점해 동급 확인부터 (exp_vlm_verify3, 몇 분).
+TSC=t1_scores_${PREFIX%_}.jsonl
+MODEL=${MODEL:-Qwen/Qwen3.5-9B} THOR_ROOT=$VIEW \
+  A3_PREFIX=$CACHE_DIR/${PREFIX}a_ QC_PREFIX=$CACHE_DIR/${PREFIX}q_ \
+  OUT_JSONL=$TSC $KX -u scripts/exp_t1_verify_pipeline.py
+echo "[finish] 끝 — DriveSyncFiles 로 올릴 것: $OUT · $TSC · res768_scores.jsonl(1단계 것, 문턱 스윕용)"

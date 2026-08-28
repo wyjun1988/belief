@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""T1 파이프라인 내 실검증 — 모의가 아니라 진짜 크롭으로. (H100 · thor4)
+"""T1 파이프라인 내 실검증 — 모의가 아니라 진짜 크롭으로. (RTX 6000 · thor7 / H100 · thor4)
 
-    MODEL=Qwen/Qwen3.5-9B THOR_ROOT=data/thor4 TH=0.875 \\
-      OUT_JSONL=t1_verified.jsonl python scripts/exp_t1_verify_pipeline.py
+    MODEL=Qwen/Qwen3.5-9B THOR_ROOT=data/thor7_t7view A3_PREFIX=/tmp/t7_a_ \\
+      QC_PREFIX=/tmp/t7_q_ OUT_JSONL=t1_scores_t7.jsonl \\
+      python scripts/exp_t1_verify_pipeline.py
 
-각 타입단일 타겟: 후보(점수 q0.80+) 를 최신부터 걸으며 프레임 크롭을 2AFC 로짓으로
-검증(문턱 TH — hh 실측 기각0.99 지점), 3장 확인되면 정지. 확인 프레임 목록을
-JSONL 로 — 국소화·T1 채점은 로컬에서 한다.
+각 타입단일 이동 타겟: 후보(점수 q0.80+) 를 최신부터 최대 MAXWALK 장 걸으며
+프레임 크롭을 2AFC 로짓으로 채점해 전부 기록한다. 문턱 판정·정지 규칙은
+로컬 스윕에서 재현한다(§89 — 문턱은 도메인·모델별로 밀린다).
+크롭 상자는 프레임의 1/3 (make_sim_pairs CROP=SZ/3 과 동일 기하 — 768 캘리브레이션
+AUC 0.944 가 이 조건의 측정치다). 프레임 해상도는 이미지에서 읽는다(384 고정 아님).
 
 ⚠️ 모의와 다른 점: 실제 오검출은 같은 혼동물의 반복이라 FA 가 상관될 수 있다.
 이 실행이 그 위험을 판정한다. 대조 라벨은 그 패치에서 두 번째로 강한 타겟 타입.
@@ -21,7 +24,6 @@ MODEL = os.environ.get("MODEL", "Qwen/Qwen3.5-9B")
 ROOT = os.environ.get("THOR_ROOT", "data/thor4")
 A3P = os.environ.get("A3_PREFIX", "/tmp/a3_")
 QCP = os.environ.get("QC_PREFIX", "/tmp/qc_")
-TH = float(os.environ.get("TH", "0.875"))
 OUTJ = os.environ.get("OUT_JSONL", "t1_verified.jsonl")
 MAXWALK = int(os.environ.get("MAXWALK", "20"))
 pr = AutoProcessor.from_pretrained(MODEL)
@@ -31,7 +33,7 @@ tok = pr.tokenizer
 IDA = tok.encode("A", add_special_tokens=False)[0]
 IDB = tok.encode("B", add_special_tokens=False)[0]
 def words(t): return "".join(" " + c.lower() if c.isupper() else c for c in t).strip()
-print("모델 %s · 문턱 %.3f" % (MODEL, TH), flush=True)
+print("모델 %s" % MODEL, flush=True)
 
 
 def sab(img, a, b):
@@ -75,11 +77,13 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             t = int(ts[i])
             if t not in lv: continue
             walked += 1
-            cx = (P[i, ti] % pw + .5) / pw * 384
-            cy = (P[i, ti] // pw + .5) / ph * 384
             im = Image.open(lv[t]).convert("RGB")
-            c = im.crop((max(0, int(cx)-64), max(0, int(cy)-64),
-                         min(384, int(cx)+64), min(384, int(cy)+64))).resize((336, 336))
+            W, H = im.size
+            cx = (P[i, ti] % pw + .5) / pw * W
+            cy = (P[i, ti] // pw + .5) / ph * H
+            h2 = max(64, W // 6)         # 상자 = W/3, make_sim_pairs 와 동일 기하
+            c = im.crop((max(0, int(cx)-h2), max(0, int(cy)-h2),
+                         min(W, int(cx)+h2), min(H, int(cy)+h2))).resize((336, 336))
             alt_c = int(np.argsort(-S[i, :nT])[1] if np.argsort(-S[i, :nT])[0] == ti
                         else np.argsort(-S[i, :nT])[0])
             s = sab(c, words(v0["type"]), words(vocab[alt_c]))

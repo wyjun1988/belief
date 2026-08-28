@@ -111,7 +111,19 @@ THOR_ROOT=data/thor7 ACACHE_PREFIX=/tmp/t7_x_ STRIDE=4 $KX -u scripts/exp_anchor
 THOR_ROOT=data/thor7 CLIP_PREFIX=/tmp/t7_c_ STRIDE=4 $KX -u scripts/exp_clip_rooms.py
 $KX scripts/harvest.py --root data/thor7 --cache /tmp --prefix t7_ \
   --out harvest_t7.tar.gz --keep-geom
+# 검증기 채점 — 자동 체인의 5단계. 프레임이 서버에만 있어 **여기서만 가능**.
+# 후보 실크롭 2AFC 로짓 전부 기록(문턱은 로컬 스윕, §89). 크롭 상자 W/3
+# = 해상도 실험과 동일 기하라 768 운용점(0.944)이 그대로 이식된다.
+THOR_ROOT=data/thor7_t7view A3_PREFIX=/tmp/t7_a_ QC_PREFIX=/tmp/t7_q_ \
+  OUT_JSONL=t1_scores_t7.jsonl $KX -u scripts/exp_t1_verify_pipeline.py
 ```
+
+**역할 분담** — 이 장비: 생성 + 캐시 + 검증기 채점(프레임·GPU 의존 전부).
+로컬 기준 머신(M1 Max): 문턱 스윕 + 최종 채점(eval_answerable 등 — numpy 판
+편차 4%p 때문에 최종 수치는 기준 머신에서만 낸다).
+
+가져올 것 3개: `harvest_t7.tar.gz` · `t1_scores_t7.jsonl` ·
+`res768_scores.jsonl`(1단계 산출물 — 문턱 스윕의 캘리브레이션 기준).
 
 가져올 것: `res*_scores.jsonl`(1단계) → 판정 후 `harvest_t7.tar.gz`(수백 MB).
 **프레임은 서버에 둔다** — 우리 분석은 전부 캐시 위에서 돈다.
