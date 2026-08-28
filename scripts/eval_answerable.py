@@ -25,6 +25,10 @@ CLEAN = os.environ.get("CLEAN", "0") == "1"
 # 실검증 주입 — exp_t1_verify_pipeline 산출 jsonl + 현지 스윕 문턱(rtx7_sweep)
 VJ = os.environ.get("VERIFY_JSONL")
 VTH = float(os.environ.get("VERIFY_TH", "0"))
+# 수용 규칙 — first3: 최신순 선착 3장(종전). cluster: 통과자 중 최신 시간군집(>=2장,
+# 간격 VERIFY_GAP 프레임)의 점수 상위 3장 — 흩어진 오검출 배제. score3: 점수 상위 3장.
+VRULE = os.environ.get("VERIFY_RULE", "first3")
+VGAP = int(os.environ.get("VERIFY_GAP", "300"))
 VSC = None
 if VJ:
     VSC = {}
@@ -259,7 +263,23 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         if VSC is not None:
             _rec = VSC.get((hn, oid))
             if _rec is not None:
-                _acc = [int(i) for i, s_ in _rec if s_ >= VTH][:3]
+                _pas = [(int(i), s_) for i, s_ in _rec if s_ >= VTH]
+                if VRULE == "score3":
+                    _acc = [i for i, _s in sorted(_pas, key=lambda x: -x[1])[:3]]
+                elif VRULE == "cluster":
+                    _bt = sorted(_pas, key=lambda x: -int(ts[x[0]]))
+                    _grp = []; _acc = None
+                    for _i, _s in _bt:
+                        if _grp and int(ts[_grp[-1][0]]) - int(ts[_i]) > VGAP:
+                            if len(_grp) >= 2: break
+                            _grp = []
+                        _grp.append((_i, _s))
+                    if len(_grp) >= 2:
+                        _acc = [i for i, _s in sorted(_grp, key=lambda x: -x[1])[:3]]
+                    else:                     # 군집 없음 → 종전 규칙 후퇴
+                        _acc = [i for i, _s in _pas][:3]
+                else:
+                    _acc = [i for i, _s in _pas][:3]
                 find_vre = loc_of(_acc) if _acc else find_recent
         rows.append(dict(tier=tier, sg=sg, tgt=tgt, find=find, find_recent=find_recent,
                          find_ov=find_ov, find_v75=find_v75, find_v75f=find_v75f,
