@@ -28,6 +28,18 @@ assert len(pos) and len(neg), "양·음성 쌍이 모두 있어야 한다"
 print("채널별 AUC: " + " · ".join("%s %.3f" % (c, _auc(c))
       for c in ("s_yn", "s_ab", "s_ac") if _auc(c) is not None))
 
+# 거리 버킷별 (dist 필드가 있을 때) — "원거리 가시가 원인인가" 판별
+if any("dist" in r for r in rec):
+    for lo, hi, tag in ((0, 2, "<2m"), (2, 5, "2-5m"), (5, 99, "5m+")):
+        sub = [r for r in rec if lo <= r.get("dist", -1) < hi]
+        p_ = np.array([r["s_ab"] for r in sub if r["truth"]])
+        n_ = np.array([r["s_ab"] for r in sub if not r["truth"]])
+        if len(p_) >= 10 and len(n_) >= 10:
+            sc_ = np.concatenate([p_, n_]); o_ = np.argsort(sc_, kind="mergesort")
+            rk_ = np.empty(len(sc_)); rk_[o_] = np.arange(1, len(sc_) + 1)
+            a_ = (rk_[:len(p_)].sum() - len(p_) * (len(p_) + 1) / 2) / (len(p_) * len(n_))
+            print("  거리 %-5s AUC %.3f (양 %d/음 %d)" % (tag, a_, len(p_), len(n_)))
+
 sc = np.concatenate([pos, neg])
 o = np.argsort(sc, kind="mergesort")
 rk = np.empty(len(sc)); rk[o] = np.arange(1, len(sc) + 1)

@@ -65,7 +65,8 @@ for n, m in enumerate(items):
     s_ac = float(lg3[IDS["A"]] - max(lg3[IDS["B"]], lg3[IDS["C"]]))
     out.write(json.dumps(dict(cand=os.path.basename(m["cand"]), truth=m["truth"],
                               s_yn=round(s_yn, 3), s_ab=round(s_ab, 3),
-                              s_ac=round(s_ac, 3))) + "\n")
+                              s_ac=round(s_ac, 3),
+                              **({"dist": m["dist"]} if "dist" in m else {}))) + "\n")
     if n % 50 == 0: print(n, flush=True)
 out.close()
 print("완료 →", OUTJ)
