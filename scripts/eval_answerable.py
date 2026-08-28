@@ -83,8 +83,12 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         tgt = mv[-1]["to"] if mv else v0["room"]; sg = v0["room"]
         t0 = mv[-1]["t"] if mv else 0
         seen_new = sum(oid in live[t].get("vis", []) for t in ts if t > t0) >= 3 if mv else False
+        # 근거리 목격 유무 — 5m+ 크롭은 검증기 AUC 0.52(동전)라 검증 가능 영역이 아니다
+        near_new = any((live[t].get("dist") or {}).get(oid, 99) < 5
+                       for t in ts if t > t0) if mv else False
         revis = bool((arm[ts > t0] == sg).any()) if mv else bool((arm[len(arm)//2:] == sg).any())
-        tier = ("T1" if mv and seen_new else "T2" if mv and revis
+        tier = (("T1n" if near_new else "T1f") if mv and seen_new
+                else "T2" if mv and revis
                 else "T3" if mv else "T4r" if revis else "T4u")
         TS = QS[:, j] + STx[:, j]
         vis = np.array([oid in live[t].get("vis", []) for t in ts])
@@ -268,12 +272,13 @@ def sys_ans(r):
     if r["drop"] is not None and r["drop"] >= ta: return r["bel"]
     return r["sg"]
 
-lab = {"T1": "T1 발견 가능 (새 방 목격)", "T2": "T2 부재추론만 가능",
+lab = {"T1n": "T1 새 방 목격·근거리(<5m)", "T1f": "T1 새 방 목격·원거리뿐",
+       "T2": "T2 부재추론만 가능",
        "T3": "T3 관측 불가 (belief 뿐)", "T4r": "T4 안 움직임·재확인됨",
        "T4u": "T4 안 움직임·미확인"}
 print("=== 답 가능성 계층별 채점 · %s · n=%d ===" % (ROOT, len(rows)))
 print("%-26s %-5s %-8s %-8s %-8s %s" % ("계층", "건수", "현시스템", "검색만", "이상적", "이상적의 정의"))
-for t in ("T1", "T2", "T3", "T4r", "T4u"):
+for t in ("T1n", "T1f", "T2", "T3", "T4r", "T4u"):
     rs = [r for r in rows if r["tier"] == t]
     if not rs: continue
     cur = np.mean([sys_ans(r) == r["tgt"] for r in rs])
@@ -285,10 +290,11 @@ for t in ("T1", "T2", "T3", "T4r", "T4u"):
     fv_ = np.mean([r["find_ov"] == r["tgt"] for r in rs])
     f75 = np.mean([r["find_v75"] == r["tgt"] for r in rs])
     f75f = np.mean([r["find_v75f"] == r["tgt"] for r in rs])
-    ideal = {"T1": 1.0, "T2": np.mean([r["bel"] == r["tgt"] for r in rs]),
+    ideal = {"T1n": 1.0, "T1f": 1.0, "T2": np.mean([r["bel"] == r["tgt"] for r in rs]),
              "T3": np.mean([r["bel"] == r["tgt"] for r in rs]),
              "T4r": 1.0, "T4u": 1.0}[t]
-    idef = {"T1": "목격 프레임을 찾으면 1.0", "T2": "완벽 부재 + belief",
+    idef = {"T1n": "목격 프레임을 찾으면 1.0", "T1f": "목격이 원거리뿐 — 검증기 불능역",
+            "T2": "완벽 부재 + belief",
             "T3": "belief 가 상한", "T4r": "기록 유지 = 1.0", "T4u": "기록 유지 = 1.0"}[t]
     vre = [r for r in rs if r.get("find_vre") is not None]
     fre = (" | 실검 **%.3f**(n=%d)" % (np.mean([r["find_vre"] == r["tgt"] for r in vre]), len(vre))
