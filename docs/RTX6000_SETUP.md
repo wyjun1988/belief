@@ -113,6 +113,36 @@ $KX scripts/harvest.py --root data/thor7 --cache /tmp --prefix t7_ \
 가져올 것: `res*_scores.jsonl`(1단계) → 판정 후 `harvest_t7.tar.gz`(수백 MB).
 **프레임은 서버에 둔다** — 우리 분석은 전부 캐시 위에서 돈다.
 
+### 2.5 중간 점검 (생성 완주 전, ~65채 시점부터 가능)
+
+생성이 도는 동안 **완료된 채만으로** 캐시→harvest 를 미리 뽑을 수 있다.
+`gt.json` 은 채 처리의 **마지막에** 쓰이므로 존재 = 완료 마커다. 캐시 스크립트는
+`house_*` 를 전부 glob 하므로 생성 중인 채가 섞이면 gt.json 부재로 죽는다 —
+심볼릭링크 뷰로 우회한다 (캐시 파일명은 realpath 기반이라 실제 채 이름이 유지됨):
+
+```bash
+mkdir -p data/thor7_part
+for d in "$PWD"/data/thor7/house_*; do
+  [ -f "$d/gt.json" ] && ln -sfn "$d" "data/thor7_part/$(basename "$d")"
+done
+ls data/thor7_part | wc -l    # 완료 채 수 확인
+
+# 캐시 4종 — 접두어는 t7p_ (본판 t7_ 와 반드시 분리, 함정 #5)
+THOR_ROOT=data/thor7_part CACHE_PREFIX=/tmp/t7p_a_ $KX -u scripts/exp_anchowl.py 4
+THOR_ROOT=data/thor7_part QCACHE_PREFIX=/tmp/t7p_q_ STRIDE=4 $KX -u scripts/exp_imgq.py
+THOR_ROOT=data/thor7_part ACACHE_PREFIX=/tmp/t7p_x_ STRIDE=4 $KX -u scripts/exp_anchor_exemplar.py
+THOR_ROOT=data/thor7_part CLIP_PREFIX=/tmp/t7p_c_ STRIDE=4 $KX -u scripts/exp_clip_rooms.py
+
+$KX scripts/harvest.py --root data/thor7_part --cache /tmp --prefix t7p_ \
+  --out harvest_t7p.tar.gz --keep-geom
+```
+
+주의 둘:
+- **t7p\_ 캐시를 본판 t7\_ 에 섞지 말 것.** exp_anchowl 의 어휘(vocab)가 채 집합에서
+  유도되므로 65채판과 100채판의 점수 행렬 열이 다를 수 있다. 부분판은 조기 판독용,
+  완주 후 §2 체인을 그대로(t7\_) 다시 돈다.
+- 생성과 GPU 를 공유한다 — 렌더가 약간 느려질 수 있으나 이 장비에선 허용 범위.
+
 ## 함정 (전부 실측으로 물린 것들)
 
 1. `--vis-dist 20` 없으면 GT 오염 — 물체당 보인 프레임 6장 대 122장 (§58)
