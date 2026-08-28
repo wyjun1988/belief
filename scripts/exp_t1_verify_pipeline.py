@@ -26,6 +26,7 @@ A3P = os.environ.get("A3_PREFIX", "/tmp/a3_")
 QCP = os.environ.get("QC_PREFIX", "/tmp/qc_")
 OUTJ = os.environ.get("OUT_JSONL", "t1_verified.jsonl")
 MAXWALK = int(os.environ.get("MAXWALK", "20"))
+FLOOR = float(os.environ.get("FLOOR", "0.80"))   # 후보 점수 하한 분위 — rtx7_walksim 으로 고를 것
 pr = AutoProcessor.from_pretrained(MODEL)
 md = AutoModelForImageTextToText.from_pretrained(
     MODEL, dtype=torch.bfloat16, device_map="auto").eval()
@@ -70,7 +71,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         if oid not in moves: continue                    # T1 후보(이동)만 — 비용 절약
         ti = vocab.index(v0["type"])
         TS = QS[:, j] + STx[:, j]
-        th80 = np.quantile(TS, 0.80)
+        th80 = np.quantile(TS, FLOOR)
         cands = sorted(np.where(TS >= th80)[0], key=lambda i: -ts[i])[:MAXWALK]
         ver = []; walked = 0
         for i in cands:

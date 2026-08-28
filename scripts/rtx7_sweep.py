@@ -48,4 +48,11 @@ print("쌍 %d (양 %d / 음 %d) · s_ab AUC %.3f" % (len(rec), len(pos), len(neg
 for q in (0.95, 0.98, 0.99):
     th = float(np.quantile(neg, q))
     print("  기각 %.2f → 문턱 %+.3f · 진짜 수용 %.3f" % (q, th, float((pos >= th).mean())))
+# 선택 문턱에서의 거리별 진짜 수용률 — "근거리도 못 넘으면 크롭 정렬 문제"
+if any("dist" in r for r in rec):
+    th_ = float(np.quantile(neg, pick))
+    for lo, hi, tag in ((0, 2, "<2m"), (2, 5, "2-5m"), (5, 99, "5m+")):
+        p_ = np.array([r["s_ab"] for r in rec if r["truth"] and lo <= r.get("dist", -1) < hi])
+        if len(p_) >= 10:
+            print("  수용@%.3f %-5s %.2f (n=%d)" % (th_, tag, float((p_ >= th_).mean()), len(p_)))
 print(round(float(np.quantile(neg, pick)), 3))
