@@ -22,6 +22,7 @@ rng = np.random.default_rng(0)
 meta = []; k = 0
 def words(t): return "".join(" " + c.lower() if c.isupper() else c for c in t).strip()
 HDS = sorted(glob.glob(ROOT + "/house_*"))
+assert HDS, "house_* 가 없다: %s — THOR_ROOT/cwd 확인 (§1 의 '쌍 0' 무산이 이 조용한 실패였다)" % os.path.abspath(ROOT)
 HB = max(4, -(-N // max(len(HDS), 1)))   # 채당 상한 — 앞쪽 채 편중 방지
 for hd in HDS:
     if k >= N: break
@@ -52,5 +53,7 @@ for hd in HDS:
         f2 = os.path.join(OUT, "cand_%04d.jpg" % k); crop(o2).save(f2, quality=92)
         meta.append(dict(cand=f2, enroll=f2, label=words(typ[o1]),
                          alt=words(typ[o2]), truth=0, dist=dst(o2))); k += 1; hk += 1
+assert k > 0, ("쌍 0개 — live 프레임 존재·gt.json ctr 기록 여부를 확인하라. "
+    "빈 meta 를 쓰고 조용히 성공한 척하지 않는다")
 open(os.path.join(OUT, "meta.jsonl"), "w").write("\n".join(json.dumps(m) for m in meta))
 print("쌍 %d → %s (크롭 %s)" % (k, OUT, CROP if CROP else "W/3 자동"))
