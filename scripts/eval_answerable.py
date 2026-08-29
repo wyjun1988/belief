@@ -264,7 +264,16 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             _rec = VSC.get((hn, oid))
             if _rec is not None:
                 _pas = [(int(i), s_) for i, s_ in _rec if s_ >= VTH]
-                if VRULE == "score3":
+                if VRULE == "exnew":
+                    # 외형 게이트: 통과자 중 exemplar 점수(QS) 상위 절반만 남기고 최신 3장.
+                    # 오검출=같은 혼동물의 반복이라 시간·점수로는 안 갈리고 외형으로 갈린다.
+                    if len(_pas) >= 4:
+                        _q = np.quantile([QS[i, j] for i, _s in _pas], 0.5)
+                        _f = [(i, s_) for i, s_ in _pas if QS[i, j] >= _q] or _pas
+                    else:
+                        _f = _pas
+                    _acc = [i for i, _s in _f][:3]
+                elif VRULE == "score3":
                     _acc = [i for i, _s in sorted(_pas, key=lambda x: -x[1])[:3]]
                 elif VRULE == "cluster":
                     _bt = sorted(_pas, key=lambda x: -int(ts[x[0]]))
