@@ -33,12 +33,12 @@ md = AutoModelForImageTextToText.from_pretrained(
 tok = pr.tokenizer
 IDA = tok.encode("A", add_special_tokens=False)[0]
 IDB = tok.encode("B", add_special_tokens=False)[0]
+IDC = tok.encode("C", add_special_tokens=False)[0]
 def words(t): return "".join(" " + c.lower() if c.isupper() else c for c in t).strip()
 print("모델 %s" % MODEL, flush=True)
 
 
-def sab(img, a, b):
-    q = "Which object is in this image: (A) %s or (B) %s? Answer only A or B." % (a, b)
+def _logits(img, q):
     msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": q}]}]
     try:
         text = pr.apply_chat_template(msgs, add_generation_prompt=True, enable_thinking=False)
@@ -46,8 +46,16 @@ def sab(img, a, b):
         text = pr.apply_chat_template(msgs, add_generation_prompt=True)
     inp = pr(images=[img], text=text, return_tensors="pt").to(md.device)
     with torch.no_grad():
-        lg = md(**inp).logits[0, -1]
+        return md(**inp).logits[0, -1]
+
+def sab(img, a, b):
+    lg = _logits(img, "Which object is in this image: (A) %s or (B) %s? Answer only A or B." % (a, b))
     return float(lg[IDA] - lg[IDB])
+
+def sac(img, a, b):
+    # "둘 다 아님" 선택지 — 2AFC 는 혼동물(정체가 B 도 아닌 것)을 못 거른다 (§FA 상관)
+    lg = _logits(img, "Which is in this image: (A) %s, (B) %s, or (C) neither? Answer only A, B, or C." % (a, b))
+    return float(lg[IDA] - max(float(lg[IDB]), float(lg[IDC])))
 
 
 from collections import Counter
@@ -87,11 +95,12 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                          min(W, int(cx)+h2), min(H, int(cy)+h2))).resize((336, 336))
             alt_c = int(np.argsort(-S[i, :nT])[1] if np.argsort(-S[i, :nT])[0] == ti
                         else np.argsort(-S[i, :nT])[0])
-            s = sab(c, words(v0["type"]), words(vocab[alt_c]))
+            _a, _b = words(v0["type"]), words(vocab[alt_c])
+            s = sab(c, _a, _b); s2 = sac(c, _a, _b)
             # ⚠️ 조기중단·문턱판정 제거 — **점수만 기록**하고 문턱은 로컬에서 스윕한다.
             # (1차 실행에서 실사 문턱 0.875 가 시뮬 로짓 분포에 안 맞아 전부 통과 —
             # 검증 프레임 진짜 비율 0.32, T1 0.365 로 통계 이하. 도메인별 캘리브레이션 필수)
-            ver.append([int(i), round(s, 3)])
+            ver.append([int(i), round(s, 3), round(s2, 3)])
         out.write(json.dumps(dict(house=hn, oid=oid, scored=ver, walked=walked)) + "\n")
         out.flush()
     print(hn, "완료", flush=True)

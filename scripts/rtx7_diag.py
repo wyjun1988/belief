@@ -40,7 +40,8 @@ for hn, rs in sorted(byh.items()):
         oid = r["oid"]; t0 = mvs.get(oid, -1)
         n_t += 1
         kinds = []
-        for i, s in r["scored"]:
+        for e in r["scored"]:
+            i, s = int(e[0]), e[1]
             t = int(ts[i]); m = live.get(t, {})
             true = oid in (m.get("vis") or [])
             d = (m.get("dist") or {}).get(oid, -1) if true else -1

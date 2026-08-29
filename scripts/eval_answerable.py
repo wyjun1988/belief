@@ -29,6 +29,7 @@ VTH = float(os.environ.get("VERIFY_TH", "0"))
 # 간격 VERIFY_GAP 프레임)의 점수 상위 3장 — 흩어진 오검출 배제. score3: 점수 상위 3장.
 VRULE = os.environ.get("VERIFY_RULE", "first3")
 VGAP = int(os.environ.get("VERIFY_GAP", "300"))
+VTH2 = float(os.environ.get("VERIFY_TH2", "-1e9"))   # s_ac(둘다아님) 거부권 — 3원소 기록에서만
 VSC = None
 if VJ:
     VSC = {}
@@ -263,7 +264,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         if VSC is not None:
             _rec = VSC.get((hn, oid))
             if _rec is not None:
-                _pas = [(int(i), s_) for i, s_ in _rec if s_ >= VTH]
+                _pas = [(int(e[0]), e[1]) for e in _rec
+                        if e[1] >= VTH and (len(e) < 3 or e[2] >= VTH2)]
                 if VRULE == "exnew":
                     # 외형 게이트: 통과자 중 exemplar 점수(QS) 상위 절반만 남기고 최신 3장.
                     # 오검출=같은 혼동물의 반복이라 시간·점수로는 안 갈리고 외형으로 갈린다.
