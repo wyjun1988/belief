@@ -229,8 +229,28 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     out.append(i)
                     if len(out) == 3: break
             return loc_of(out) if out else find_recent
-        # 768px 실측(AUC 0.944 · @5 0.842)의 기각 0.99 운용점 — 384px(0.42) 대비
-        find_v75 = simver(0.62, 0.01)
+        # 모의 파라미터 주입 — SIMV_PACC_FA="p_acc,p_fa" 또는
+        # SIMV_DIST="p<2m,p2-5m,p5m+,p_fa" (거리의존 수용 — §102 버킷 실측 기반 분석용)
+        _sd = os.environ.get("SIMV_DIST")
+        if _sd:
+            _p2, _p5, _pf, _pfa = [float(x) for x in _sd.split(",")]
+            def simver_d():
+                out = []
+                for i in cands:
+                    if vis[i]:
+                        _d = (live[ts[i]].get("dist") or {}).get(oid, 99)
+                        ok = _vr.random() < (_p2 if _d < 2 else _p5 if _d < 5 else _pf)
+                    else:
+                        ok = _vr.random() < _pfa
+                    if ok:
+                        out.append(i)
+                        if len(out) == 3: break
+                return loc_of(out) if out else find_recent
+            find_v75 = simver_d()
+        else:
+            _pa, _pf2 = [float(x) for x in
+                         os.environ.get("SIMV_PACC_FA", "0.62,0.01").split(",")]
+            find_v75 = simver(_pa, _pf2)
         # ── FA 상관 모형: 오검출 = 같은 혼동물의 반복. 후보 프레임의 패치 위치에서
         # 가장 가까운 GT 개체를 정체로 삼고, **개체 단위로** 한 번 속으면 그 개체의
         # 모든 목격을 수용한다 (비관 모형) ──
