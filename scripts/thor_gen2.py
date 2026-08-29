@@ -84,6 +84,10 @@ def main():
     ap.add_argument("--vis-dist", type=float, default=20.0,
                     help="가시성 판정 거리. 기본 1.5m 는 '보인다' 를 거리로 잘라버린다.")
     ap.add_argument("--size", type=int, default=384)
+    ap.add_argument("--map-size", type=int, default=0,
+                    help="맵·매핑워크(등록부)만 이 해상도로 촬영 (0=--size 와 동일). "
+                         "§101 의 '1024 포화'는 live 검증 크롭 결론이고 등록부는 미측정 — "
+                         "exemplar 등록 화질은 별도 축이다")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--prior", default=None,
                     help="**Qwen 이 만든 배치 분포**(scripts/thor_prior_llm.py). 주면 t=0 에 "
@@ -174,6 +178,9 @@ def main():
         os.makedirs(os.path.join(hd, "live"), exist_ok=True)
 
         rt = {r["id"]: r["roomType"] for r in rooms}
+        if args.map_size and args.map_size != args.size:
+            e = ctrl.step("ChangeResolution", x=args.map_size, y=args.map_size)
+            assert e.metadata["lastActionSuccess"], "ChangeResolution(map) 실패"
         # ⚠️ 초기 맵은 **재배치 뒤**에 찍어야 한다 — 맵이 곧 씬그래프이므로
         # 재배치 전 상태를 찍으면 시작부터 어긋난다.
         # ── t=0 배치 다양화 (LLM 분포에서 표본)
@@ -220,7 +227,12 @@ def main():
                         mp.append(dict(room=rid, yaw=y, box=mb))
         ev = ctrl.step("Pass")
         gt0 = {o["objectId"]: dict(type=o["objectType"],
-                                   room=room_of((o["position"]["x"], o["position"]["z"]), rooms))
+                                   room=room_of((o["position"]["x"], o["position"]["z"]), rooms),
+                                   # t=0 좌표 — 이게 없어서 thor7 은 맵 재촬영(remap)이
+                                   # 불가능했다. PlaceObjectAtPoint 재현용.
+                                   pos=[round(o["position"]["x"], 3),
+                                        round(o["position"]["y"], 3),
+                                        round(o["position"]["z"], 3)])
                for o in ev.metadata["objects"] if o.get("pickupable")}
         gt0 = {k: v for k, v in gt0.items() if v["room"]}
 
@@ -236,6 +248,9 @@ def main():
                         args.size, gt_depth=True, byroom=byroom)
             print("  매핑워크 %d프레임" % nmw, flush=True)
 
+        if args.map_size and args.map_size != args.size:
+            e = ctrl.step("ChangeResolution", x=args.size, y=args.size)
+            assert e.metadata["lastActionSuccess"], "ChangeResolution(live) 실패"
         # ── 1fps 배회 (RGB 만) + 미관측 이동
         # ⚠️ 예전엔 방·물체·목적지가 **전부 균등 난수**였다. 배치만 Qwen 으로
         # 현실화하고 움직임을 균등으로 두면 두 군데가 망가진다:
