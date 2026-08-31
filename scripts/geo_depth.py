@@ -10,7 +10,11 @@
   b) 타겟별 GT 목격 최신 8 (georoom 풀)
   c) 타겟별 top50 최신 5 (find_recent 풀)
 z-depth → 수평거리: d = z·sqrt(x̂² + (cosθ − ŷ·sinθ)²), θ=카메라 기울기 10°.
-GT 거리가 있는 표본으로 상대오차를 거리 버킷별 출력 — 규약이 틀리면 여기서 터진다.
+
+**지도 앵커 스케일 보정(배포-합법)**: 1차 실측 상대오차 0.91 = 계통 스케일 실패
+(THOR fov90 초단초점 vs 모델의 초점거리 가정). 프레임에서 검출된 정적 앵커의
+지도 기대거리 / 추정 depth 중앙값 = 프레임 스케일. 앵커 없으면 채 중앙값 후퇴.
+raw 비율·보정 전후 오차를 같이 출력 — GT 는 진단용일 뿐 보정에 안 쓴다.
 """
 import glob, json, os
 import numpy as np
@@ -21,6 +25,7 @@ import torch
 ROOT = os.environ.get("THOR_ROOT", "data/thor7_t7view")
 A3P = os.environ.get("A3_PREFIX", "/tmp/t7_a_")
 QCP = os.environ.get("QC_PREFIX", "/tmp/t7_q_")
+AXP = os.environ.get("AX_PREFIX", "/tmp/t7_x_")
 SC = os.environ.get("SCORES", "t1_scores_t7ac.jsonl")
 OUTJ = os.environ.get("OUT_JSONL", "geo_depth_t7.jsonl")
 MODEL = os.environ.get("DEPTH_MODEL", "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf")
@@ -52,6 +57,16 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     P, ph, pw = za["p"], int(za["ph"]), int(za["pw"])
     QT, QS, STx = list(zq["tg"]), zq["si"], zq["st"]
     g = json.load(open(hd + "/gt.json"))
+    sm = g.get("scene_meta") or {}
+    stp = {k: v["pos"] for k, v in sm.get("static", {}).items() if v.get("pos")}
+    ZX = np.load(AXP + hn + ".npz", allow_pickle=True) if os.path.exists(AXP + hn + ".npz") else None
+    axids = [a for a in (list(ZX["anch"]) if ZX is not None else []) if a in sm.get("static", {})]
+    if ZX is not None and axids:
+        _cols = [k for k, a in enumerate(list(ZX["anch"])) if a in sm["static"]]
+        AXS = ZX["s"][:, _cols]; AXS = AXS - np.median(AXS, axis=0, keepdims=True)
+        AXPp = ZX["p"][:, _cols]
+    else:
+        AXS = None
     live = {m["t"]: m for m in g["live"]}
     cnt = Counter(v["type"] for v in g["gt0"].values())
     mvs = {}
@@ -91,26 +106,50 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             pd = torch.nn.functional.interpolate(pd.unsqueeze(1).float(), size=(H, W),
                                                  mode="bilinear", align_corners=False)[:, 0]
         for k, i in enumerate(bi): zmap[i] = pd[k].cpu().numpy()
+    def horiz(Z, cx, cy, h2):
+        z = float(np.median(Z[max(0, cy - h2):cy + h2, max(0, cx - h2):cx + h2]))
+        H, W = Z.shape; f = W / 2.0
+        xh = (cx - W / 2.0) / f; yh = (cy - H / 2.0) / f
+        return z * np.sqrt(xh ** 2 + (np.cos(TILT) - yh * np.sin(TILT)) ** 2)
+    # ── 프레임 스케일: 검출 앵커의 지도 기대거리 / depth 추정거리 중앙값 ──
+    fscale = {}
+    for i in zmap:
+        if AXS is None: break
+        m = live.get(tsl[i], {}); ap = m.get("apos")
+        if ap is None: continue
+        Z = zmap[i]; H, W = Z.shape; c2 = max(4, (W // pw) // 2)
+        rs = []
+        for k in np.where(AXS[i] >= 0.15)[0]:
+            a = axids[k]
+            if a not in stp: continue
+            exp_d = float(np.hypot(stp[a][0] - ap[0], stp[a][1] - ap[1]))
+            cx = int((AXPp[i, k] % pw + .5) / pw * W); cy = int((AXPp[i, k] // pw + .5) / ph * H)
+            est = horiz(Z, cx, cy, c2)
+            if est > 0.1: rs.append(exp_d / est)
+        if rs: fscale[i] = float(np.median(rs))
+    hscale = float(np.median(list(fscale.values()))) if fscale else 1.0
     cell = None
     for (i, oid), ti in sorted(need.items()):
         if i not in zmap: continue
         Z = zmap[i]; H, W = Z.shape
         if cell is None: cell = W // pw
         cx = int((P[i, ti] % pw + .5) / pw * W); cy = int((P[i, ti] // pw + .5) / ph * H)
-        h2 = max(4, cell // 2)
-        z = float(np.median(Z[max(0, cy - h2):cy + h2, max(0, cx - h2):cx + h2]))
-        f = W / 2.0
-        xh = (cx - W / 2.0) / f; yh = (cy - H / 2.0) / f
-        d = z * np.sqrt(xh ** 2 + (np.cos(TILT) - yh * np.sin(TILT)) ** 2)
+        d_raw = horiz(Z, cx, cy, max(4, cell // 2))
+        sc_ = fscale.get(i, hscale)
+        d = d_raw * sc_
         gt = (live.get(tsl[i], {}).get("dist") or {}).get(oid)
         out.write(json.dumps(dict(house=hn, t=tsl[i], oid=oid, d=round(float(d), 2),
+                                  d_raw=round(float(d_raw), 2), sc=round(sc_, 3),
                                   gt=gt)) + "\n")
-        if gt: errs.append((gt, abs(d - gt) / gt))
+        if gt: errs.append((gt, abs(d - gt) / gt, d_raw / gt))
     out.flush()
+    print("  스케일: 프레임 %d/%d · 채 중앙값 %.2f" % (len(fscale), len(zmap), hscale), flush=True)
     print("%s 프레임 %d · 표본 %d" % (hn, len(frames), len(need)), flush=True)
 out.close()
-errs = np.array(errs) if errs else np.zeros((0, 2))
-print("\nGT 대조 %d건 · 상대오차 중앙값 %.2f" % (len(errs), float(np.median(errs[:, 1])) if len(errs) else -1))
+errs = np.array(errs) if errs else np.zeros((0, 3))
+print("\nGT 대조 %d건 · 보정후 상대오차 중앙값 %.2f · raw 비율(d_raw/gt) 중앙값 %.2f"
+      % (len(errs), float(np.median(errs[:, 1])) if len(errs) else -1,
+         float(np.median(errs[:, 2])) if len(errs) else -1))
 for lo, hi, tag in ((0, 2, "<2m"), (2, 5, "2-5m"), (5, 99, "5m+")):
     sub = errs[(errs[:, 0] >= lo) & (errs[:, 0] < hi)]
     if len(sub): print("  %-5s 상대오차 중앙값 %.2f (n=%d)" % (tag, float(np.median(sub[:, 1])), len(sub)))
