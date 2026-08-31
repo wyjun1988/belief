@@ -17,8 +17,28 @@ from collections import Counter
 ROOT = os.environ.get("THOR_ROOT", "data/thor4")
 A3P = os.path.expanduser(os.environ.get("A3_PREFIX", "~/khcache/h4/cache/a3_"))
 QCP = os.path.expanduser(os.environ.get("QC_PREFIX", "~/khcache/h4/cache/qc_"))
+AXP = os.path.expanduser(os.environ.get("AX_PREFIX", "~/khcache/h4/cache/ax_"))
 SG_INIT = os.environ.get("SG_INIT", "gt")
 P_ACC, P_ID = 0.42, 0.05
+# ── 실검·투영 배선 (§110): 실점수+exnew+삼각측량이 마진 게이트를 대체.
+#    실점수 없는 타겟은 종전 모의 경로로 후퇴. ──
+FRAME_W = int(os.environ.get("FRAME_W", "768"))
+VTH = float(os.environ.get("VERIFY_TH", "0"))
+VTH2 = float(os.environ.get("VERIFY_TH2", "-1e9"))
+VSC = None
+if os.environ.get("VERIFY_JSONL"):
+    VSC = {}
+    for _l in open(os.environ["VERIFY_JSONL"]):
+        _d = json.loads(_l)
+        VSC[(_d["house"], _d["oid"])] = _d["scored"]
+    print("실검증 %d타겟" % len(VSC), flush=True)
+GDEP = None
+if os.environ.get("GEO_DEPTH"):
+    GDEP = {}
+    for _l in open(os.environ["GEO_DEPTH"]):
+        _d = json.loads(_l)
+        GDEP[(_d["house"], _d["t"], _d["oid"])] = _d["d"]
+    print("mono-depth %d표본" % len(GDEP), flush=True)
 PR = json.load(open("data/thor_prior.json"))
 
 res = {"rec": [], "sys": [], "static": [], "moved_sys": [], "moved_rec": [],
@@ -45,6 +65,21 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     for a, b in sm["doors"]:
         if a in adj and b in adj: adj[a].add(b); adj[b].add(a)
     py, px = P // pw, P % pw
+    # 투영 재료 (§106-110): 방 폴리곤·앵커 좌표·검출 앵커 캐시
+    _geo = None
+    if VSC is not None and sm.get("polys"):
+        _stp = {k: v["pos"] for k, v in sm["static"].items() if v.get("pos")}
+        _zx = np.load(AXP + hn + ".npz", allow_pickle=True) if os.path.exists(AXP + hn + ".npz") else None
+        if _stp and _zx is not None:
+            _axids = [a for a in list(_zx["anch"]) if a in sm["static"]]
+            _cols = [k for k, a in enumerate(list(_zx["anch"])) if a in sm["static"]]
+            _XS = _zx["s"][:, _cols]
+            _XSc = _XS - np.median(_XS, axis=0, keepdims=True)
+            _XPp = _zx["p"][:, _cols]
+            _byt = {}
+            for k, v in sm["static"].items():
+                if v.get("pos"): _byt.setdefault(v["type"], []).append(v["pos"])
+            _geo = (sm["polys"], _stp, _byt)
     arm = np.array([live[t]["room"] for t in ts])
     AS = S[:, nT:]
     im = {}
@@ -115,6 +150,71 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             if k not in coin: coin[k] = _vr.random() < P_ID
             return coin[k]
 
+        # ── 투영 국소화 (§107 투표 yaw · §110 삼각측량+depth 후퇴) ──
+        def _room_pt(pt):
+            polys = _geo[0]
+            for r in polys:
+                pl = polys[r]; x, z = pt; n2 = len(pl); c2 = False
+                for j2 in range(n2):
+                    x1, z1 = pl[j2]; x2, z2 = pl[(j2 + 1) % n2]
+                    if (z1 > z) != (z2 > z) and x < (x2-x1)*(z-z1)/(z2-z1+1e-12)+x1:
+                        c2 = not c2
+                if c2: return r
+            return min(polys, key=lambda r: min((pt[0]-v[0])**2 + (pt[1]-v[1])**2
+                                                for v in polys[r]))
+        def _geo_ray(i):
+            polys, stp, byt = _geo
+            m = live[ts[i]]; ap = m.get("apos")
+            if ap is None: return None
+            FF = FRAME_W / 2.0
+            def pb(cx): return np.degrees(np.arctan((cx - FRAME_W/2.0) / FF))
+            def br(dx, dz): return np.degrees(np.arctan2(dx, dz))
+            def pxof(pi): return (pi % pw + .5) / pw * FRAME_W
+            hyp = []
+            for k2 in np.where(_XSc[i] >= 0.15)[0]:
+                a = _axids[k2]
+                if a not in stp: continue
+                hyp.append((br(stp[a][0]-ap[0], stp[a][1]-ap[1]) - pb(pxof(_XPp[i, k2])), 2.0))
+            for c in range(nT, len(vocab)):
+                inst = byt.get(vocab[c], [])
+                if not inst or len(inst) > 4 or S[i, c] < 0.15: continue
+                cx = pxof(P[i, c])
+                for pos in inst:
+                    hyp.append((br(pos[0]-ap[0], pos[1]-ap[1]) - pb(cx), 1.0/len(inst)))
+            if not hyp: return None
+            best = (0.0, None)
+            for y0, _w in hyp:
+                w = sum(w2 for y2, w2 in hyp if abs((y2-y0+180) % 360 - 180) <= 12)
+                if w > best[0]: best = (w, y0)
+            if best[0] < 2.0: return None
+            ys = [(np.radians(y), w) for y, w in hyp if abs((y-best[1]+180) % 360 - 180) <= 12]
+            sw = sum(w for _y, w in ys)
+            yaw = np.degrees(np.arctan2(sum(np.sin(y)*w for y, w in ys)/sw,
+                                        sum(np.cos(y)*w for y, w in ys)/sw))
+            return ap, yaw + pb(pxof(P[i, ti]))
+        def _tri(r1, r2):
+            (p1, b1), (p2, b2) = r1, r2
+            if abs((b1-b2+180) % 360 - 180) < 15: return None
+            if np.hypot(p1[0]-p2[0], p1[1]-p2[1]) < 0.5: return None
+            u1 = np.array([np.sin(np.radians(b1)), np.cos(np.radians(b1))])
+            u2 = np.array([np.sin(np.radians(b2)), np.cos(np.radians(b2))])
+            try:
+                t2 = np.linalg.solve(np.stack([u1, -u2], 1),
+                                     np.array(p2, float) - np.array(p1, float))
+            except np.linalg.LinAlgError:
+                return None
+            if not (0.3 < t2[0] < 12 and 0.3 < t2[1] < 12): return None
+            return np.array(p1, float) + t2[0]*u1
+        def _geo_room_d(i):
+            ray = _geo_ray(i)
+            if ray is None: return None
+            ap, b = ray
+            d = (GDEP.get((hn, int(ts[i]), oid)) if GDEP is not None
+                 else (live[ts[i]].get("dist") or {}).get(oid))
+            if d is None: return None
+            return _room_pt([ap[0] + d*np.sin(np.radians(b)),
+                             ap[1] + d*np.cos(np.radians(b))])
+
         # ── 상태기계 ──
         # v3: 기록은 **불변** — 질의 시점에 검증된 최신 증거와 마진 비교만 한다.
         # (영구 덮어쓰기는 국소화 노이즈로 정지 물체 기록을 오염시킨다 — v1 실측 −0.11)
@@ -149,6 +249,33 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             top = max(mass, key=mass.get)
             if record and top != record and mass[top] > 2.0 * mass.get(record, 0):
                 alt = top                           # 마진 게이트 통과 — 경우 0
+        # ── 실검·투영 경로 (있으면 모의 마진 게이트를 대체) ──
+        if VSC is not None and _geo is not None:
+            _rr = VSC.get((hn, oid))
+            if _rr is not None:
+                alt = None                          # 실점수 있는 타겟은 실경로가 판정
+                _pas = [(int(e[0]), e[1]) for e in _rr
+                        if e[1] >= VTH and (len(e) < 3 or e[2] >= VTH2)]
+                if len(_pas) >= 4:                  # exnew 외형 게이트
+                    _qv = [QS[i2, j] for i2, _s in _pas]
+                    _qm = float(np.median(_qv))
+                    _pas = [(i2, s_) for (i2, s_), q in zip(_pas, _qv) if q >= _qm] or _pas
+                _pick = [i2 for i2, _s in _pas][:3]
+                if len(_pick) >= 2:
+                    _rays = [r for r in (_geo_ray(i2) for i2 in _pick) if r]
+                    _pts = []
+                    for _a in range(len(_rays)):
+                        for _b in range(_a+1, len(_rays)):
+                            _pt = _tri(_rays[_a], _rays[_b])
+                            if _pt is not None: _pts.append(_pt)
+                    if _pts:                        # 삼각측량 성공 = 강한 증거
+                        _rm = _room_pt(np.median(np.array(_pts), 0))
+                        if _rm and _rm != record: alt = _rm
+                    else:                           # 프레임별 투영 2장+ 합의 요구
+                        _rms = [x for x in (_geo_room_d(i2) for i2 in _pick) if x]
+                        _cc = Counter(_rms).most_common(1)
+                        if _cc and _cc[0][1] >= 2 and _cc[0][0] != record:
+                            alt = _cc[0][0]
         if record is None:
             record = max(((PR.get(v0["type"], {}).get(rt[r], .25)/max(nrt[rt[r]],1), r)
                           for r in rids))[1]
