@@ -310,6 +310,16 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             ans = record
             res["case"]["rec"] += 1
         _br = ("c0" if alt is not None else "c2" if fired else "rec")
+        # 3경우 분해 (GT 기준): ①이동없음 ②이동+재촬영 ③이동+미재촬영(→부재확인
+        # 가능하면 belief 로 넘겨야 하는 부류 — 실제로 넘긴 비율이 핵심)
+        if mv:
+            _t0 = mv[-1]["t"]
+            _seen = bool(np.any(vis & (ts > _t0)))
+            _revis = bool(np.any((arm == mv[-1]["frm"]) & (ts > _t0)))
+            _ck = "②재촬영" if _seen else ("③belief대상" if _revis else "③재방문없음")
+        else:
+            _ck = "①이동없음"
+        res.setdefault("ck", Counter())[(_ck, _br, ans == tgt)] += 1
         if os.environ.get("DUMP_JSONL"):
             _dp = dict(house=hn, oid=oid, type=v0["type"], branch=_br, ans=ans,
                        tgt=tgt, record=record, ok=bool(ans == tgt), moved=bool(mv))
@@ -334,6 +344,24 @@ print("  이동만: 기록 %.3f · 최종 %.3f (n=%d)"
       % (np.mean(res["moved_rec"]), np.mean(res["moved_sys"]), len(res["moved_sys"])))
 print("  분기: %s" % dict(res["case"]))
 br = res.get("br", Counter())
+ck = res.get("ck", Counter())
+print("  ── 3경우 분해 (GT 기준) ──")
+for c3 in ("①이동없음", "②재촬영", "③belief대상", "③재방문없음"):
+    tot = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3)
+    if not tot: continue
+    okc = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and o_)
+    line = "  %-12s n=%-4d 정답 %.3f" % (c3, tot, okc / tot)
+    if c3 == "③belief대상":
+        h = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ == "c2")
+        ho = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ == "c2" and o_)
+        no = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ != "c2" and o_)
+        line += " | 실제 belief 인계 %.2f (%d건) · 인계분 정답 %.3f · 미인계분 정답 %.3f" % (
+            h / tot, h, ho / max(h, 1), no / max(tot - h, 1))
+    if c3 == "②재촬영":
+        c0n = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ == "c0")
+        c0o = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ == "c0" and o_)
+        line += " | 목격채택(c0) %.2f · 채택분 정답 %.3f" % (c0n / tot, c0o / max(c0n, 1))
+    print(line)
 print("  분기별 정오 (분기, 이동?, 건수, 정답률):")
 for b2 in ("c0", "c2", "rec"):
     for mvf in (True, False):
