@@ -11,10 +11,14 @@
   c) 타겟별 top50 최신 5 (find_recent 풀)
 z-depth → 수평거리: d = z·sqrt(x̂² + (cosθ − ŷ·sinθ)²), θ=카메라 기울기 10°.
 
-**지도 앵커 스케일 보정(배포-합법)**: 1차 실측 상대오차 0.91 = 계통 스케일 실패
-(THOR fov90 초단초점 vs 모델의 초점거리 가정). 프레임에서 검출된 정적 앵커의
-지도 기대거리 / 추정 depth 중앙값 = 프레임 스케일. 앵커 없으면 채 중앙값 후퇴.
-raw 비율·보정 전후 오차를 같이 출력 — GT 는 진단용일 뿐 보정에 안 쓴다.
+**지도 앵커 역깊이 아핀 정합(우리 기술 kx.depth.align 의 THOR 적응판)**:
+1차 실측 상대오차 0.91 = 계통 스케일 실패. 바닐라 DA 가 아니라 우리 정합을 쓴다 —
+  · 역깊이 공간 1/ẑ = a·(1/z_pred) + b  (곱셈 스케일만으론 near/far 편향 못 잡음)
+  · **상대 잔차** RANSAC (절대 잔차는 "먼 점만 맞추는 평평한 퇴화 해" 를 낳는다)
+  · a≤0.05 퇴화 가드 → 스케일-only 후퇴
+가구 앵커는 프레임당 몇 개뿐이라(원판의 프레임당 30+ 반조밀 앵커와 다름) 쌍을
+**채 단위로 모아** 아핀을 풀고, 프레임은 잔차 배율(중앙값, [0.6,1.6] 클립)만 보정.
+GT 는 진단 출력 전용 — 정합엔 지도 좌표만 쓴다.
 """
 import glob, json, os
 import numpy as np
@@ -106,44 +110,76 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             pd = torch.nn.functional.interpolate(pd.unsqueeze(1).float(), size=(H, W),
                                                  mode="bilinear", align_corners=False)[:, 0]
         for k, i in enumerate(bi): zmap[i] = pd[k].cpu().numpy()
-    def horiz(Z, cx, cy, h2):
-        z = float(np.median(Z[max(0, cy - h2):cy + h2, max(0, cx - h2):cx + h2]))
-        H, W = Z.shape; f = W / 2.0
+    def kfac(cx, cy, W, H):
+        f = W / 2.0
         xh = (cx - W / 2.0) / f; yh = (cy - H / 2.0) / f
-        return z * np.sqrt(xh ** 2 + (np.cos(TILT) - yh * np.sin(TILT)) ** 2)
-    # ── 프레임 스케일: 검출 앵커의 지도 기대거리 / depth 추정거리 중앙값 ──
-    fscale = {}
+        return float(np.sqrt(xh ** 2 + (np.cos(TILT) - yh * np.sin(TILT)) ** 2))
+    def zpatch(Z, cx, cy, h2):
+        return float(np.median(Z[max(0, cy - h2):cy + h2, max(0, cx - h2):cx + h2]))
+    # ── 앵커 쌍 수집: x = 1/z_pred, y = 1/z_기대 (지도 수평거리 → z 환산) ──
+    pairs = []; fpairs = {}
     for i in zmap:
         if AXS is None: break
         m = live.get(tsl[i], {}); ap = m.get("apos")
         if ap is None: continue
         Z = zmap[i]; H, W = Z.shape; c2 = max(4, (W // pw) // 2)
-        rs = []
         for k in np.where(AXS[i] >= 0.15)[0]:
             a = axids[k]
             if a not in stp: continue
-            exp_d = float(np.hypot(stp[a][0] - ap[0], stp[a][1] - ap[1]))
             cx = int((AXPp[i, k] % pw + .5) / pw * W); cy = int((AXPp[i, k] // pw + .5) / ph * H)
-            est = horiz(Z, cx, cy, c2)
-            if est > 0.1: rs.append(exp_d / est)
-        if rs: fscale[i] = float(np.median(rs))
-    hscale = float(np.median(list(fscale.values()))) if fscale else 1.0
+            zp = zpatch(Z, cx, cy, c2)
+            d_map = float(np.hypot(stp[a][0] - ap[0], stp[a][1] - ap[1]))
+            zexp = d_map / kfac(cx, cy, W, H)
+            if zp > 0.1 and zexp > 0.1:
+                pairs.append((1.0 / zp, 1.0 / zexp))
+                fpairs.setdefault(i, []).append((1.0 / zp, 1.0 / zexp))
+    # ── 채 단위 역깊이 아핀 (상대 잔차 RANSAC + 퇴화 가드) ──
+    A_, B_ = 1.0, 0.0
+    if len(pairs) >= 10:
+        X = np.array([p_[0] for p_ in pairs]); Y = np.array([p_[1] for p_ in pairs])
+        rng_ = np.random.default_rng(0); best = (0, 1.0, 0.0)
+        for _ in range(200):
+            i1, i2 = rng_.integers(0, len(X), 2)
+            if abs(X[i1] - X[i2]) < 1e-6: continue
+            a_ = (Y[i1] - Y[i2]) / (X[i1] - X[i2]); b_ = Y[i1] - a_ * X[i1]
+            nin = int(np.sum(np.abs((a_ * X + b_) / Y - 1) < 0.10))
+            if nin > best[0]: best = (nin, a_, b_)
+        nin, a_, b_ = best
+        if nin >= max(10, int(0.2 * len(X))) and a_ > 0.05:
+            m_ = np.abs((a_ * X + b_) / Y - 1) < 0.10
+            M = np.stack([X[m_] / Y[m_], 1.0 / Y[m_]], 1)
+            sol, *_ = np.linalg.lstsq(M, np.ones(m_.sum()), rcond=None)
+            A_, B_ = float(sol[0]), float(sol[1])
+        else:                                    # 퇴화/합의 부족 → 스케일-only
+            A_, B_ = float(np.median(Y / X)), 0.0
+    elif pairs:
+        X = np.array([p_[0] for p_ in pairs]); Y = np.array([p_[1] for p_ in pairs])
+        A_, B_ = float(np.median(Y / X)), 0.0
+    # 프레임 잔차 배율 (아핀 후, 앵커 2개 이상)
+    fr_ = {}
+    for i, ps in fpairs.items():
+        if len(ps) >= 2:
+            r = float(np.median([y / (A_ * x + B_) for x, y in ps]))
+            fr_[i] = float(np.clip(r, 0.6, 1.6))
     cell = None
     for (i, oid), ti in sorted(need.items()):
         if i not in zmap: continue
         Z = zmap[i]; H, W = Z.shape
         if cell is None: cell = W // pw
         cx = int((P[i, ti] % pw + .5) / pw * W); cy = int((P[i, ti] // pw + .5) / ph * H)
-        d_raw = horiz(Z, cx, cy, max(4, cell // 2))
-        sc_ = fscale.get(i, hscale)
-        d = d_raw * sc_
+        k_ = kfac(cx, cy, W, H)
+        zp = zpatch(Z, cx, cy, max(4, cell // 2))
+        d_raw = zp * k_
+        inv = (A_ * (1.0 / zp) + B_) * fr_.get(i, 1.0)
+        d = (1.0 / inv) * k_ if inv > 1e-6 else d_raw
         gt = (live.get(tsl[i], {}).get("dist") or {}).get(oid)
         out.write(json.dumps(dict(house=hn, t=tsl[i], oid=oid, d=round(float(d), 2),
-                                  d_raw=round(float(d_raw), 2), sc=round(sc_, 3),
+                                  d_raw=round(float(d_raw), 2),
                                   gt=gt)) + "\n")
         if gt: errs.append((gt, abs(d - gt) / gt, d_raw / gt))
     out.flush()
-    print("  스케일: 프레임 %d/%d · 채 중앙값 %.2f" % (len(fscale), len(zmap), hscale), flush=True)
+    print("  아핀 a=%.3f b=%.3f · 쌍 %d · 프레임보정 %d/%d"
+          % (A_, B_, len(pairs), len(fr_), len(zmap)), flush=True)
     print("%s 프레임 %d · 표본 %d" % (hn, len(frames), len(need)), flush=True)
 out.close()
 errs = np.array(errs) if errs else np.zeros((0, 3))
