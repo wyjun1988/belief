@@ -66,6 +66,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     if not (os.path.exists(fa) and os.path.exists(fq)): continue
     za = np.load(fa, allow_pickle=True); zq = np.load(fq, allow_pickle=True)
     S, P, ph, pw, ts = za["s"], za["p"], int(za["ph"]), int(za["pw"]), za["ts"]
+    BXa = za["bx"] if "bx" in za.files else None
     vocab, nT = list(za["vocab"]), int(za["nT"])
     QT, QS, STx = list(zq["tg"]), zq["si"], zq["st"]
     g = json.load(open(hd + "/gt.json"))
@@ -88,9 +89,16 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             walked += 1
             im = Image.open(lv[t]).convert("RGB")
             W, H = im.size
-            cx = (P[i, ti] % pw + .5) / pw * W
-            cy = (P[i, ti] // pw + .5) / ph * H
-            h2 = max(64, W // 6)         # 상자 = W/3, make_sim_pairs 와 동일 기하
+            if BXa is not None:
+                # 박스 크롭 — 진짜 수용 19% 의 크롭 빗나감 몫 회수 (§112 레버 b).
+                # bx = (cx,cy,w,h) 패딩 정방 정규화, 1.3배 여유, 최소 96px
+                bcx, bcy, bw, bh = [float(x) * max(W, H) for x in BXa[i, ti]]
+                h2 = max(48, int(max(bw, bh) * 0.65))
+                cx, cy = bcx, bcy
+            else:
+                cx = (P[i, ti] % pw + .5) / pw * W
+                cy = (P[i, ti] // pw + .5) / ph * H
+                h2 = max(64, W // 6)     # 상자 = W/3, make_sim_pairs 와 동일 기하
             c = im.crop((max(0, int(cx)-h2), max(0, int(cy)-h2),
                          min(W, int(cx)+h2), min(H, int(cy)+h2))).resize((336, 336))
             alt_c = int(np.argsort(-S[i, :nT])[1] if np.argsort(-S[i, :nT])[0] == ti

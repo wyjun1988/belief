@@ -322,7 +322,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             _e = [i for i in vis_i if ts[i] <= cut]
             _l = [i for i in vis_i if ts[i] > cut]
             _nlate = len(_l)
-            if os.environ.get("ABS_MODE", "spot") == "spot":
+            _mode = os.environ.get("ABS_MODE", "spot")
+            if _mode in ("spot", "both"):
                 # v4 자리-국소: 프레임 전역 TS 는 오검출 바닥에 묻힌다(진단 §DIAG).
                 # 자리의 예상 화면 x(방위-yaw)와 타겟 패치 위치가 가까우면 "자리에서 잡힘".
                 def _at_spot(i):
@@ -336,7 +337,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     r_e = np.mean([_at_spot(i) for i in _e])
                     r_l = np.mean([_at_spot(i) for i in _l])
                     fired = r_e >= 0.5 and r_l <= 0.15
-            elif len(_e) >= ABS_MINE and len(_l) >= ABS_MINL:
+            if not fired and _mode in ("cmp", "both")                and len(_e) >= ABS_MINE and len(_l) >= ABS_MINL:
                 fired = float(np.max(TS[_l])) < float(np.quantile(TS[_e], ABS_Q))
             if os.environ.get("ABS_DIAG") == "1" and mv and not np.any(vis & (ts > mv[-1]["t"])):
                 print("DIAG %s %s e=%d l=%d fired=%d maxL=%.3f qE=%.3f"

@@ -25,11 +25,12 @@ with torch.no_grad():
                  pixel_values=ti["pixel_values"], return_dict=True)
 TX, MK = o.text_embeds, (ti["input_ids"][:, 0] > 0)
 print("어휘 %d (타겟 %d + 정적 %d) · stride %d" % (len(vocab), nT, len(vocab)-nT, STRIDE), flush=True)
+BOXES = os.environ.get("BOXES", "0") == "1"   # 타겟 타입의 argmax 패치 박스 저장 (검증기 박스크롭용)
 for hd in sorted(glob.glob(ROOT + "/house_*")):
     out = OUT + os.path.basename(os.path.realpath(hd)) + ".npz"
     if os.path.exists(out): continue
     lv = sorted(glob.glob(os.path.join(hd, "live", "*.jpg")))[::STRIDE]
-    S = []; P = []
+    S = []; P = []; BX = []
     for i in range(0, len(lv), 4):
         ims = [Image.open(p).convert("RGB") for p in lv[i:i+4]]
         pv = op(images=ims, return_tensors="pt")["pixel_values"].to(DEV)
@@ -41,10 +42,19 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                                        MK.unsqueeze(0).expand(b, -1))
         pr = torch.sigmoid(lg)                      # (b, patches, types)
         S.append(pr.amax(1).float().cpu().numpy())
-        P.append(pr.argmax(1).int().cpu().numpy())  # 패치 인덱스 → 화면 위치
+        am = pr.argmax(1)
+        P.append(am.int().cpu().numpy())            # 패치 인덱스 → 화면 위치
+        if BOXES:
+            with torch.no_grad():
+                bxs = on.box_predictor(fm.reshape(b, ph*pw, hdim), feature_map=fm)
+            # 타겟 타입(nT)의 argmax 패치 박스만 (cx,cy,w,h — 패딩 정방 정규화)
+            gi = am[:, :nT]                          # (b, nT)
+            sel = torch.gather(bxs, 1, gi.unsqueeze(-1).expand(-1, -1, 4))
+            BX.append(sel.half().cpu().numpy())
         if i % 200 == 0: print("  %s %d/%d" % (os.path.basename(hd), i, len(lv)), flush=True)
+    extra = dict(bx=np.concatenate(BX)) if (BOXES and BX) else {}
     np.savez_compressed(out, s=np.concatenate(S), p=np.concatenate(P), ph=ph, pw=pw,
                         ts=np.array([int(os.path.basename(p)[:-4]) for p in lv]),
-                        vocab=np.array(vocab, object), nT=nT)
+                        vocab=np.array(vocab, object), nT=nT, **extra)
     print("  %s 완료 %d장" % (os.path.basename(hd), len(lv)), flush=True)
 print("완료")
