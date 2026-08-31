@@ -26,6 +26,7 @@ ABS_TH = float(os.environ.get("ABS_TH", "0.055"))   # ⚠ thor4 384 절대값 �
 FRAME_W = int(os.environ.get("FRAME_W", "768"))
 VTH = float(os.environ.get("VERIFY_TH", "0"))
 VTH2 = float(os.environ.get("VERIFY_TH2", "-1e9"))
+C0_MIN = int(os.environ.get("C0_MIN", "2"))   # c0 최소 수용 장수 — 1이면 단장+depth 투영 허용
 VSC = None
 if os.environ.get("VERIFY_JSONL"):
     VSC = {}
@@ -266,7 +267,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     _qm = float(np.median(_qv))
                     _pas = [(i2, s_) for (i2, s_), q in zip(_pas, _qv) if q >= _qm] or _pas
                 _pick = [i2 for i2, _s in _pas][:3]
-                if len(_pick) >= 2:
+                if len(_pick) >= C0_MIN:
                     _rays = [r for r in (_geo_ray(i2) for i2 in _pick) if r]
                     _pts = []
                     for _a in range(len(_rays)):
@@ -279,7 +280,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     else:                           # 프레임별 투영 2장+ 합의 요구
                         _rms = [x for x in (_geo_room_d(i2) for i2 in _pick) if x]
                         _cc = Counter(_rms).most_common(1)
-                        if _cc and _cc[0][1] >= 2 and _cc[0][0] != record:
+                        if _cc and _cc[0][1] >= min(2, C0_MIN) and _cc[0][0] != record:
                             alt = _cc[0][0]
         if record is None:
             record = max(((PR.get(v0["type"], {}).get(rt[r], .25)/max(nrt[rt[r]],1), r)
