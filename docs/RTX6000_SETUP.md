@@ -22,6 +22,12 @@ python3 -m venv ~/kx-venv
 ~/kx-venv/bin/pip install torch torchvision transformers pillow numpy scipy
 
 # 사전확률 JSON 2개가 repo 에 포함돼 있다 (data/thor_prior.json, thor_move.json)
+
+# ProcTHOR 데이터셋 — 자격증명 없는 노드는 **오프라인 캐시**로:
+#   DriveSyncFiles 의 procthor_prior_cache.tar.gz(127MB, procthor-10k 포함)를 받아
+#   tar xzf procthor_prior_cache.tar.gz -C ~     # → ~/.prior/datasets/allenai/procthor-10k
+#   prior.load_dataset 이 캐시를 먼저 보므로 GitHub 토큰 불필요.
+#   (그래도 네트워크를 시도하며 죽으면: 공개 repo 라 익명 https 로 재시도된다)
 bash scripts/gpu_preflight.sh      # 렌더 가능 여부 1분 판정
 ```
 
