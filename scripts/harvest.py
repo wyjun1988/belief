@@ -31,7 +31,7 @@ def slim(g, keep_geom):
     for m in g.get("live", []):
         r = dict(t=m["t"], room=m["room"], vis=m.get("vis", []))
         if keep_geom:
-            for k in ("ctr", "anch", "dist", "apos"):
+            for k in ("ctr", "anch", "dist", "apos", "yaw", "pitch"):
                 if k in m:
                     r[k] = m[k]
         live.append(r)
