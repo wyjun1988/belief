@@ -84,6 +84,11 @@ def main():
     ap.add_argument("--vis-dist", type=float, default=20.0,
                     help="가시성 판정 거리. 기본 1.5m 는 '보인다' 를 거리로 잘라버린다.")
     ap.add_argument("--size", type=int, default=384)
+    ap.add_argument("--case3", type=int, default=0,
+                    help="이동 중 이 건수는 경우③(belief 대상) 강제: 목적지 방을 이후 "
+                         "배회 순환에서 빼서 재촬영을 막는다(문 너머 노출은 남음). "
+                         "§112 — thor7 레짐(vis20·4h)에선 belief 대상이 12건뿐이라 "
+                         "부재→belief 인계 축을 판정할 표본이 없었다")
     ap.add_argument("--map-size", type=int, default=0,
                     help="맵·매핑워크(등록부)만 이 해상도로 촬영 (0=--size 와 동일). "
                          "§101 의 '1024 포화'는 live 검증 크롭 결론이고 등록부는 미측정 — "
@@ -265,12 +270,15 @@ def main():
               else [1.0] * len(rids))            # 방 체류 가중 (Qwen, 유형→인스턴스)
         cur = wpick(rids, rw)
         move_at = sorted(rng.sample(range(int(T * 0.1), T), min(args.moves, T)))
+        c3_left = args.case3                 # 경우③ 강제 잔여 건수
+        c3_ban = set()                       # 배회에서 제외된 방(재촬영 차단)
         live, events = [], []
         state = dict(gt0)
         mi = 0
         for t in range(T):
             if rng.random() < 1.0 / args.dwell:
-                cur = wpick(rids, rw)
+                _ok = [r for r in rids if r not in c3_ban] or rids
+                cur = wpick(_ok, [rw[rids.index(r)] for r in _ok])
             p = rng.choice(byroom[cur])
             y = rng.choice((0, 45, 90, 135, 180, 225, 270, 315))
             e = ctrl.step("Teleport", position=p, rotation=dict(x=0, y=y, z=0), horizon=10)
@@ -348,6 +356,10 @@ def main():
                 if r2.metadata["lastActionSuccess"]:
                     events.append(dict(t=t, oid=oid, frm=state[oid]["room"], to=tgt))
                     state[oid] = dict(state[oid]); state[oid]["room"] = tgt
+                    # 경우③ 강제: 목적지 방을 이후 배회에서 제외 (남은 방 2개는 유지)
+                    if c3_left > 0 and len(c3_ban) + 2 < len(rids) and tgt not in c3_ban:
+                        c3_ban.add(tgt); c3_left -= 1
+                        events[-1]["case3"] = True
         # ⚠️ **분석에 필요한 씬 메타를 여기서 같이 저장한다.** 방 폴리곤·문 연결·
         # 정적 물체의 방은 `prior`/`ai2thor` 를 다시 띄워야 얻을 수 있는데, 캐시만
         # 가져가는 원격 실행에서는 그게 불가능하다. 실제로 물렸다 — 4090 산출물을
