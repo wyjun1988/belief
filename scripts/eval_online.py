@@ -422,9 +422,13 @@ for c3 in ("①이동없음", "②재촬영", "③belief대상", "③확인기�
     if c3 in ("③belief대상", "③확인기회O", "③확인기회X"):
         h = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ == "c2")
         ho = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ == "c2" and o_)
-        no = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ != "c2" and o_)
-        line += " | 실제 belief 인계 %.2f (%d건) · 인계분 정답 %.3f · 미인계분 정답 %.3f" % (
-            h / tot, h, ho / max(h, 1), no / max(tot - h, 1))
+        if c3 == "③확인기회X":
+            # 증거 없음 → 안 넘기는 게 옳은 행동. 지표 = 무인계 준수율 (GT 정답률은 무의미)
+            line += " | **무인계 준수 %.2f** (기록 답변이 정책상 옳음)" % (1 - h / tot)
+        else:
+            # 시스템 몫 = 인계율. 인계분 정답은 belief 모델 몫 (참고 표기)
+            line += " | **인계율 %.2f** (%d건, 시스템 몫) · 인계분 정답 %.3f (belief 몫)" % (
+                h / tot, h, ho / max(h, 1))
     if c3 == "②재촬영":
         c0n = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ == "c0")
         c0o = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ == "c0" and o_)
