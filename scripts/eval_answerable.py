@@ -23,6 +23,13 @@ PR = json.load(open("data/thor_prior.json"))
 # 사용자 지정 — "노트북처럼 비슷한 물체나 중복 물체가 없는 것"이 우리 시나리오 타겟.
 CLEAN = os.environ.get("CLEAN", "0") == "1"
 LOC_GEO = os.environ.get("LOC_GEO", "0") == "1"   # 투영 국소화(§106-107): 투표 yaw+GT거리, 기권시 융합 후퇴
+GDEP = None                                        # 사다리 ③: GEO_DEPTH=jsonl → 거리도 실물(DA-V2)
+if os.environ.get("GEO_DEPTH"):
+    GDEP = {}
+    for _l in open(os.environ["GEO_DEPTH"]):
+        _d = json.loads(_l)
+        GDEP[(_d["house"], _d["t"], _d["oid"])] = _d["d"]
+    print("mono-depth %d표본 적재" % len(GDEP), flush=True)
 GEO_W = int(os.environ.get("FRAME_W", "768"))
 LOC_DECAY = float(os.environ.get("LOC_DECAY", "6.0"))   # 앵커 거리 감쇠 (패치 단위)
 LOC_PEN = float(os.environ.get("LOC_PEN", "0.25"))      # 비이웃 방 페널티
@@ -146,7 +153,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             """프레임 i 에서 타겟을 지도에 투영 → 방 (기권시 None). §106-107 투표 yaw."""
             polys, stp, byt = _geo
             m = live[ts[i]]; ap = m.get("apos")
-            d = (m.get("dist") or {}).get(oid)
+            d = (GDEP.get((hn, int(ts[i]), oid)) if GDEP is not None
+                 else (m.get("dist") or {}).get(oid))
             if ap is None or d is None: return None
             FW = GEO_W; FF = FW / 2.0
             def pb(cx): return np.degrees(np.arctan((cx - FW / 2.0) / FF))
