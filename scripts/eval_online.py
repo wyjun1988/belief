@@ -291,22 +291,26 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         inr = np.where(arm == record)[0]
         fired = False
         if ABS_GEO and v0.get("pos") is not None:
-            spot = v0["pos"]                        # [x,y,z] — 상한판(실물판=첫 목격 투영)
-            th98 = np.quantile(TS, 0.98)
-            seen_spot = 0; miss = 0
-            half = ts[len(ts) // 2]
+            # v2 (v1 은 ①을 0.97→0.59 로 붕괴시켜 기각):
+            #  ⓐ 같은 방에서 본 프레임만 — v1 은 벽 너머 방향 응시도 "봤다"로 셌다
+            #  ⓑ 자기참조 기준 — v1 의 "TS<자기 q0.98=미검출" 은 정지 물체일수록
+            #    자동 성립. 대신 "후반 최고 목격 < 전반(있던 시절) 중앙값" 비교
+            spot = v0["pos"]
+            vis_i = []
             for i in range(len(ts)):
                 m = live[ts[i]]
                 if m.get("yaw") is None or m.get("apos") is None: continue
-                if ts[i] <= half: continue          # 후반부만 (최근 증거)
+                if arm[i] != record: continue
                 dx = spot[0] - m["apos"][0]; dz = spot[2] - m["apos"][1]
-                if np.hypot(dx, dz) > 4.5: continue
+                if np.hypot(dx, dz) > 4.0: continue
                 b = np.degrees(np.arctan2(dx, dz))
-                if abs((b - m["yaw"] + 180) % 360 - 180) > 38: continue
-                seen_spot += 1
-                if TS[i] < th98: miss += 1
-            if seen_spot >= 3:
-                fired = miss / seen_spot >= 0.9     # 자리를 3번+ 봤는데 90%+ 미검출
+                if abs((b - m["yaw"] + 180) % 360 - 180) > 35: continue
+                vis_i.append(i)
+            half = ts[len(ts) // 2]
+            _e = [i for i in vis_i if ts[i] <= half]
+            _l = [i for i in vis_i if ts[i] > half]
+            if len(_e) >= 3 and len(_l) >= 3:
+                fired = float(np.max(TS[_l])) < float(np.quantile(TS[_e], 0.5))
         if not fired and len(inr) >= 9:
             e_, l_ = inr[:len(inr)//3], inr[-len(inr)//3:]
             k2 = max(3, len(e_)//3)
