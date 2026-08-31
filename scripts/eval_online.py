@@ -27,6 +27,8 @@ FRAME_W = int(os.environ.get("FRAME_W", "768"))
 VTH = float(os.environ.get("VERIFY_TH", "0"))
 VTH2 = float(os.environ.get("VERIFY_TH2", "-1e9"))
 C0_MIN = int(os.environ.get("C0_MIN", "2"))   # c0 최소 수용 장수 — 1이면 단장+depth 투영 허용
+ABS_GEO = os.environ.get("ABS_GEO", "0") == "1"   # 기하 부재: 기록 좌표가 시야에 든 프레임에서 미검출
+                                                   # (gt0.pos + live.yaw 필요 — thor8c3+ 세대)
 VSC = None
 if os.environ.get("VERIFY_JSONL"):
     VSC = {}
@@ -288,7 +290,24 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         # 질의: 기록 방 부재 게이팅 (온라인 앞/뒤 1/3 + 앵커 게이팅)
         inr = np.where(arm == record)[0]
         fired = False
-        if len(inr) >= 9:
+        if ABS_GEO and v0.get("pos") is not None:
+            spot = v0["pos"]                        # [x,y,z] — 상한판(실물판=첫 목격 투영)
+            th98 = np.quantile(TS, 0.98)
+            seen_spot = 0; miss = 0
+            half = ts[len(ts) // 2]
+            for i in range(len(ts)):
+                m = live[ts[i]]
+                if m.get("yaw") is None or m.get("apos") is None: continue
+                if ts[i] <= half: continue          # 후반부만 (최근 증거)
+                dx = spot[0] - m["apos"][0]; dz = spot[2] - m["apos"][1]
+                if np.hypot(dx, dz) > 4.5: continue
+                b = np.degrees(np.arctan2(dx, dz))
+                if abs((b - m["yaw"] + 180) % 360 - 180) > 38: continue
+                seen_spot += 1
+                if TS[i] < th98: miss += 1
+            if seen_spot >= 3:
+                fired = miss / seen_spot >= 0.9     # 자리를 3번+ 봤는데 90%+ 미검출
+        if not fired and len(inr) >= 9:
             e_, l_ = inr[:len(inr)//3], inr[-len(inr)//3:]
             k2 = max(3, len(e_)//3)
             sig = AS[e_[np.argsort(-TS[e_])[:k2]]].mean(0)
@@ -310,6 +329,10 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         else:
             ans = record
             res["case"]["rec"] += 1
+        _bel2 = max(((PR.get(v0["type"], {}).get(rt[r], .25)/max(nrt[rt[r]],1), r)
+                     for r in rids if r != (alt if alt else record)))[1]
+        _ans2 = (record if alt is not None else record if fired else _bel2)
+        res.setdefault("sys2", []).append(tgt in (ans, _ans2))
         _br = ("c0" if alt is not None else "c2" if fired else "rec")
         # 3경우 분해 (GT 기준): ①이동없음 ②이동+재촬영 ③이동+미재촬영(→부재확인
         # 가능하면 belief 로 넘겨야 하는 부류 — 실제로 넘긴 비율이 핵심)
@@ -341,6 +364,7 @@ print("=== 온라인 상태기계 v1 · %s · SG_INIT=%s · n=%d ===" % (ROOT, S
 print("  정지 지도(t=0 GT)        %.3f" % np.mean(res["static"]))
 print("  **기록(갱신 후)**         **%.3f**" % np.mean(res["rec"]))
 print("  **최종 답(부재분기 포함)** **%.3f**" % np.mean(res["sys"]))
+print("  top-2(확신 낮으면 후보 2개)   %.3f" % np.mean(res.get("sys2", [0])))
 print("  이동만: 기록 %.3f · 최종 %.3f (n=%d)"
       % (np.mean(res["moved_rec"]), np.mean(res["moved_sys"]), len(res["moved_sys"])))
 print("  분기: %s" % dict(res["case"]))
