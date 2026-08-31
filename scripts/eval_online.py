@@ -364,7 +364,8 @@ print("=== 온라인 상태기계 v1 · %s · SG_INIT=%s · n=%d ===" % (ROOT, S
 print("  정지 지도(t=0 GT)        %.3f" % np.mean(res["static"]))
 print("  **기록(갱신 후)**         **%.3f**" % np.mean(res["rec"]))
 print("  **최종 답(부재분기 포함)** **%.3f**" % np.mean(res["sys"]))
-print("  top-2(확신 낮으면 후보 2개)   %.3f" % np.mean(res.get("sys2", [0])))
+print("  top-1+2(후보 2개 누적 — 답변형식 지표, 증거능력 아님) %.3f"
+      % np.mean(res.get("sys2", [0])))
 print("  이동만: 기록 %.3f · 최종 %.3f (n=%d)"
       % (np.mean(res["moved_rec"]), np.mean(res["moved_sys"]), len(res["moved_sys"])))
 print("  분기: %s" % dict(res["case"]))
