@@ -223,6 +223,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         find_ov = loc_of(ver) if ver else find_recent
         # 오라클 오류 해부 — 3장 중 관측자(GT)가 타겟 방 안에 있던 장수
         ov_same = sum(1 for i in ver if live[ts[i]].get("room") == tgt) if ver else -1
+        ov_adj = find_ov in adj.get(tgt, set())          # 오답이 타겟의 이웃방인가
+        ov_type = rt.get(find_ov) == rt.get(tgt)         # 오답이 타겟과 같은 방 유형인가
         # ── 불완전 검증기 모의: 9B 실측 수준 (진짜 수용 0.75 · 가짜 수용 p_fa) ──
         _vr = np.random.default_rng(hash(oid) % 2**31)
         def simver(p_acc, p_fa):
@@ -317,7 +319,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     _acc = [i for i, _s in _pas][:3]
                 find_vre = loc_of(_acc) if _acc else find_recent
         rows.append(dict(tier=tier, sg=sg, tgt=tgt, find=find, find_recent=find_recent,
-                         ov_same=ov_same, n_ver=len(ver),
+                         ov_same=ov_same, n_ver=len(ver), ov_adj=ov_adj, ov_type=ov_type,
                          find_ov=find_ov, find_v75=find_v75, find_v75f=find_v75f,
                          find_vre=(find_vre if VSC is not None else None),
                          find_event=find_event, find_onset=find_onset, find_ctr=find_ctr, drop=drop, bel=bel))
@@ -368,6 +370,12 @@ if os.environ.get("ORACLE_DIAG") == "1":
             print("  %-16s n=%-4d 오라클 정답률 %.3f"
                   % (lab_, len(rs_), np.mean([r["find_ov"] == r["tgt"] for r in rs_])))
     print("  (검증 프레임 0장인 T1n: %d)" % sum(1 for r in rows if r["tier"] == "T1n" and r["n_ver"] == 0))
+    err = [r for r in t1 if r["ov_same"] == r["n_ver"] and r["find_ov"] != r["tgt"]]
+    if err:
+        print("  방 안 오답 %d건의 정체: 이웃방 %.2f · 같은 방유형 %.2f · 이웃+같은유형 %.2f"
+              % (len(err), np.mean([r["ov_adj"] for r in err]),
+                 np.mean([r["ov_type"] for r in err]),
+                 np.mean([r["ov_adj"] and r["ov_type"] for r in err])))
 
 ans = [r for r in rows if r["tier"] != "T3"]
 print("\n**답 가능 문제만(T3 제외) 현시스템: %.3f** (n=%d)"
