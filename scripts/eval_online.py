@@ -310,6 +310,14 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             ans = record
             res["case"]["rec"] += 1
         _br = ("c0" if alt is not None else "c2" if fired else "rec")
+        if os.environ.get("DUMP_JSONL"):
+            _dp = dict(house=hn, oid=oid, type=v0["type"], branch=_br, ans=ans,
+                       tgt=tgt, record=record, ok=bool(ans == tgt), moved=bool(mv))
+            try:
+                _dp["picked"] = [int(ts[i2]) for i2 in _pick]
+            except Exception:
+                pass
+            open(os.environ["DUMP_JSONL"], "a").write(json.dumps(_dp) + "\n")
         res.setdefault("br", Counter())[(_br, bool(mv), ans == tgt)] += 1
         res["sys"].append(ans == tgt)
         res["rec"].append(record == tgt)

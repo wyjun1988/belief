@@ -79,16 +79,23 @@ def main():
         sec = int(d["time_s"])
         for c in d.get("cameras", []):
             if c.get("source") == "ego":
-                cams[sec] = c["location"]        # 마지막 것이 남음
+                cams[sec] = c                    # 마지막 것이 남음 (location+rotation)
         for u in d["updates"]:
             if u.get("source") == "ego" and u.get("s") in gt0:
                 seen[sec].add(u["s"])
     live = []
     for t in sorted(cams):
-        c = cams[t]
-        r = room_of(c[0], c[1])
+        c = cams[t]; loc = c["location"]
+        r = room_of(loc[0], loc[1])
         if r:
-            live.append(dict(t=t, room=r, vis=sorted(seen.get(t, ()))))
+            e2 = dict(t=t, room=r, vis=sorted(seen.get(t, ())),
+                      # 투영 국소화(§106-111 이식)용 포즈 — 채점/상한용.
+                      # 시스템측 포즈는 SfM 사슬 몫(사다리 ④).
+                      apos=[round(loc[0]*CM, 2), round(loc[1]*CM, 2)])
+            if c.get("rotation_pyr_deg"):
+                e2["pitch"], e2["yaw"] = (round(float(c["rotation_pyr_deg"][0]), 1),
+                                          round(float(c["rotation_pyr_deg"][1]), 1))
+            live.append(e2)
 
     # 프레임 추출 (이미 있으면 생략)
     if not glob.glob(os.path.join(args.out, "live", "*.jpg")):
