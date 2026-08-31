@@ -306,9 +306,15 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 b = np.degrees(np.arctan2(dx, dz))
                 if abs((b - m["yaw"] + 180) % 360 - 180) > 35: continue
                 vis_i.append(i)
-            half = ts[len(ts) // 2]
-            _e = [i for i in vis_i if ts[i] <= half]
-            _l = [i for i in vis_i if ts[i] > half]
+            # 분할점: seen=마지막 목격 시각(기본 — 정지는 후반 창이 좁아 ① 보호,
+            # 이동-미재촬영은 이동 전이라 창이 넓어 ③ 회수) / half=에피소드 절반
+            if os.environ.get("ABS_SPLIT", "seen") == "seen":
+                _sv = np.where(vis)[0]
+                cut = ts[int(_sv[-1])] if len(_sv) else ts[len(ts) // 2]
+            else:
+                cut = ts[len(ts) // 2]
+            _e = [i for i in vis_i if ts[i] <= cut]
+            _l = [i for i in vis_i if ts[i] > cut]
             if len(_e) >= 3 and len(_l) >= 3:
                 fired = float(np.max(TS[_l])) < float(np.quantile(TS[_e], 0.5))
         if not fired and len(inr) >= 9:
