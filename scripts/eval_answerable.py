@@ -23,6 +23,7 @@ PR = json.load(open("data/thor_prior.json"))
 # 사용자 지정 — "노트북처럼 비슷한 물체나 중복 물체가 없는 것"이 우리 시나리오 타겟.
 CLEAN = os.environ.get("CLEAN", "0") == "1"
 LOC_GEO = os.environ.get("LOC_GEO", "0") == "1"   # 투영 국소화(§106-107): 투표 yaw+GT거리, 기권시 융합 후퇴
+LOC_TRI = os.environ.get("LOC_TRI", "0") == "1"   # 시선 삼각측량: 목격 2장+ 이면 거리 불필요
 GDEP = None                                        # 사다리 ③: GEO_DEPTH=jsonl → 거리도 실물(DA-V2)
 if os.environ.get("GEO_DEPTH"):
     GDEP = {}
@@ -149,13 +150,22 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         # ── T1 공략: "충분히 확실한 검출 중 **가장 최근**" — 이동 전 기간이 길어
         # 상위권이 옛 자리 목격으로 도배되는 문제를 시간으로 가른다 (§eval_temporal
         # 의 실패와 달리, 문턱을 먼저 걸고 그 안에서 최신을 본다)
-        def _geo_room(i):
-            """프레임 i 에서 타겟을 지도에 투영 → 방 (기권시 None). §106-107 투표 yaw."""
+        def _room_pt(pt):
+            polys = _geo[0]
+            for r in polys:
+                pl = polys[r]; x, z = pt; n2 = len(pl); c2 = False
+                for j2 in range(n2):
+                    x1, z1 = pl[j2]; x2, z2 = pl[(j2 + 1) % n2]
+                    if (z1 > z) != (z2 > z) and x < (x2 - x1) * (z - z1) / (z2 - z1 + 1e-12) + x1:
+                        c2 = not c2
+                if c2: return r
+            return min(polys, key=lambda r: min((pt[0] - v[0]) ** 2 + (pt[1] - v[1]) ** 2
+                                                for v in polys[r]))
+        def _geo_ray(i):
+            """프레임 i 의 (관측 위치, 타겟 방위각) — yaw 합의 실패시 None."""
             polys, stp, byt = _geo
             m = live[ts[i]]; ap = m.get("apos")
-            d = (GDEP.get((hn, int(ts[i]), oid)) if GDEP is not None
-                 else (m.get("dist") or {}).get(oid))
-            if ap is None or d is None: return None
+            if ap is None: return None
             FW = GEO_W; FF = FW / 2.0
             def pb(cx): return np.degrees(np.arctan((cx - FW / 2.0) / FF))
             def br(dx, dz): return np.degrees(np.arctan2(dx, dz))
@@ -183,19 +193,42 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             sw = sum(w for _y, w in ys)
             yaw = np.degrees(np.arctan2(sum(np.sin(y) * w for y, w in ys) / sw,
                                         sum(np.cos(y) * w for y, w in ys) / sw))
-            b = yaw + pb(pxof(P[i, ti]))
-            pt = [ap[0] + d * np.sin(np.radians(b)), ap[1] + d * np.cos(np.radians(b))]
-            for r, pl in polys.items():
-                x, z = pt; n2 = len(pl); c2 = False
-                for j2 in range(n2):
-                    x1, z1 = pl[j2]; x2, z2 = pl[(j2 + 1) % n2]
-                    if (z1 > z) != (z2 > z) and x < (x2 - x1) * (z - z1) / (z2 - z1 + 1e-12) + x1:
-                        c2 = not c2
-                if c2: return r
-            return min(polys, key=lambda r: min((pt[0] - v[0]) ** 2 + (pt[1] - v[1]) ** 2
-                                                for v in polys[r]))
+            return ap, yaw + pb(pxof(P[i, ti]))
+        def _geo_room(i):
+            ray = _geo_ray(i)
+            if ray is None: return None
+            ap, b = ray
+            m = live[ts[i]]
+            d = (GDEP.get((hn, int(ts[i]), oid)) if GDEP is not None
+                 else (m.get("dist") or {}).get(oid))
+            if d is None: return None
+            return _room_pt([ap[0] + d * np.sin(np.radians(b)),
+                             ap[1] + d * np.cos(np.radians(b))])
+        def _tri(r1, r2):
+            """두 시선의 교점 — 각도차 15°+·기선 0.5m+·전방 0.3~12m 만 채택."""
+            (p1, b1), (p2, b2) = r1, r2
+            if abs((b1 - b2 + 180) % 360 - 180) < 15: return None
+            if np.hypot(p1[0] - p2[0], p1[1] - p2[1]) < 0.5: return None
+            u1 = np.array([np.sin(np.radians(b1)), np.cos(np.radians(b1))])
+            u2 = np.array([np.sin(np.radians(b2)), np.cos(np.radians(b2))])
+            A2 = np.stack([u1, -u2], 1)
+            try:
+                t = np.linalg.solve(A2, np.array(p2, float) - np.array(p1, float))
+            except np.linalg.LinAlgError:
+                return None
+            if not (0.3 < t[0] < 12 and 0.3 < t[1] < 12): return None
+            return np.array(p1, float) + t[0] * u1
         def loc_of(idxs):
             if _geo is not None:
+                if LOC_TRI and len(idxs) >= 2:
+                    _rays = [r for r in (_geo_ray(i) for i in idxs) if r]
+                    _pts = []
+                    for _a in range(len(_rays)):
+                        for _b in range(_a + 1, len(_rays)):
+                            _pt = _tri(_rays[_a], _rays[_b])
+                            if _pt is not None: _pts.append(_pt)
+                    if _pts:
+                        return _room_pt(np.median(np.array(_pts), 0))
                 _vs = [_geo_room(i) for i in idxs]
                 _vs = [v for v in _vs if v]
                 if _vs:
