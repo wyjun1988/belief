@@ -301,7 +301,10 @@ def main():
                 else:
                     vs[oid] = c
             live.append(dict(t=t, room=cur, vis=list(vd), dist=vd, ctr=vc,
-                             anch=vs, apos=[round(ap["x"], 2), round(ap["z"], 2)]))
+                             anch=vs, apos=[round(ap["x"], 2), round(ap["z"], 2)],
+                             # yaw — 문 너머 목격의 기하 투영(방위+깊이→지도)용.
+                             # thor7 엔 없어서 §105 투영 실험이 막혔다.
+                             yaw=int(y)))
             fr = e.frame
             if args.stress:
                 if t and t % args.light_every == 0:

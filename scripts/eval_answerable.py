@@ -22,6 +22,8 @@ PR = json.load(open("data/thor_prior.json"))
 # 조건①′: 혼동 타입(실측 FP 해부에서 50회+ 쌍)이 같은 집에 있으면 타겟에서 제외.
 # 사용자 지정 — "노트북처럼 비슷한 물체나 중복 물체가 없는 것"이 우리 시나리오 타겟.
 CLEAN = os.environ.get("CLEAN", "0") == "1"
+LOC_DECAY = float(os.environ.get("LOC_DECAY", "6.0"))   # 앵커 거리 감쇠 (패치 단위)
+LOC_PEN = float(os.environ.get("LOC_PEN", "0.25"))      # 비이웃 방 페널티
 # 실검증 주입 — exp_t1_verify_pipeline 산출 jsonl + 현지 스윕 문턱(rtx7_sweep)
 VJ = os.environ.get("VERIFY_JSONL")
 VTH = float(os.environ.get("VERIFY_TH", "0"))
@@ -107,7 +109,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 t = vocab[c]
                 if t not in idf or S[i, c] < .05: continue
                 d = np.hypot(py[i, c]-cy, px[i, c]-cx)
-                w2 = float(S[i, c]) / (1.0 + d/6.0) * idf[t]
+                w2 = float(S[i, c]) / (1.0 + d/LOC_DECAY) * idf[t]
                 for r in rids:
                     if t in rtypes.get(r, ()): sc[r] += w2
             if ZX is not None:
@@ -115,13 +117,13 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 si_ = {r: 0.0 for r in rids}
                 for k2 in on:
                     d = np.hypot(xy_[i, k2, 0]-cy, xy_[i, k2, 1]-cx)
-                    si_[Xr[k2]] += float(XSc[i, k2]) / (1.0 + d/6.0)
+                    si_[Xr[k2]] += float(XSc[i, k2]) / (1.0 + d/LOC_DECAY)
                 t2 = sum(si_.values())
                 if t2 > 0:
                     for r in rids: sc[r] = sc[r]/(sum(sc.values())+1e-9) + si_[r]/t2
             nb = {arm[i]} | adj.get(arm[i], set())
             for r in rids:
-                if r not in nb: sc[r] *= .25
+                if r not in nb: sc[r] *= LOC_PEN
             t3 = sum(sc.values()) + 1e-9
             for r in rids: acc[r] += w * sc[r] / t3
         find = max(acc, key=acc.get)
@@ -138,7 +140,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     t = vocab[c]
                     if t not in idf or S[i, c] < .05: continue
                     d = np.hypot(py[i, c]-cy, px[i, c]-cx)
-                    w2 = float(S[i, c]) / (1.0 + d/6.0) * idf[t]
+                    w2 = float(S[i, c]) / (1.0 + d/LOC_DECAY) * idf[t]
                     for r in rids:
                         if t in rtypes.get(r, ()): sc[r] += w2
                 if ZX is not None:
@@ -146,13 +148,13 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     si_ = {r: 0.0 for r in rids}
                     for k2 in on:
                         d = np.hypot(xy_[i, k2, 0]-cy, xy_[i, k2, 1]-cx)
-                        si_[Xr[k2]] += float(XSc[i, k2]) / (1.0 + d/6.0)
+                        si_[Xr[k2]] += float(XSc[i, k2]) / (1.0 + d/LOC_DECAY)
                     t2 = sum(si_.values())
                     if t2 > 0:
                         for r in rids: sc[r] = sc[r]/(sum(sc.values())+1e-9) + si_[r]/t2
                 nb = {arm[i]} | adj.get(arm[i], set())
                 for r in rids:
-                    if r not in nb: sc[r] *= .25
+                    if r not in nb: sc[r] *= LOC_PEN
                 t3 = sum(sc.values()) + 1e-9
                 for r in rids: a2[r] += (w + 1e-6) * sc[r] / t3
             return max(a2, key=a2.get) if a2 else None
@@ -219,6 +221,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         cands = sorted(np.where(TS >= th3)[0], key=lambda i: -ts[i])
         ver = [i for i in cands if vis[i]][:3]
         find_ov = loc_of(ver) if ver else find_recent
+        # 오라클 오류 해부 — 3장 중 관측자(GT)가 타겟 방 안에 있던 장수
+        ov_same = sum(1 for i in ver if live[ts[i]].get("room") == tgt) if ver else -1
         # ── 불완전 검증기 모의: 9B 실측 수준 (진짜 수용 0.75 · 가짜 수용 p_fa) ──
         _vr = np.random.default_rng(hash(oid) % 2**31)
         def simver(p_acc, p_fa):
@@ -313,6 +317,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     _acc = [i for i, _s in _pas][:3]
                 find_vre = loc_of(_acc) if _acc else find_recent
         rows.append(dict(tier=tier, sg=sg, tgt=tgt, find=find, find_recent=find_recent,
+                         ov_same=ov_same, n_ver=len(ver),
                          find_ov=find_ov, find_v75=find_v75, find_v75f=find_v75f,
                          find_vre=(find_vre if VSC is not None else None),
                          find_event=find_event, find_onset=find_onset, find_ctr=find_ctr, drop=drop, bel=bel))
@@ -352,6 +357,18 @@ for t in ("T1n", "T1f", "T2", "T3", "T4r", "T4u"):
            if vre else "")
     print("%-26s %-5d 시스템 %.3f | 상위10 %.3f 최신 %.3f 오라클 %.3f | 검증기0.75/기각1.0 **%.3f** · /기각0.8 %.3f | 이상 %.3f%s"
           % (lab[t], len(rs), cur, fnd, fr_, fv_, f75, f75f, ideal, fre))
+if os.environ.get("ORACLE_DIAG") == "1":
+    print("\n=== 오라클 오류 해부 (T1n) — 관측자가 타겟 방 안에서 본 장수별 ===")
+    t1 = [r for r in rows if r["tier"] == "T1n" and r["n_ver"] > 0]
+    for lab_, cond in (("3장 전부 방 안", lambda r: r["ov_same"] == r["n_ver"]),
+                       ("일부만 방 안", lambda r: 0 < r["ov_same"] < r["n_ver"]),
+                       ("전부 문 너머(방 밖)", lambda r: r["ov_same"] == 0)):
+        rs_ = [r for r in t1 if cond(r)]
+        if rs_:
+            print("  %-16s n=%-4d 오라클 정답률 %.3f"
+                  % (lab_, len(rs_), np.mean([r["find_ov"] == r["tgt"] for r in rs_])))
+    print("  (검증 프레임 0장인 T1n: %d)" % sum(1 for r in rows if r["tier"] == "T1n" and r["n_ver"] == 0))
+
 ans = [r for r in rows if r["tier"] != "T3"]
 print("\n**답 가능 문제만(T3 제외) 현시스템: %.3f** (n=%d)"
       % (np.mean([sys_ans(r) == r["tgt"] for r in ans]), len(ans)))
