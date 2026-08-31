@@ -20,6 +20,7 @@ QCP = os.path.expanduser(os.environ.get("QC_PREFIX", "~/khcache/h4/cache/qc_"))
 AXP = os.path.expanduser(os.environ.get("AX_PREFIX", "~/khcache/h4/cache/ax_"))
 SG_INIT = os.environ.get("SG_INIT", "gt")
 P_ACC, P_ID = 0.42, 0.05
+ABS_TH = float(os.environ.get("ABS_TH", "0.055"))   # ⚠ thor4 384 절대값 — 도메인마다 재라 (§89)
 # ── 실검·투영 배선 (§110): 실점수+exnew+삼각측량이 마진 게이트를 대체.
 #    실점수 없는 타겟은 종전 모의 경로로 후퇴. ──
 FRAME_W = int(os.environ.get("FRAME_W", "768"))
@@ -252,7 +253,11 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         # ── 실검·투영 경로 (있으면 모의 마진 게이트를 대체) ──
         if VSC is not None and _geo is not None:
             _rr = VSC.get((hn, oid))
-            if _rr is not None:
+            if _rr is None:
+                # 실점수 없는 타겟(배포에선 질의 시 채점될 것; 여기선 미채점=대부분 정지).
+                # §104: T4 는 기록이 0.99 로 옳다 — 모의 게이트의 재라우팅은 순손실.
+                alt = None
+            else:
                 alt = None                          # 실점수 있는 타겟은 실경로가 판정
                 _pas = [(int(e[0]), e[1]) for e in _rr
                         if e[1] >= VTH and (len(e) < 3 or e[2] >= VTH2)]
@@ -293,7 +298,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             ge, gl = e_[pe >= thp], l_[pl >= thp]
             if len(ge) >= 3 and len(gl) >= 3:
                 drop = float(np.quantile(TS[ge], .9) - np.quantile(TS[gl], .9))
-                fired = drop >= 0.055        # thor4 q0.95 근사 절대문턱
+                fired = drop >= ABS_TH       # 기본 0.055 = thor4 근사 — thor7 은 ABS_TH 격자로
         if alt is not None:
             ans = alt
             res["case"]["c0"] += 1
@@ -304,6 +309,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         else:
             ans = record
             res["case"]["rec"] += 1
+        _br = ("c0" if alt is not None else "c2" if fired else "rec")
+        res.setdefault("br", Counter())[(_br, bool(mv), ans == tgt)] += 1
         res["sys"].append(ans == tgt)
         res["rec"].append(record == tgt)
         res["static"].append(v0["room"] == tgt)
@@ -318,3 +325,11 @@ print("  **최종 답(부재분기 포함)** **%.3f**" % np.mean(res["sys"]))
 print("  이동만: 기록 %.3f · 최종 %.3f (n=%d)"
       % (np.mean(res["moved_rec"]), np.mean(res["moved_sys"]), len(res["moved_sys"])))
 print("  분기: %s" % dict(res["case"]))
+br = res.get("br", Counter())
+print("  분기별 정오 (분기, 이동?, 건수, 정답률):")
+for b2 in ("c0", "c2", "rec"):
+    for mvf in (True, False):
+        tot = br.get((b2, mvf, True), 0) + br.get((b2, mvf, False), 0)
+        if tot:
+            print("    %-3s %-4s n=%-4d %.3f" % (b2, "이동" if mvf else "정지",
+                                                 tot, br.get((b2, mvf, True), 0) / tot))
