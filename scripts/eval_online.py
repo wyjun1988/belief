@@ -28,6 +28,11 @@ VTH = float(os.environ.get("VERIFY_TH", "0"))
 VTH2 = float(os.environ.get("VERIFY_TH2", "-1e9"))
 C0_MIN = int(os.environ.get("C0_MIN", "2"))   # c0 최소 수용 장수 — 1이면 단장+depth 투영 허용
 ABS_GEO = os.environ.get("ABS_GEO", "0") == "1"   # 기하 부재: 기록 좌표가 시야에 든 프레임에서 미검출
+ABS_ANG = float(os.environ.get("ABS_ANG", "35"))
+ABS_DIST = float(os.environ.get("ABS_DIST", "4.0"))
+ABS_MINE = int(os.environ.get("ABS_MINE", "3"))
+ABS_MINL = int(os.environ.get("ABS_MINL", "3"))
+ABS_Q = float(os.environ.get("ABS_Q", "0.5"))      # 전반 비교 분위
                                                    # (gt0.pos + live.yaw 필요 — thor8c3+ 세대)
 VSC = None
 if os.environ.get("VERIFY_JSONL"):
@@ -290,6 +295,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         # 질의: 기록 방 부재 게이팅 (온라인 앞/뒤 1/3 + 앵커 게이팅)
         inr = np.where(arm == record)[0]
         fired = False
+        _nlate = -1                                 # 부재확인 기회(자리 본 후반 프레임 수)
         if ABS_GEO and v0.get("pos") is not None:
             # v2 (v1 은 ①을 0.97→0.59 로 붕괴시켜 기각):
             #  ⓐ 같은 방에서 본 프레임만 — v1 은 벽 너머 방향 응시도 "봤다"로 셌다
@@ -302,9 +308,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 if m.get("yaw") is None or m.get("apos") is None: continue
                 if arm[i] != record: continue
                 dx = spot[0] - m["apos"][0]; dz = spot[2] - m["apos"][1]
-                if np.hypot(dx, dz) > 4.0: continue
+                if np.hypot(dx, dz) > ABS_DIST: continue
                 b = np.degrees(np.arctan2(dx, dz))
-                if abs((b - m["yaw"] + 180) % 360 - 180) > 35: continue
+                if abs((b - m["yaw"] + 180) % 360 - 180) > ABS_ANG: continue
                 vis_i.append(i)
             # 분할점: seen=마지막 목격 시각(기본 — 정지는 후반 창이 좁아 ① 보호,
             # 이동-미재촬영은 이동 전이라 창이 넓어 ③ 회수) / half=에피소드 절반
@@ -315,8 +321,28 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 cut = ts[len(ts) // 2]
             _e = [i for i in vis_i if ts[i] <= cut]
             _l = [i for i in vis_i if ts[i] > cut]
-            if len(_e) >= 3 and len(_l) >= 3:
-                fired = float(np.max(TS[_l])) < float(np.quantile(TS[_e], 0.5))
+            _nlate = len(_l)
+            if os.environ.get("ABS_MODE", "spot") == "spot":
+                # v4 자리-국소: 프레임 전역 TS 는 오검출 바닥에 묻힌다(진단 §DIAG).
+                # 자리의 예상 화면 x(방위-yaw)와 타겟 패치 위치가 가까우면 "자리에서 잡힘".
+                def _at_spot(i):
+                    m2 = live[ts[i]]
+                    dx2 = spot[0] - m2["apos"][0]; dz2 = spot[2] - m2["apos"][1]
+                    db2 = (np.degrees(np.arctan2(dx2, dz2)) - m2["yaw"] + 180) % 360 - 180
+                    u = FRAME_W / 2 + np.tan(np.radians(np.clip(db2, -80, 80))) * FRAME_W / 2
+                    pu = (P[i, ti] % pw + .5) / pw * FRAME_W
+                    return abs(pu - u) < 130
+                if len(_e) >= ABS_MINE and len(_l) >= ABS_MINL:
+                    r_e = np.mean([_at_spot(i) for i in _e])
+                    r_l = np.mean([_at_spot(i) for i in _l])
+                    fired = r_e >= 0.5 and r_l <= 0.15
+            elif len(_e) >= ABS_MINE and len(_l) >= ABS_MINL:
+                fired = float(np.max(TS[_l])) < float(np.quantile(TS[_e], ABS_Q))
+            if os.environ.get("ABS_DIAG") == "1" and mv and not np.any(vis & (ts > mv[-1]["t"])):
+                print("DIAG %s %s e=%d l=%d fired=%d maxL=%.3f qE=%.3f"
+                      % (hn, v0["type"], len(_e), len(_l), int(fired),
+                         float(np.max(TS[_l])) if len(_l) else -9,
+                         float(np.quantile(TS[_e], ABS_Q)) if len(_e) else -9), flush=True)
         if not fired and len(inr) >= 9:
             e_, l_ = inr[:len(inr)//3], inr[-len(inr)//3:]
             k2 = max(3, len(e_)//3)
@@ -350,7 +376,13 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             _t0 = mv[-1]["t"]
             _seen = bool(np.any(vis & (ts > _t0)))
             _revis = bool(np.any((arm == mv[-1]["frm"]) & (ts > _t0)))
-            _ck = "②재촬영" if _seen else ("③belief대상" if _revis else "③재방문없음")
+            if _seen:
+                _ck = "②재촬영"
+            elif _revis:
+                _ck = ("③belief대상" if _nlate < 0 else
+                       "③확인기회O" if _nlate >= 2 else "③확인기회X")
+            else:
+                _ck = "③재방문없음"
         else:
             _ck = "①이동없음"
         res.setdefault("ck", Counter())[(_ck, _br, ans == tgt)] += 1
@@ -382,12 +414,12 @@ print("  분기: %s" % dict(res["case"]))
 br = res.get("br", Counter())
 ck = res.get("ck", Counter())
 print("  ── 3경우 분해 (GT 기준) ──")
-for c3 in ("①이동없음", "②재촬영", "③belief대상", "③재방문없음"):
+for c3 in ("①이동없음", "②재촬영", "③belief대상", "③확인기회O", "③확인기회X", "③재방문없음"):
     tot = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3)
     if not tot: continue
     okc = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and o_)
     line = "  %-12s n=%-4d 정답 %.3f" % (c3, tot, okc / tot)
-    if c3 == "③belief대상":
+    if c3 in ("③belief대상", "③확인기회O", "③확인기회X"):
         h = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ == "c2")
         ho = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ == "c2" and o_)
         no = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ != "c2" and o_)
