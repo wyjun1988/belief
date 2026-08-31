@@ -22,6 +22,8 @@ PR = json.load(open("data/thor_prior.json"))
 # 조건①′: 혼동 타입(실측 FP 해부에서 50회+ 쌍)이 같은 집에 있으면 타겟에서 제외.
 # 사용자 지정 — "노트북처럼 비슷한 물체나 중복 물체가 없는 것"이 우리 시나리오 타겟.
 CLEAN = os.environ.get("CLEAN", "0") == "1"
+LOC_GEO = os.environ.get("LOC_GEO", "0") == "1"   # 투영 국소화(§106-107): 투표 yaw+GT거리, 기권시 융합 후퇴
+GEO_W = int(os.environ.get("FRAME_W", "768"))
 LOC_DECAY = float(os.environ.get("LOC_DECAY", "6.0"))   # 앵커 거리 감쇠 (패치 단위)
 LOC_PEN = float(os.environ.get("LOC_PEN", "0.25"))      # 비이웃 방 페널티
 # 실검증 주입 — exp_t1_verify_pipeline 산출 jsonl + 현지 스윕 문턱(rtx7_sweep)
@@ -57,6 +59,16 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     g = json.load(open(hd + "/gt.json")); sm = g.get("scene_meta")
     if not sm: continue
     live = {m["t"]: m for m in g["live"]}
+    _geo = None
+    if LOC_GEO and sm.get("polys") and ZX is not None:
+        _stp = {k: v["pos"] for k, v in sm["static"].items() if v.get("pos")}
+        if _stp:
+            # XSc/XPp 열 = an_ 중 sm.static 에 있는 것만(ai 순서) — 열→앵커id 매핑
+            _axids = [a for a in list(ZX["anch"]) if a in sm["static"]]
+            _byt = {}
+            for k, v in sm["static"].items():
+                if v.get("pos"): _byt.setdefault(v["type"], []).append(v["pos"])
+            _geo = (sm["polys"], _stp, _byt)
     rt = g["room_types"]; rids = sorted(rt)
     nrt = Counter(rt[r] for r in rids)
     rtypes = {}
@@ -130,7 +142,56 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         # ── T1 공략: "충분히 확실한 검출 중 **가장 최근**" — 이동 전 기간이 길어
         # 상위권이 옛 자리 목격으로 도배되는 문제를 시간으로 가른다 (§eval_temporal
         # 의 실패와 달리, 문턱을 먼저 걸고 그 안에서 최신을 본다)
+        def _geo_room(i):
+            """프레임 i 에서 타겟을 지도에 투영 → 방 (기권시 None). §106-107 투표 yaw."""
+            polys, stp, byt = _geo
+            m = live[ts[i]]; ap = m.get("apos")
+            d = (m.get("dist") or {}).get(oid)
+            if ap is None or d is None: return None
+            FW = GEO_W; FF = FW / 2.0
+            def pb(cx): return np.degrees(np.arctan((cx - FW / 2.0) / FF))
+            def br(dx, dz): return np.degrees(np.arctan2(dx, dz))
+            def pxof(pidx): return (pidx % pw + .5) / pw * FW
+            hyp = []
+            if ZX is not None:
+                for k2 in np.where(XSc[i] >= 0.15)[0]:
+                    a = _axids[k2]
+                    if a not in stp: continue
+                    hyp.append((br(stp[a][0] - ap[0], stp[a][1] - ap[1])
+                                - pb(pxof(XPp[i, k2])), 2.0))
+            for c in range(nT, len(vocab)):
+                inst = byt.get(vocab[c], [])
+                if not inst or len(inst) > 4 or S[i, c] < 0.15: continue
+                cx = pxof(P[i, c])
+                for pos in inst:
+                    hyp.append((br(pos[0] - ap[0], pos[1] - ap[1]) - pb(cx), 1.0 / len(inst)))
+            if not hyp: return None
+            best = (0.0, None)
+            for y0, _w in hyp:
+                w = sum(w2 for y2, w2 in hyp if abs((y2 - y0 + 180) % 360 - 180) <= 12)
+                if w > best[0]: best = (w, y0)
+            if best[0] < 2.0: return None
+            ys = [(np.radians(y), w) for y, w in hyp if abs((y - best[1] + 180) % 360 - 180) <= 12]
+            sw = sum(w for _y, w in ys)
+            yaw = np.degrees(np.arctan2(sum(np.sin(y) * w for y, w in ys) / sw,
+                                        sum(np.cos(y) * w for y, w in ys) / sw))
+            b = yaw + pb(pxof(P[i, ti]))
+            pt = [ap[0] + d * np.sin(np.radians(b)), ap[1] + d * np.cos(np.radians(b))]
+            for r, pl in polys.items():
+                x, z = pt; n2 = len(pl); c2 = False
+                for j2 in range(n2):
+                    x1, z1 = pl[j2]; x2, z2 = pl[(j2 + 1) % n2]
+                    if (z1 > z) != (z2 > z) and x < (x2 - x1) * (z - z1) / (z2 - z1 + 1e-12) + x1:
+                        c2 = not c2
+                if c2: return r
+            return min(polys, key=lambda r: min((pt[0] - v[0]) ** 2 + (pt[1] - v[1]) ** 2
+                                                for v in polys[r]))
         def loc_of(idxs):
+            if _geo is not None:
+                _vs = [_geo_room(i) for i in idxs]
+                _vs = [v for v in _vs if v]
+                if _vs:
+                    return Counter(_vs).most_common(1)[0][0]
             a2 = {r: 0.0 for r in rids}
             for i in idxs:
                 w = max(0.0, float(TS[i]) - base)
