@@ -42,6 +42,18 @@ MODEL=Qwen/Qwen3.5-9B PAIRS=/tmp/og_pairs OUT_JSONL=og_scores.jsonl \
 ~/kx-venv/bin/python scripts/rtx7_sweep.py og_scores.jsonl
 ```
 
+## 3.5 판정 눈금 (M1 Max 실측이 채운 세 번째 점 — 2026-09-01)
+
+| 도메인 | 전체 | <2m | 2-5m | 5m+ |
+|---|---|---|---|---|
+| THOR 768 | 0.778 | 0.929 | 0.765 | 0.517 |
+| Habitat ReplicaCAD | 0.848 | 0.917 | 0.909 | 0.666 |
+| 실사 참조 | 0.897 | — | — | — |
+
+렌더 품질이 AUC 를 직접 끌어올린다는 축이 확인됐다. ReplicaCAD(스타일라이즈드
+CAD)가 이미 0.848 이므로 **레이트레이싱인 OmniGibson 은 통과가 기대치**다 —
+미달하면 프로브 쪽 결함(조명·해상도·크롭 기하)을 먼저 의심할 것.
+
 ## 4. 판정 후
 
 - 통과 → 생성기 포팅 설계(배회·이동·case3 — **문·수납 상태 활용**이 이 도메인의
