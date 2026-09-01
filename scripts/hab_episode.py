@@ -28,6 +28,9 @@ ap.add_argument("--move", default=None,
                 help="LLM 시나리오 사전확률(hssd_move.json) — 방 체류·이동성향·목적지. "
                      "없으면 전부 균등 난수가 되어 재방문 패턴이 비현실적이고 "
                      "목적지 균등이라 belief 가 원리적으로 못 맞힌다 (§67)")
+ap.add_argument("--outdoor", type=float, default=0.0,
+                help="이동 중 이 비율은 **집 밖**(outdoor/balcony/porch/garage)으로 — "
+                     "'가방에 넣어 나갔다' 시나리오. 답은 '밖'이 되어야 한다")
 ap.add_argument("--far", type=float, default=0.5,
                 help="이동 중 '가장 먼 방'으로 보내는 비율 — 경우③ 표본 확보용")
 ap.add_argument("--w", type=int, default=768)
@@ -155,7 +158,11 @@ cen = {r: np.array(pl).mean(0) for r, pl in polys.items()}
 for i2, oid in enumerate(cands[:args.moves]):
     others = [r for r in polys if r != obj_room[oid]]
     if not others: continue
-    if i2 < int(args.moves * args.far):
+    OUT_R = [r for r in others if any(k in _rtype(r) for k in
+                                      ("outdoor", "balcony", "porch", "garage", "yard"))]
+    if OUT_R and i2 >= args.moves - int(args.moves * args.outdoor):
+        tgt = rng.choice(OUT_R)                      # 집 밖으로 가져나감
+    elif i2 < int(args.moves * args.far):
         tgt = max(others, key=lambda r: float(np.linalg.norm(cen[r] - cen[obj_room[oid]])))
     elif MOVE and MOVE.get("dest", {}).get(objs[oid]["type"]):
         # **목적지 사전확률**: 머그컵은 부엌에 보관되지만 거실에서 발견된다

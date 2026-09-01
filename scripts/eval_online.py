@@ -398,11 +398,15 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         _br = ("c0" if alt is not None else "c2" if fired else "rec")
         # 3경우 분해 (GT 기준): ①이동없음 ②이동+재촬영 ③이동+미재촬영(→부재확인
         # 가능하면 belief 로 넘겨야 하는 부류 — 실제로 넘긴 비율이 핵심)
+        _outk = ("outdoor", "balcony", "porch", "garage", "yard")
+        _is_out = any(k in (rt.get(tgt, tgt) or "").lower() for k in _outk)
         if mv:
             _t0 = mv[-1]["t"]
             _seen = bool(np.any(vis & (ts > _t0)))
             _revis = bool(np.any((arm == mv[-1]["frm"]) & (ts > _t0)))
-            if _seen:
+            if _is_out:
+                _ck = "④집밖반출"          # 답이 실내 방이 아님 — 별도 채점
+            elif _seen:
                 _ck = "②재촬영"
             elif _revis:
                 _ck = ("③belief대상" if _nlate < 0 else
@@ -441,7 +445,8 @@ print("  분기: %s" % dict(res["case"]))
 br = res.get("br", Counter())
 ck = res.get("ck", Counter())
 print("  ── 3경우 분해 (GT 기준) ──")
-for c3 in ("①이동없음", "②재촬영", "③belief대상", "③확인기회O", "③확인기회X", "③재방문없음"):
+for c3 in ("①이동없음", "②재촬영", "③belief대상", "③확인기회O", "③확인기회X",
+           "③재방문없음", "④집밖반출"):
     tot = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3)
     if not tot: continue
     okc = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and o_)
