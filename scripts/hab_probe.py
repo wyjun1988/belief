@@ -50,25 +50,56 @@ if not sim.pathfinder.is_loaded:
     if _nm:
         sim.pathfinder.load_nav_mesh(_nm[0])
         print("navmesh 로드:", _nm[0], flush=True)
-assert sim.pathfinder.is_loaded, "navmesh 미로드"
+if not sim.pathfinder.is_loaded:
+    # HSSD 류: navmesh 파일이 없다 → 런타임 생성 (에이전트 반경·높이 기본값)
+    ns = habitat_sim.NavMeshSettings(); ns.set_defaults()
+    ns.agent_radius, ns.agent_height = 0.2, 1.6
+    ok = sim.recompute_navmesh(sim.pathfinder, ns)
+    print("navmesh 런타임 생성:", ok, flush=True)
+assert sim.pathfinder.is_loaded, "navmesh 미로드(생성 실패)"
 
 # ── 물체 GT: 시맨틱 대신 scene_instance.json 직접 파싱 + 투영·뎁스 일치 검사 ──
 # (ReplicaCAD 는 시맨틱 기술자·강체 등록이 없어도 라벨·좌표가 인스턴스 JSON 에 있다.
 #  뎁스 버퍼와 투영 깊이가 일치해야 채택 → 가림·미렌더가 자동으로 걸러진다)
 import glob as _glob
-sc_json = os.path.join(os.path.dirname(args.dataset), "configs", "scenes",
-                       args.scene + ".scene_instance.json")
+# 장면 인스턴스 JSON 위치는 데이터셋마다 다르다 (ReplicaCAD: configs/scenes,
+# HSSD: scenes-uncluttered 등) — 데이터셋 루트에서 탐색한다
+_root = os.path.dirname(os.path.abspath(args.dataset))
+_c = _glob.glob(os.path.join(_root, "**", args.scene + ".scene_instance.json"),
+                recursive=True)
+assert _c, "scene_instance.json 못 찾음: %s (%s)" % (args.scene, _root)
+sc_json = _c[0]
 inst = json.load(open(sc_json))
+# 해시 id → 카테고리 (HSSD: metadata/fpmodels*.csv 의 main_category)
+HASHCAT = {}
+_meta = _glob.glob(os.path.join(_root, "metadata", "fpmodels*.csv"))
+if _meta:
+    import csv as _csv
+    with open(_meta[0], newline="") as _f:
+        for row in _csv.DictReader(_f):
+            c = (row.get("main_category") or row.get("super_category") or "").strip()
+            if row.get("id") and c: HASHCAT[row["id"]] = c.replace("_", " ").lower()
+    print("카테고리 매핑 %d" % len(HASHCAT), flush=True)
+
 OBJS = []
 for oi in inst.get("object_instances", []):
     base = oi["template_name"].split("/")[-1]
-    for pre in ("frl_apartment_", "apt_", "object_"):
-        if base.startswith(pre): base = base[len(pre):]
-    label = "".join(c for c in base if c.isalpha()).lower()
+    label = HASHCAT.get(base)
+    if not label:
+        for pre in ("frl_apartment_", "apt_", "object_"):
+            if base.startswith(pre): base = base[len(pre):]
+        label = "".join(c for c in base if c.isalpha()).lower()
     if not label or label in ("wall", "floor", "ceiling"): continue
     OBJS.append((label, np.array(oi["translation"], float)))
 print("인스턴스 JSON 물체 %d" % len(OBJS), flush=True)
 
+INDOOR_ONLY = os.environ.get("INDOOR_ONLY", "1") == "1"
+INDOOR_TYPES = ("sofa", "bed", "chair", "table", "cabinet", "shelf", "desk", "counter",
+                "stool", "dresser", "wardrobe", "refrigerator", "sink", "tv", "lamp",
+                "couch", "nightstand", "bookcase", "oven", "microwave", "toilet")
+OBJXZ = np.array([[p3[0], p3[2]] for lb, p3 in OBJS
+                  if any(t in lb for t in INDOOR_TYPES)], float) if OBJS else np.zeros((0, 2))
+print("실내 가구 앵커 %d" % len(OBJXZ), flush=True)
 F = (args.w / 2.0) / np.tan(np.radians(45.0))
 meta = []
 made = 0; tries = 0
@@ -76,6 +107,12 @@ while made < args.frames and tries < args.frames * 20:
     tries += 1
     pt = sim.pathfinder.get_random_navigable_point()
     if not np.isfinite(pt).all(): continue
+    # 실내 판정: 반경 3.5m 안에 실내 가구가 4개 이상 (HSSD 는 마당·외부 포함이고
+    # 런타임 navmesh 가 실외 지면도 navigable 로 잡는다. 물리 미사용이라 레이캐스트
+    # 대신 밀도로 — 우리 목적(물체가 보이는 프레임)에도 직결된다)
+    if INDOOR_ONLY and OBJXZ.size:
+        d2 = np.hypot(OBJXZ[:, 0] - pt[0], OBJXZ[:, 1] - pt[2])
+        if int(np.sum(d2 < 3.5)) < 4: continue
     st = habitat_sim.AgentState()
     st.position = pt
     yaw = float(rng.uniform(0, 2 * np.pi))
