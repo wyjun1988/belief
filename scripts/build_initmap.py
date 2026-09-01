@@ -63,7 +63,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
 
     # 방×타입 점수 누적. GEO=1 이면 **투영으로 물체 위치를 추정해 방을 정한다**
     # (프레임의 room 을 그대로 쓰면 문 너머 물체가 옆방으로 오염 — §121 후속 실측 0.316)
-    acc = {}
+    acc = {}; cnt_ = {}
     for k in range(0, min(len(mfs), len(mp)), 1):
         room = mp[k]["room"]
         im = Image.open(mfs[k]).convert("RGB")
@@ -96,15 +96,27 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 d_ = dmap[o_near]
                 pt = [ap[0] + d_ * np.sin(np.radians(b)), ap[1] + d_ * np.cos(np.radians(b))]
                 rr = room_pt(pt)
+                # ⚠️ 거리 감쇠·관측수 가중은 **역효과**였다 (0.583→0.551, 2026-09-01):
+                # 둘 다 "가까이·자주 보인 것" 을 우대해 **관측자 방 편향을 되살린다** —
+                # 투영으로 없앤 바로 그 오염이다. 순수 검출 점수만 누적한다.
                 acc.setdefault(v, {}).setdefault(rr, 0.0)
                 acc[v][rr] += float(s[c])
+                cnt_.setdefault(v, {}).setdefault(rr, 0)
+                cnt_[v][rr] += 1
         else:
             for c, v in enumerate(vocab):
                 if s[c] >= TH:
                     acc.setdefault(v, {}).setdefault(room, 0.0)
                     acc[v][room] += float(s[c])
-    out = [dict(type=t, room=max(rs, key=rs.get), w=round(max(rs.values()), 3))
-           for t, rs in acc.items()]
+    # 최종 배정: 점수 합 × 관측 수 (다중 관측 융합) — 단발 강한 오검출을 눌러준다
+    out = []
+    for t, rs in acc.items():
+        cs = cnt_.get(t, {})
+        sc2 = dict(rs)          # 관측수 가중 제거 (위 주석 참조)
+        best_r = max(sc2, key=sc2.get)
+        tot = sum(sc2.values()) + 1e-9
+        out.append(dict(type=t, room=best_r, w=round(sc2[best_r], 3),
+                        conf=round(sc2[best_r] / tot, 3), n=int(cs.get(best_r, 0))))
     json.dump(out, open(os.path.join(os.path.realpath(hd), "initmap_owl.json"), "w"))
     # 정확도 진단 (GT 대조 — 기록만, 구축엔 미사용)
     gt_room = {}
