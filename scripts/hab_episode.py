@@ -283,7 +283,15 @@ for r, pl in polys.items():
                         int(min(W, uu + half)), int(min(H, vv + half))]
         Image.fromarray(ob["rgb"][..., :3]).save(
             os.path.join(args.out, "map", "%04d.jpg" % mi), quality=88)
-        mapwalk.append(dict(room=r, yaw=float(yy), box=box))
+        # 투영 기반 initmap 을 위해 포즈·거리도 남긴다 (box 만으로는 방 판정 불가 —
+        # "보이는 방 ≠ 있는 방" 이 초기맵 구축에서 그대로 재현된다, §121 후속)
+        mapwalk.append(dict(room=r, yaw=float(yy), box=box,
+                            apos=[round(float(mp_pt[0]), 2), round(float(mp_pt[2]), 2)],
+                            ctr={o: [round((b[0]+b[2])/2, 1), round((b[1]+b[3])/2, 1)]
+                                 for o, b in box.items()},
+                            dist={o: round(float(np.hypot(objs[o]["pos"][0]-mp_pt[0],
+                                                          objs[o]["pos"][2]-mp_pt[2])), 2)
+                                  for o in box}))
         mi += 1
 print("매핑 워크 %d장 · exemplar 물체 %d" % (mi, len({o for x in mapwalk for o in x["box"]})), flush=True)
 
@@ -295,6 +303,9 @@ def _mx(v):  # [x,(y),z] → x 반전
 for _m in live:
     _m["apos"] = [round(-_m["apos"][0], 2), _m["apos"][1]]
     _m["yaw"] = round((-_m["yaw"]) % 360, 1)
+for _m in mapwalk:                      # 매핑워크도 같은 규약으로
+    _m["apos"] = [round(-_m["apos"][0], 2), _m["apos"][1]]
+    _m["yaw"] = round((-(_m["yaw"]) + 180.0) % 360, 1)
 for _d in (gt0, state):
     for _v in _d.values(): _v["pos"] = _mx(_v["pos"])
 for _r in polys: polys[_r] = [[-x, z] for x, z in polys[_r]]

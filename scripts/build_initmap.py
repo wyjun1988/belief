@@ -45,7 +45,21 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         o = on.owlv2(input_ids=ti["input_ids"], attention_mask=ti["attention_mask"],
                      pixel_values=ti["pixel_values"], return_dict=True)
     TX, MK = o.text_embeds, (ti["input_ids"][:, 0] > 0)
-    # 방×타입 점수 누적 — GT 는 프레임의 room 라벨만(배포에선 SLAM 방 분할)
+    polys = g["scene_meta"]["polys"]
+    GEO = os.environ.get("INITMAP_GEO", "1") == "1" and mp and mp[0].get("apos")
+    Wf = float(os.environ.get("FRAME_W", "768")); Ff = Wf / 2
+    def pbx(cx): return np.degrees(np.arctan((cx - Wf / 2) / Ff))
+    def room_pt(pt):
+        best = (1e9, None)
+        for r, pl in polys.items():
+            a = np.array(pl); c = a.mean(0)
+            ins = (a[:, 0].min() <= pt[0] <= a[:, 0].max()) and (a[:, 1].min() <= pt[1] <= a[:, 1].max())
+            d = 0.0 if ins else float(np.hypot(pt[0] - c[0], pt[1] - c[1]))
+            if d < best[0]: best = (d, r)
+        return best[1]
+
+    # 방×타입 점수 누적. GEO=1 이면 **투영으로 물체 위치를 추정해 방을 정한다**
+    # (프레임의 room 을 그대로 쓰면 문 너머 물체가 옆방으로 오염 — §121 후속 실측 0.316)
     acc = {}
     for k in range(0, min(len(mfs), len(mp)), 1):
         room = mp[k]["room"]
@@ -58,10 +72,34 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                                        TX.unsqueeze(0).expand(b, -1, -1),
                                        MK.unsqueeze(0).expand(b, -1))
         s = torch.sigmoid(lg).amax(1)[0].float().cpu().numpy()
-        for c, v in enumerate(vocab):
-            if s[c] >= TH:
-                acc.setdefault(v, {}).setdefault(room, 0.0)
-                acc[v][room] += float(s[c])
+        pw = fm.shape[2]
+        if GEO:
+            # 검출 패치 → 방위 → (GT 거리) → 지도 투영 → 방
+            P_ = torch.sigmoid(lg).argmax(1)[0].int().cpu().numpy()
+            ap = mp[k]["apos"]; yaw = float(mp[k]["yaw"])
+            dmap = mp[k].get("dist") or {}
+            oid_of = {}
+            for oid2, c2 in (mp[k].get("ctr") or {}).items():
+                oid_of.setdefault(round(c2[0] / 20), []).append(oid2)
+            for c, v in enumerate(vocab):
+                if s[c] < TH: continue
+                cx = (P_[c] % pw + .5) / pw * Wf
+                # 거리: 그 화면 위치에 가장 가까운 GT 물체의 거리 (배포에선 depth)
+                cand = [(abs(((mp[k]["ctr"][o][0]) - cx)), o) for o in dmap]
+                if not cand: continue
+                dd, o_near = min(cand)
+                if dd > 80: continue
+                b = yaw + pbx(cx)
+                d_ = dmap[o_near]
+                pt = [ap[0] + d_ * np.sin(np.radians(b)), ap[1] + d_ * np.cos(np.radians(b))]
+                rr = room_pt(pt)
+                acc.setdefault(v, {}).setdefault(rr, 0.0)
+                acc[v][rr] += float(s[c])
+        else:
+            for c, v in enumerate(vocab):
+                if s[c] >= TH:
+                    acc.setdefault(v, {}).setdefault(room, 0.0)
+                    acc[v][room] += float(s[c])
     out = [dict(type=t, room=max(rs, key=rs.get), w=round(max(rs.values()), 3))
            for t, rs in acc.items()]
     json.dump(out, open(os.path.join(os.path.realpath(hd), "initmap_owl.json"), "w"))
