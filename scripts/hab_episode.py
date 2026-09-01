@@ -154,6 +154,7 @@ def obj_handle(oid):
     h, d = min(((h, float(np.linalg.norm(t - p0))) for h, t in _H), key=lambda x: x[1])
     return h if d < 0.35 else None
 
+plan_oids = {o for o, _d in plan.values()}
 live, moves = [], []
 gt0 = {oid: dict(type=v["type"], room=obj_room[oid],
                  pos=[round(v["pos"][0], 3), round(v["pos"][1], 3), round(v["pos"][2], 3)])
@@ -209,7 +210,7 @@ while t < args.frames:
         fwd = np.array([-np.sin(np.radians(yaw)), 0, -np.cos(np.radians(yaw))])
         rgt = np.array([np.cos(np.radians(yaw)), 0, -np.sin(np.radians(yaw))])
         up = np.array([0, 1.0, 0])
-        vis, ctr, dist = [], {}, {}
+        vis, ctr, dist, anch = [], {}, {}, {}
         for oid, v in state.items():
             d3 = np.array(v["pos"]) - cam
             zc = float(d3 @ fwd)
@@ -220,19 +221,50 @@ while t < args.frames:
             if abs(float(dep[int(vv), int(u)]) - zc) > 0.6: continue     # 가림 배제
             vis.append(oid); ctr[oid] = [round(u, 1), round(vv, 1)]
             dist[oid] = round(float(np.hypot(d3[0], d3[2])), 2)
+            if oid not in plan_oids:            # 정적 물체 = 앵커 (exemplar 재국소화용)
+                anch[oid] = [round(u, 1), round(vv, 1)]
         Image.fromarray(obs["rgb"][..., :3]).save(
             os.path.join(args.out, "live", "%06d.jpg" % t), quality=88)
-        live.append(dict(t=t, room=room_at(float(p[0]), float(p[2])), vis=vis, ctr=ctr,
+        live.append(dict(t=t, room=room_at(float(p[0]), float(p[2])), vis=vis, ctr=ctr, anch=anch,
                          dist=dist, apos=[round(float(p[0]), 2), round(float(p[2]), 2)],
-                         yaw=round(yaw % 360, 1), pitch=0.0))
+                         # ⚠️ habitat 카메라는 yaw=0 에서 -z 를 본다(OpenGL 관례).
+                         # 우리 투영 규약은 yaw=0 → +z, 전방 (sin,0,cos) 이므로 180° 보정.
+                         yaw=round((yaw + 180.0) % 360, 1), pitch=0.0))
         t += 1
     cur = b; ri += 1
+
+# ⚠️ 좌표 규약 정합: habitat 은 화면 오른쪽이 방위각 **감소** 방향(왼손 회전),
+# 우리 투영 규약(THOR/georoom)은 증가 방향이다. x 축을 미러링하고 yaw 부호를
+# 뒤집으면 두 규약이 일치한다 (이미지·ctr 은 손대지 않는다 — GT 정합 유지).
+def _mx(v):  # [x,(y),z] → x 반전
+    v = list(v); v[0] = -v[0]; return v
+for _m in live:
+    _m["apos"] = [round(-_m["apos"][0], 2), _m["apos"][1]]
+    _m["yaw"] = round((-_m["yaw"]) % 360, 1)
+for _d in (gt0, state):
+    for _v in _d.values(): _v["pos"] = _mx(_v["pos"])
+for _r in polys: polys[_r] = [[-x, z] for x, z in polys[_r]]
+
+# ── 초기 맵(매핑 워크 대용): 앞 MAPN 프레임을 map 으로도 기록 + 물체 bbox
+# (exp_imgq 의 exemplar 는 map 프레임의 box 에서 크롭을 뽑는다. 우리 시스템이
+#  "초기 매핑 워크로 씬그래프를 만든다"고 전제하므로 앞 구간 재사용이 정당하다)
+MAPN = min(80, len(live))
+mp = []
+for m in live[:MAPN]:
+    box = {}
+    for oid in m["vis"]:
+        c = m["ctr"][oid]; d = m["dist"].get(oid, 3.0)
+        rad = 0.25
+        half = max(12.0, F * rad / max(d, 0.3))
+        box[oid] = [int(max(0, c[0] - half)), int(max(0, c[1] - half)),
+                    int(min(W, c[0] + half)), int(min(H, c[1] + half))]
+    mp.append(dict(room=m["room"], yaw=m["yaw"], box=box, t=m["t"]))
 
 static = {oid: dict(type=v["type"], room=obj_room[oid],
                     pos=[round(v["pos"][0], 3), round(v["pos"][1], 3), round(v["pos"][2], 3)])
           for oid, v in objs.items() if oid not in {m["oid"] for m in moves}}
 json.dump(dict(house=0, rooms=[dict(id=r, type=rt[r]) for r in polys], room_types=rt,
-               gt0=gt0, moves=moves, live=live, fps=1.0, T=len(live),
+               gt0=gt0, moves=moves, live=live, map=mp, fps=1.0, T=len(live),
                scene_meta=dict(polys=polys, static=static, doors=[])),
           open(os.path.join(args.out, "gt.json"), "w"))
 print("프레임 %d · 이동 %d · 방 %d → %s" % (len(live), len(moves), len(polys), args.out))

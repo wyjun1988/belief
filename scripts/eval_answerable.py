@@ -69,7 +69,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     live = {m["t"]: m for m in g["live"]}
     _geo = None
     if LOC_GEO and sm.get("polys") and ZX is not None:
-        _stp = {k: v["pos"] for k, v in sm["static"].items() if v.get("pos")}
+        _stp = {k: ([v["pos"][0], v["pos"][2]] if len(v["pos"]) == 3 else v["pos"])
+                for k, v in sm["static"].items() if v.get("pos")}
         if _stp:
             # XSc/XPp 열 = an_ 중 sm.static 에 있는 것만(ai 순서) — 열→앵커id 매핑
             _axids = [a for a in list(ZX["anch"]) if a in sm["static"]]

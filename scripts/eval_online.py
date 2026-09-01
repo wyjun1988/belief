@@ -77,7 +77,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     # 투영 재료 (§106-110): 방 폴리곤·앵커 좌표·검출 앵커 캐시
     _geo = None
     if VSC is not None and sm.get("polys"):
-        _stp = {k: v["pos"] for k, v in sm["static"].items() if v.get("pos")}
+        _stp = {k: ([v["pos"][0], v["pos"][2]] if len(v["pos"]) == 3 else v["pos"])
+                for k, v in sm["static"].items() if v.get("pos")}
         _zx = np.load(AXP + hn + ".npz", allow_pickle=True) if os.path.exists(AXP + hn + ".npz") else None
         if _stp and _zx is not None:
             _axids = [a for a in list(_zx["anch"]) if a in sm["static"]]

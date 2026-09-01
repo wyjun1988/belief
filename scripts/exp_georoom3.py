@@ -74,7 +74,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     if not (os.path.exists(fa) and os.path.exists(fx)): continue
     g = json.load(open(hd + "/gt.json"))
     sm = g["scene_meta"]; polys = sm["polys"]
-    stpos = {k: v["pos"] for k, v in sm["static"].items() if v.get("pos")}
+    stpos = {k: ([v["pos"][0], v["pos"][2]] if len(v["pos"]) == 3 else v["pos"]) for k, v in sm["static"].items() if v.get("pos")}
     if not stpos:
         print("static pos 없음 — 건너뜀:", hn); continue
     bytype = {}
