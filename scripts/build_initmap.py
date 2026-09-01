@@ -63,7 +63,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
 
     # 방×타입 점수 누적. GEO=1 이면 **투영으로 물체 위치를 추정해 방을 정한다**
     # (프레임의 room 을 그대로 쓰면 문 너머 물체가 옆방으로 오염 — §121 후속 실측 0.316)
-    acc = {}; cnt_ = {}
+    acc = {}; cnt_ = {}; pts_ = {}
     for k in range(0, min(len(mfs), len(mp)), 1):
         room = mp[k]["room"]
         im = Image.open(mfs[k]).convert("RGB")
@@ -95,6 +95,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 b = yaw + pbx(cx)
                 d_ = dmap[o_near]
                 pt = [ap[0] + d_ * np.sin(np.radians(b)), ap[1] + d_ * np.cos(np.radians(b))]
+                pts_.setdefault(v, []).append((pt, float(s[c])))
                 rr = room_pt(pt)
                 # ⚠️ 거리 감쇠·관측수 가중은 **역효과**였다 (0.583→0.551, 2026-09-01):
                 # 둘 다 "가까이·자주 보인 것" 을 우대해 **관측자 방 편향을 되살린다** —
@@ -108,7 +109,30 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 if s[c] >= TH:
                     acc.setdefault(v, {}).setdefault(room, 0.0)
                     acc[v][room] += float(s[c])
-    # 최종 배정: 점수 합 × 관측 수 (다중 관측 융합) — 단발 강한 오검출을 눌러준다
+    # ── 인스턴스 분리: 투영점을 군집화해 **타입당 여러 방**을 허용 ──
+    # 실제 주거는 의자·책이 여러 방에 흩어진다. 타입당 방 1개로 접으면 그 사실이
+    # 통째로 사라진다(2026-09-01). 군집 반경 CLU m, 점수합 상위 MAXI 개까지.
+    CLU = float(os.environ.get("INITMAP_CLUSTER", "2.0"))
+    MAXI = int(os.environ.get("INITMAP_MAXINST", "3"))
+    inst_out = []
+    for t, ps in pts_.items():
+        cl = []                       # [(중심, 점수합, 개수)]
+        for pt, w in sorted(ps, key=lambda x: -x[1]):
+            hit = None
+            for k2, (c0, w0, n0) in enumerate(cl):
+                if float(np.hypot(pt[0]-c0[0], pt[1]-c0[1])) <= CLU: hit = k2; break
+            if hit is None:
+                cl.append([np.array(pt, float), w, 1])
+            else:
+                c0, w0, n0 = cl[hit]
+                cl[hit] = [(c0*w0 + np.array(pt, float)*w) / (w0+w), w0+w, n0+1]
+        cl.sort(key=lambda x: -x[1])
+        for c0, w0, n0 in cl[:MAXI]:
+            inst_out.append(dict(type=t, room=room_pt(c0), w=round(float(w0), 3),
+                                 pos=[round(float(c0[0]), 2), round(float(c0[1]), 2)],
+                                 n=int(n0)))
+
+    # 최종 배정(타입당 1방, 하위호환)
     out = []
     for t, rs in acc.items():
         cs = cnt_.get(t, {})
@@ -117,11 +141,15 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         tot = sum(sc2.values()) + 1e-9
         out.append(dict(type=t, room=best_r, w=round(sc2[best_r], 3),
                         conf=round(sc2[best_r] / tot, 3), n=int(cs.get(best_r, 0))))
+    if os.environ.get("INITMAP_INST", "1") == "1" and inst_out:
+        out = inst_out          # 인스턴스판 사용 (타입당 여러 방 허용)
     json.dump(out, open(os.path.join(os.path.realpath(hd), "initmap_owl.json"), "w"))
     # 정확도 진단 (GT 대조 — 기록만, 구축엔 미사용)
     gt_room = {}
     for v in g["gt0"].values(): gt_room.setdefault(v["type"], v["room"])
-    hit = [1 for e in out if gt_room.get(e["type"]) == e["room"]]
-    print("  %s 타입 %d · 방배정 정확도 %.3f" % (hn, len(out),
-          len(hit) / max(sum(1 for e in out if e["type"] in gt_room), 1)), flush=True)
+    byt2 = {}
+    for e in out: byt2.setdefault(e["type"], set()).add(e["room"])
+    hit = [1 for t2, rs2 in byt2.items() if gt_room.get(t2) in rs2]
+    print("  %s 항목 %d(타입 %d) · 방배정 정확도 %.3f" % (hn, len(out), len(byt2),
+          len(hit) / max(sum(1 for t2 in byt2 if t2 in gt_room), 1)), flush=True)
 print("완료")

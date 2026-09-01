@@ -97,13 +97,15 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             _geo = (sm["polys"], _stp, _byt)
     arm = np.array([live[t]["room"] for t in ts])
     AS = S[:, nT:]
-    im = {}
+    im = {}; im_inst = {}
     imf = os.path.join(os.path.realpath(hd), "initmap_owl.json")
     if os.path.exists(imf):
         best = {}
         for i2 in json.load(open(imf)):
             if i2["w"] > best.get(i2["type"], (0,))[0]:
                 best[i2["type"]] = (i2["w"], i2["room"])
+            if i2.get("pos"):        # 인스턴스판: 타입당 여러 (방, 좌표)
+                im_inst.setdefault(i2["type"], []).append((i2["pos"], i2["room"], i2["w"]))
         im = {t: r for t, (w, r) in best.items()}
     moves = sorted(g["moves"], key=lambda m: m["t"])
     cnt = Counter(v["type"] for v in g["gt0"].values())
@@ -233,7 +235,24 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         # ── 상태기계 ──
         # v3: 기록은 **불변** — 질의 시점에 검증된 최신 증거와 마진 비교만 한다.
         # (영구 덮어쓰기는 국소화 노이즈로 정지 물체 기록을 오염시킨다 — v1 실측 −0.11)
-        record = (v0["room"] if SG_INIT == "gt" else im.get(v0["type"]))
+        if SG_INIT == "gt":
+            record = v0["room"]
+        else:
+            # 인스턴스판이 있으면 **첫 목격 프레임의 투영 위치**에 가장 가까운 인스턴스를
+            # 고른다(타입당 방 1개로 접지 않는다 — 실제 주거는 같은 타입이 여러 방에).
+            record = im.get(v0["type"])
+            _cands = im_inst.get(v0["type"])
+            if _cands and _geo is not None:
+                _first = next((i2 for i2 in range(len(ts)) if vis[i2]), None)
+                if _first is not None:
+                    _ry = _geo_ray(_first)
+                    _d0 = (live[ts[_first]].get("dist") or {}).get(oid)
+                    if _ry and _d0:
+                        _ap, _b = _ry
+                        _p0 = [_ap[0] + _d0 * np.sin(np.radians(_b)),
+                               _ap[1] + _d0 * np.cos(np.radians(_b))]
+                        record = min(_cands, key=lambda c3: (c3[0][0]-_p0[0])**2 +
+                                     (c3[0][1]-_p0[1])**2)[1]
         ver_all = []
         for e in evs:
             ver = [i for i in e[:6] if verify(i)]
