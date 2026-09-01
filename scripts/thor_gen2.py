@@ -353,6 +353,32 @@ def main():
                 pt = rng.choice(byroom[tgt])
                 r2 = ctrl.step("PlaceObjectAtPoint", objectId=oid,
                                position=dict(x=pt["x"], y=pt["y"] + 0.6, z=pt["z"]))
+                # ── case3 v2: 비가시 배치 검증 — c3b 에서 강제 240건이 문 너머
+                # 가시 누수로 4건(2%)만 살아남았다(§119). 가시를 줄이는 대신
+                # 차폐를 실측한다: 다른 방들의 최근접 지점에서 바라봐 보이면 재배치.
+                if c3_left > 0 and r2.metadata["lastActionSuccess"]:
+                    def _seen_from_outside():
+                        op = next(o["position"] for o in ctrl.step("Pass").metadata["objects"]
+                                  if o["objectId"] == oid)
+                        for r3 in rids:
+                            if r3 == tgt: continue
+                            vp = min(byroom[r3], key=lambda q:
+                                     (q["x"]-op["x"])**2 + (q["z"]-op["z"])**2)
+                            yv = float(np.degrees(np.arctan2(op["x"]-vp["x"],
+                                                             op["z"]-vp["z"])))
+                            e3 = ctrl.step("Teleport", position=vp,
+                                           rotation=dict(x=0, y=yv, z=0), horizon=10)
+                            if not e3.metadata["lastActionSuccess"]: continue
+                            o3 = next((o for o in e3.metadata["objects"]
+                                       if o["objectId"] == oid), None)
+                            if o3 is not None and o3.get("visible"): return True
+                        return False
+                    for _try in range(8):
+                        if not _seen_from_outside(): break
+                        pt = rng.choice(byroom[tgt])
+                        r2b = ctrl.step("PlaceObjectAtPoint", objectId=oid,
+                                        position=dict(x=pt["x"], y=pt["y"] + 0.6, z=pt["z"]))
+                        if not r2b.metadata["lastActionSuccess"]: break
                 if r2.metadata["lastActionSuccess"]:
                     events.append(dict(t=t, oid=oid, frm=state[oid]["room"], to=tgt))
                     state[oid] = dict(state[oid]); state[oid]["room"] = tgt
