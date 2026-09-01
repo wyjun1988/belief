@@ -41,6 +41,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             a = (b[2]-b[0]) * (b[3]-b[1])
             if a > best.get(oid, (0,))[0]: best[oid] = (a, k, b)
     tgts = [o for o in uniq if o in best]
+    if not tgts:                      # 타입 단일 타겟 0개(HSSD 처럼 동일타입 다수) → 스킵
+        print("  %s 타겟 없음 — 건너뜀" % hn, flush=True); continue
     QE = []
     for oid in tgts:
         _, k, b = best[oid]

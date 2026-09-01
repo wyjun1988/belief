@@ -171,6 +171,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             def pb(cx): return np.degrees(np.arctan((cx - FW / 2.0) / FF))
             def br(dx, dz): return np.degrees(np.arctan2(dx, dz))
             def pxof(pidx): return (pidx % pw + .5) / pw * FW
+            if os.environ.get("LOC_YAW_GT") == "1" and m.get("yaw") is not None:
+                # 포즈를 시뮬 제공물로(사다리 ①) — 앵커 yaw 역산 생략, 상한 측정용
+                return ap, float(m["yaw"]) + pb(pxof(P[i, ti]))
             hyp = []
             if ZX is not None:
                 for k2 in np.where(XSc[i] >= 0.15)[0]:

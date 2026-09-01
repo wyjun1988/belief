@@ -24,6 +24,8 @@ ap.add_argument("--dataset", required=True)
 ap.add_argument("--frames", type=int, default=200)
 ap.add_argument("--moves", type=int, default=3)
 ap.add_argument("--rooms", type=int, default=4)
+ap.add_argument("--far", type=float, default=0.5,
+                help="이동 중 '가장 먼 방'으로 보내는 비율 — 경우③ 표본 확보용")
 ap.add_argument("--w", type=int, default=768)
 ap.add_argument("--out", required=True)
 ap.add_argument("--seed", type=int, default=0)
@@ -132,9 +134,17 @@ cands = [o for o, v in objs.items()
          if cnt[v["type"]] == 1 and any(m in v["type"] for m in MOVABLE)]
 rng.shuffle(cands)
 plan = {}
-for oid in cands[:args.moves]:
-    tgt = rng.choice([r for r in polys if r != obj_room[oid]])
-    plan[int(rng.integers(args.frames // 4, args.frames * 3 // 4))] = (oid, tgt)
+# 경우③(부재→belief) 표본: --far 비율만큼은 **현재 방에서 가장 먼 방**으로 옮긴다
+# → 이동 후 재목격 확률이 낮아지고 옛 방 재방문은 유지되어 ③ 조건이 성립한다
+cen = {r: np.array(pl).mean(0) for r, pl in polys.items()}
+for i2, oid in enumerate(cands[:args.moves]):
+    others = [r for r in polys if r != obj_room[oid]]
+    if not others: continue
+    if i2 < int(args.moves * args.far):
+        tgt = max(others, key=lambda r: float(np.linalg.norm(cen[r] - cen[obj_room[oid]])))
+    else:
+        tgt = rng.choice(others)
+    plan[int(rng.integers(args.frames // 5, args.frames * 3 // 5))] = (oid, tgt)
 print("이동 계획 %d건" % len(plan), flush=True)
 
 # ── 연속 보행 궤적 (텔레포트 아님) ──
@@ -201,9 +211,13 @@ while t < args.frames:
                                                    float(state[oid]["pos"][1]), float(np_[2]))
                 else:
                     print("  ⚠ 핸들 못 찾음(렌더 미반영, GT 만 갱신): %s" % oid, flush=True)
-                moves.append(dict(t=t, oid=oid, frm=obj_room[oid], to=dest))
+                # ⚠️ navigable 지점이 목적지 방 폴리곤 밖일 수 있다(반경 2m 탐색).
+                # **실제 좌표로 방을 재판정**해야 GT 가 정직하다 (31% 불일치 실측).
+                real = room_at(float(np_[0]), float(np_[2]))
+                moves.append(dict(t=t, oid=oid, frm=obj_room[oid], to=real,
+                                  intended=dest))
                 state[oid]["pos"] = [float(np_[0]), state[oid]["pos"][1], float(np_[2])]
-                obj_room[oid] = dest
+                obj_room[oid] = real
         obs = sim.get_sensor_observations()
         dep = obs["dep"]
         cam = np.array(p) + np.array([0, 1.5, 0])
@@ -233,6 +247,46 @@ while t < args.frames:
         t += 1
     cur = b; ri += 1
 
+# ── 매핑 워크: 방마다 들러 360° 스캔 (THOR gen2 --mapwalk 대응) ──
+# 이게 없으면 초기 프레임이 한두 방만 돌아 **이동 물체가 exemplar 를 못 가진다**
+# → 평가 타겟 목록에서 빠진다(HSSD 20채 1차 실패의 원인).
+mapwalk = []
+os.makedirs(os.path.join(args.out, "map"), exist_ok=True)
+mi = 0
+for r, pl in polys.items():
+    c = np.array(pl).mean(0)
+    mp_pt = sim.pathfinder.get_random_navigable_point_near(
+        np.array([c[0], 0.1, c[1]]), 3.0)
+    if not np.isfinite(mp_pt).all(): continue
+    for yy in (0, 60, 120, 180, 240, 300):
+        st = habitat_sim.AgentState(); st.position = mp_pt
+        ry = np.radians(yy)
+        st.rotation = np.quaternion(np.cos(ry / 2), 0, np.sin(ry / 2), 0)
+        sim.get_agent(0).set_state(st)
+        ob = sim.get_sensor_observations()
+        dep2 = ob["dep"]
+        cam2 = np.array(mp_pt) + np.array([0, 1.5, 0])
+        f2 = np.array([-np.sin(ry), 0, -np.cos(ry)])
+        r2 = np.array([np.cos(ry), 0, -np.sin(ry)])
+        u2 = np.array([0, 1.0, 0])
+        box = {}
+        for oid, v in objs.items():
+            d3 = np.array(v["pos"]) - cam2
+            zc = float(d3 @ f2)
+            if not (0.3 < zc < 12): continue
+            uu = W / 2 + F * float(d3 @ r2) / zc
+            vv = H / 2 - F * float(d3 @ u2) / zc
+            if not (5 <= uu < W - 5 and 5 <= vv < H - 5): continue
+            if abs(float(dep2[int(vv), int(uu)]) - zc) > 0.6: continue
+            half = max(12.0, F * 0.25 / max(zc, 0.3))
+            box[oid] = [int(max(0, uu - half)), int(max(0, vv - half)),
+                        int(min(W, uu + half)), int(min(H, vv + half))]
+        Image.fromarray(ob["rgb"][..., :3]).save(
+            os.path.join(args.out, "map", "%04d.jpg" % mi), quality=88)
+        mapwalk.append(dict(room=r, yaw=float(yy), box=box))
+        mi += 1
+print("매핑 워크 %d장 · exemplar 물체 %d" % (mi, len({o for x in mapwalk for o in x["box"]})), flush=True)
+
 # ⚠️ 좌표 규약 정합: habitat 은 화면 오른쪽이 방위각 **감소** 방향(왼손 회전),
 # 우리 투영 규약(THOR/georoom)은 증가 방향이다. x 축을 미러링하고 yaw 부호를
 # 뒤집으면 두 규약이 일치한다 (이미지·ctr 은 손대지 않는다 — GT 정합 유지).
@@ -248,8 +302,8 @@ for _r in polys: polys[_r] = [[-x, z] for x, z in polys[_r]]
 # ── 초기 맵(매핑 워크 대용): 앞 MAPN 프레임을 map 으로도 기록 + 물체 bbox
 # (exp_imgq 의 exemplar 는 map 프레임의 box 에서 크롭을 뽑는다. 우리 시스템이
 #  "초기 매핑 워크로 씬그래프를 만든다"고 전제하므로 앞 구간 재사용이 정당하다)
-MAPN = min(80, len(live))
-mp = []
+MAPN = 0 if mapwalk else min(80, len(live))
+mp = list(mapwalk)
 for m in live[:MAPN]:
     box = {}
     for oid in m["vis"]:
