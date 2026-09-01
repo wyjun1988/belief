@@ -42,20 +42,37 @@ ag.sensor_specifications = [
     sensor("sem", habitat_sim.SensorType.SEMANTIC),
     sensor("dep", habitat_sim.SensorType.DEPTH)]
 sim = habitat_sim.Simulator(habitat_sim.Configuration(cfg, [ag]))
+if not sim.pathfinder.is_loaded:
+    # ReplicaCAD 류: navmesh 를 명시 로드해야 한다 (미로드 상태의 pathfinder 호출은 무효/불안정)
+    import glob as _g
+    _nm = [c for c in _g.glob(os.path.join(os.path.dirname(args.dataset),
+                                           "navmesh*", "*.navmesh")) if args.scene in c]
+    if _nm:
+        sim.pathfinder.load_nav_mesh(_nm[0])
+        print("navmesh 로드:", _nm[0], flush=True)
+assert sim.pathfinder.is_loaded, "navmesh 미로드"
 
-# 인스턴스 id → 카테고리 이름
-cat = {}
-for obj in sim.semantic_scene.objects or []:
-    if obj is None or obj.category is None: continue
-    try: cat[int(obj.semantic_id)] = obj.category.name()
-    except Exception: pass
-print("시맨틱 인스턴스 %d" % len(cat), flush=True)
+# ── 물체 GT: 시맨틱 대신 scene_instance.json 직접 파싱 + 투영·뎁스 일치 검사 ──
+# (ReplicaCAD 는 시맨틱 기술자·강체 등록이 없어도 라벨·좌표가 인스턴스 JSON 에 있다.
+#  뎁스 버퍼와 투영 깊이가 일치해야 채택 → 가림·미렌더가 자동으로 걸러진다)
+import glob as _glob
+sc_json = os.path.join(os.path.dirname(args.dataset), "configs", "scenes",
+                       args.scene + ".scene_instance.json")
+inst = json.load(open(sc_json))
+OBJS = []
+for oi in inst.get("object_instances", []):
+    base = oi["template_name"].split("/")[-1]
+    for pre in ("frl_apartment_", "apt_", "object_"):
+        if base.startswith(pre): base = base[len(pre):]
+    label = "".join(c for c in base if c.isalpha()).lower()
+    if not label or label in ("wall", "floor", "ceiling"): continue
+    OBJS.append((label, np.array(oi["translation"], float)))
+print("인스턴스 JSON 물체 %d" % len(OBJS), flush=True)
 
-SKIP = {"wall", "floor", "ceiling", "door", "window", "misc", "unknown", "", "root",
-        "stair", "column", "beam"}
+F = (args.w / 2.0) / np.tan(np.radians(45.0))
 meta = []
 made = 0; tries = 0
-while made < args.frames and tries < args.frames * 10:
+while made < args.frames and tries < args.frames * 20:
     tries += 1
     pt = sim.pathfinder.get_random_navigable_point()
     if not np.isfinite(pt).all(): continue
@@ -65,22 +82,28 @@ while made < args.frames and tries < args.frames * 10:
     st.rotation = np.quaternion(np.cos(yaw / 2), 0, np.sin(yaw / 2), 0)
     sim.get_agent(0).set_state(st)
     obs = sim.get_sensor_observations()
-    sem = obs["sem"]; dep = obs["dep"]
+    dep = obs["dep"]
+    cam = np.array(pt, float) + np.array([0, 1.5, 0])
+    fwd = np.array([-np.sin(yaw), 0, -np.cos(yaw)])
+    rgt = np.array([np.cos(yaw), 0, -np.sin(yaw)])
+    up = np.array([0, 1.0, 0])
     objs = []
-    for iid in np.unique(sem):
-        c = cat.get(int(iid))
-        if not c or c.lower() in SKIP: continue
-        ys, xs = np.where(sem == iid)
-        if len(xs) < 400: continue                    # 너무 작은 조각 제외
-        cx, cy = float(np.median(xs)), float(np.median(ys))
-        d = float(np.median(dep[ys, xs]))
-        if not (0.3 < d < 15): continue
-        objs.append(dict(label=c.lower(), ctr=[cx, cy], dist=round(d, 2)))
+    for label, p3 in OBJS:
+        d = p3 - cam
+        zc = float(d @ fwd)
+        if not (0.4 < zc < 15): continue
+        u = args.w / 2 + F * float(d @ rgt) / zc
+        v = args.h / 2 - F * float(d @ up) / zc
+        if not (10 <= u < args.w - 10 and 10 <= v < args.h - 10): continue
+        dz = float(dep[int(v), int(u)])
+        if abs(dz - zc) > 0.5: continue            # 가림/미렌더 → 제외
+        objs.append(dict(label=label, ctr=[round(u, 1), round(v, 1)],
+                         dist=round(float(np.linalg.norm(d)), 2)))
     if len({o["label"] for o in objs}) < 2: continue
     fn = "frames/%06d.jpg" % made
     Image.fromarray(obs["rgb"][..., :3]).save(os.path.join(args.out, fn), quality=90)
     meta.append(dict(img=fn, objs=objs)); made += 1
     if made % 50 == 0: print("  %d/%d" % (made, args.frames), flush=True)
 open(os.path.join(args.out, "meta.jsonl"), "w").write("\n".join(json.dumps(m) for m in meta))
-assert made > 0, "프레임 0장 — 장면/시맨틱 확인"
+assert made > 0, "프레임 0장 — 장면/투영 확인"
 print("프레임 %d → %s" % (made, args.out))
