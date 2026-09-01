@@ -110,6 +110,11 @@ INDOOR_TYPES = ("sofa", "bed", "chair", "table", "cabinet", "shelf", "desk", "co
 OBJXZ = np.array([[p3[0], p3[2]] for lb, p3 in OBJS
                   if any(t in lb for t in INDOOR_TYPES)], float) if OBJS else np.zeros((0, 2))
 print("실내 가구 앵커 %d" % len(OBJXZ), flush=True)
+# 카테고리별 대표 반경(m) — 화면 크기 추정용 (정밀 AABB 대신 근사)
+RAD = {"bed": 1.0, "couch": 1.0, "sofa": 1.0, "table": 0.7, "chair": 0.4, "shelves": 0.6,
+       "cabinet": 0.6, "desk": 0.7, "tv": 0.5, "refrigerator": 0.7, "fridge": 0.7,
+       "laptop": 0.2, "book": 0.12, "plate": 0.12, "drinkware": 0.06, "utensil": 0.08,
+       "potted plant": 0.25, "lamp": 0.2, "bench": 0.6, "stool": 0.25}
 F = (args.w / 2.0) / np.tan(np.radians(45.0))
 meta = []
 made = 0; tries = 0
@@ -144,8 +149,11 @@ while made < args.frames and tries < args.frames * 20:
         if not (10 <= u < args.w - 10 and 10 <= v < args.h - 10): continue
         dz = float(dep[int(v), int(u)])
         if abs(dz - zc) > 0.5: continue            # 가림/미렌더 → 제외
+        # 화면상 크기: 물체 반경(있으면 AABB, 없으면 기본 0.3m)의 각크기 → px
+        rad = RAD.get(label, 0.3)
+        px = 2.0 * F * rad / max(zc, 0.1)
         objs.append(dict(label=label, ctr=[round(u, 1), round(v, 1)],
-                         dist=round(float(np.linalg.norm(d)), 2)))
+                         dist=round(float(np.linalg.norm(d)), 2), px=round(float(px), 1)))
     if len({o["label"] for o in objs}) < 2: continue
     fn = "frames/%06d.jpg" % made
     Image.fromarray(obs["rgb"][..., :3]).save(os.path.join(args.out, fn), quality=90)

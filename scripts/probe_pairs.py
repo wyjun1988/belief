@@ -16,6 +16,9 @@ from PIL import Image
 ap = argparse.ArgumentParser()
 ap.add_argument("--probe", required=True)
 ap.add_argument("--n", type=int, default=400)
+ap.add_argument("--min-px", type=float, default=0.0,
+                help="화면상 물체 최소 크기(px, 대각). GT 크기가 있으면 이 미만은 제외 — "
+                     "거리 버킷만으로는 10m 밖 5px 물체와 근거리 대형 가구가 같은 통에 든다")
 ap.add_argument("--out", required=True)
 args = ap.parse_args()
 os.makedirs(args.out, exist_ok=True)
@@ -34,6 +37,9 @@ for f in frames:
     W, H = im.size; h2 = min(W, H) // 6
     fk = 0
     objs = list(f["objs"]); rng.shuffle(objs)
+    if args.min_px > 0:
+        objs = [o for o in objs if o.get("px", 1e9) >= args.min_px]
+        if len({o["label"] for o in objs}) < 2: continue
     for a in range(len(objs)):
         if k >= args.n or fk >= per: break
         for b in range(len(objs)):
@@ -45,11 +51,13 @@ for f in frames:
                                 min(W, cx+h2), min(H, cy+h2))).resize((336, 336), Image.LANCZOS)
             f1 = os.path.join(args.out, "cand_%04d.jpg" % k); crop(o1).save(f1, quality=92)
             meta.append(dict(cand=f1, enroll=f1, label=o1["label"], alt=o2["label"],
-                             truth=1, dist=round(float(o1["dist"]), 1))); k += 1; fk += 1
+                             truth=1, dist=round(float(o1["dist"]), 1),
+                             **({"px": round(float(o1["px"]), 1)} if "px" in o1 else {}))); k += 1; fk += 1
             if k >= args.n: break
             f2 = os.path.join(args.out, "cand_%04d.jpg" % k); crop(o2).save(f2, quality=92)
             meta.append(dict(cand=f2, enroll=f2, label=o1["label"], alt=o2["label"],
-                             truth=0, dist=round(float(o2["dist"]), 1))); k += 1; fk += 1
+                             truth=0, dist=round(float(o2["dist"]), 1),
+                             **({"px": round(float(o2["px"]), 1)} if "px" in o2 else {}))); k += 1; fk += 1
             break
 assert k > 0, "쌍 0개 — 조용히 성공한 척 금지 (§make_sim_pairs 교훈)"
 open(os.path.join(args.out, "meta.jsonl"), "w").write("\n".join(json.dumps(m) for m in meta))
