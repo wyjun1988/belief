@@ -22,6 +22,9 @@ ROOT = os.environ.get("THOR_ROOT", "data/hssd20")
 A3P = os.environ.get("A3_PREFIX", "/tmp/hs_a_")
 TH = float(os.environ.get("TH", "0.12"))
 DEV = "mps" if torch.backends.mps.is_available() else "cpu"
+if os.environ.get("INITMAP_GEO", "1") != "1":
+    print("⚠️  INITMAP_GEO=0 — 프레임의 방을 그대로 쓴다. 문 너머 물체가 오염되어\n"
+          "    방 배정이 0.32 수준으로 무너진다(§121 후속 실측). 비교용으로만.", flush=True)
 
 op = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
 on = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to(DEV).eval()

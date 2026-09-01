@@ -19,6 +19,11 @@ A3P = os.path.expanduser(os.environ.get("A3_PREFIX", "~/khcache/h4/cache/a3_"))
 QCP = os.path.expanduser(os.environ.get("QC_PREFIX", "~/khcache/h4/cache/qc_"))
 AXP = os.path.expanduser(os.environ.get("AX_PREFIX", "~/khcache/h4/cache/ax_"))
 SG_INIT = os.environ.get("SG_INIT", "gt")
+if SG_INIT == "gt":
+    print("⚠️  SG_INIT=gt — **초기 씬그래프가 GT 다**. ①(안 움직인 물체) 정답률은\n"
+          "    '정답을 그대로 답한' 자명한 값이며 시스템 능력이 아니다.\n"
+          "    무GT 수치는 SG_INIT=hybrid (build_initmap 산출 필요). (2026-09-01 반복 실수 가드)",
+          flush=True)
 P_ACC, P_ID = 0.42, 0.05
 ABS_TH = float(os.environ.get("ABS_TH", "0.055"))   # ⚠ thor4 384 절대값 — 도메인마다 재라 (§89)
 # ── 실검·투영 배선 (§110): 실점수+exnew+삼각측량이 마진 게이트를 대체.
@@ -404,7 +409,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             res["moved_sys"].append(ans == tgt); res["moved_rec"].append(record == tgt)
 
 n = len(res["sys"])
-print("=== 온라인 상태기계 v1 · %s · SG_INIT=%s · n=%d ===" % (ROOT, SG_INIT, n))
+print("=== 온라인 상태기계 v1 · %s · SG_INIT=%s%s · n=%d ==="
+      % (ROOT, SG_INIT, " ⚠️GT" if SG_INIT == "gt" else " (무GT)", n))
 print("  정지 지도(t=0 GT)        %.3f" % np.mean(res["static"]))
 print("  **기록(갱신 후)**         **%.3f**" % np.mean(res["rec"]))
 print("  **최종 답(부재분기 포함)** **%.3f**" % np.mean(res["sys"]))
