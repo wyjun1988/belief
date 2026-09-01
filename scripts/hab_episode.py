@@ -24,6 +24,10 @@ ap.add_argument("--dataset", required=True)
 ap.add_argument("--frames", type=int, default=200)
 ap.add_argument("--moves", type=int, default=3)
 ap.add_argument("--rooms", type=int, default=4)
+ap.add_argument("--move", default=None,
+                help="LLM 시나리오 사전확률(hssd_move.json) — 방 체류·이동성향·목적지. "
+                     "없으면 전부 균등 난수가 되어 재방문 패턴이 비현실적이고 "
+                     "목적지 균등이라 belief 가 원리적으로 못 맞힌다 (§67)")
 ap.add_argument("--far", type=float, default=0.5,
                 help="이동 중 '가장 먼 방'으로 보내는 비율 — 경우③ 표본 확보용")
 ap.add_argument("--w", type=int, default=768)
@@ -136,12 +140,29 @@ rng.shuffle(cands)
 plan = {}
 # 경우③(부재→belief) 표본: --far 비율만큼은 **현재 방에서 가장 먼 방**으로 옮긴다
 # → 이동 후 재목격 확률이 낮아지고 옛 방 재방문은 유지되어 ③ 조건이 성립한다
+MOVE = json.load(open(args.move)) if args.move else None
+import re as _re
+def _rtype(r):                      # bedroom.001 → bedroom · room|2 → room
+    return _re.sub(r"\.\d+$", "", rt.get(r, r))
+if MOVE:                            # 이동 물체를 **이동성향**으로 뽑는다 (균등 아님)
+    mob = MOVE.get("mobility", {})
+    w_ = np.array([mob.get(objs[o]["type"], 0.3) + 1e-3 for o in cands], float)
+    if w_.sum() > 0 and len(cands) > args.moves:
+        idx = rng.choice(len(cands), size=min(args.moves * 3, len(cands)),
+                         replace=False, p=w_ / w_.sum())
+        cands = [cands[i2] for i2 in idx]
 cen = {r: np.array(pl).mean(0) for r, pl in polys.items()}
 for i2, oid in enumerate(cands[:args.moves]):
     others = [r for r in polys if r != obj_room[oid]]
     if not others: continue
     if i2 < int(args.moves * args.far):
         tgt = max(others, key=lambda r: float(np.linalg.norm(cen[r] - cen[obj_room[oid]])))
+    elif MOVE and MOVE.get("dest", {}).get(objs[oid]["type"]):
+        # **목적지 사전확률**: 머그컵은 부엌에 보관되지만 거실에서 발견된다
+        dd = MOVE["dest"][objs[oid]["type"]]
+        wv = np.array([dd.get(_rtype(r), 0.02) for r in others], float)
+        tgt = others[int(rng.choice(len(others), p=wv / wv.sum()))] if wv.sum() > 0 \
+              else rng.choice(others)
     else:
         tgt = rng.choice(others)
     plan[int(rng.integers(args.frames // 5, args.frames * 3 // 5))] = (oid, tgt)
@@ -179,7 +200,18 @@ ri, t = 0, 0
 yaw = 0.0
 while t < args.frames:
     if ri + 1 >= len(route):
-        goal = sim.pathfinder.get_random_navigable_point()
+        if MOVE and MOVE.get("dwell"):
+            # 방 체류 가중으로 다음 목적지 방을 고른다 — 거실 오래, 창고 짧게
+            rs_ = list(polys); wv = np.array([MOVE["dwell"].get(_rtype(r), 0.1)
+                                              for r in rs_], float)
+            r_pick = rs_[int(rng.choice(len(rs_), p=wv / wv.sum()))]
+            c_ = np.array(polys[r_pick]).mean(0)
+            goal = sim.pathfinder.get_random_navigable_point_near(
+                np.array([c_[0], float(cur[1]), c_[1]]), 3.0)
+            if not np.isfinite(goal).all():
+                goal = sim.pathfinder.get_random_navigable_point()
+        else:
+            goal = sim.pathfinder.get_random_navigable_point()
         path = habitat_sim.ShortestPath(); path.requested_start, path.requested_end = cur, goal
         if not sim.pathfinder.find_path(path) or len(path.points) < 2: continue
         route, ri = list(path.points), 0
