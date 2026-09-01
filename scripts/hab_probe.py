@@ -23,6 +23,11 @@ ap.add_argument("--h", type=int, default=768)
 args = ap.parse_args()
 os.makedirs(os.path.join(args.out, "frames"), exist_ok=True)
 rng = np.random.default_rng(0)
+STRUCT = {"wall", "floor", "ceiling", "door", "window", "picture", "curtain",
+          "rug", "mirror", "blinds", "wall art", "doorway", "stairs", "railing",
+          "column", "beam", "vent", "switch", "outlet", "molding", "baseboard",
+          "carpet", "wallpaper", "tile", "panel", "frame"}
+
 
 cfg = habitat_sim.SimulatorConfiguration()
 cfg.scene_id = args.scene
@@ -86,10 +91,15 @@ for oi in inst.get("object_instances", []):
     base = oi["template_name"].split("/")[-1]
     label = HASHCAT.get(base)
     if not label:
+        if HASHCAT:
+            continue          # 카테고리표가 있는데 매핑 실패 = 해시 잔재 → 버린다
         for pre in ("frl_apartment_", "apt_", "object_"):
             if base.startswith(pre): base = base[len(pre):]
         label = "".join(c for c in base if c.isalpha()).lower()
-    if not label or label in ("wall", "floor", "ceiling"): continue
+    # 구조물·벽부착물 제외: 근거리 크롭이 벽 텍스처만 담아 판별 불가하고
+    # (HSSD 중간판독에서 <2m AUC 0.60 붕괴의 주범) 우리 과제 대상도 아니다.
+    # 해시 잔재(매핑 실패)도 제외 — 라벨이 무의미하면 채점이 무효다.
+    if not label or label in STRUCT: continue
     OBJS.append((label, np.array(oi["translation"], float)))
 print("인스턴스 JSON 물체 %d" % len(OBJS), flush=True)
 
