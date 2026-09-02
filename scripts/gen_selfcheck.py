@@ -18,14 +18,24 @@ DEV = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_a
 op = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
 on = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to(DEV).eval()
 
+_TX = {}
+def _text(ty):
+    if ty not in _TX:
+        ti = op(text=[["a photo of a " + ty]], images=[Image.new("RGB", (64, 64), (128,) * 3)],
+                return_tensors="pt").to(DEV)
+        with torch.no_grad():
+            o = on.owlv2(input_ids=ti["input_ids"], attention_mask=ti["attention_mask"],
+                         pixel_values=ti["pixel_values"], return_dict=True)
+        _TX[ty] = (o.text_embeds, (ti["input_ids"][:, 0] > 0))
+    return _TX[ty]
+
 def detect(path, ty):
-    ti = op(text=[["a photo of a " + ty]], images=[Image.open(path).convert("RGB")], return_tensors="pt").to(DEV)
+    TX, MK = _text(ty)
+    pv = op(images=[Image.open(path).convert("RGB")], return_tensors="pt")["pixel_values"].to(DEV)
     with torch.no_grad():
-        o = on.owlv2(input_ids=ti["input_ids"], attention_mask=ti["attention_mask"],
-                     pixel_values=ti["pixel_values"], return_dict=True)
-        fm = o.image_embeds; b, ph, pw, hd = fm.shape
-        lg, _ = on.class_predictor(fm.reshape(b, ph*pw, hd), o.text_embeds.unsqueeze(0).expand(b, -1, -1),
-                                   (ti["input_ids"][:, 0] > 0).unsqueeze(0).expand(b, -1))
+        fm = on.image_embedder(pixel_values=pv)[0]; b, ph, pw, hd = fm.shape
+        lg, _ = on.class_predictor(fm.reshape(b, ph*pw, hd), TX.unsqueeze(0).expand(b, -1, -1),
+                                   MK.unsqueeze(0).expand(b, -1))
     pr = torch.sigmoid(lg)[0, :, 0]; k = int(pr.argmax())
     return float(pr.max()), ((k % pw + .5) / pw * 768, (k // pw + .5) / ph * 768)
 
