@@ -37,6 +37,10 @@ ap.add_argument("--case3", type=float, default=0.5,
                 help="이동 중 이 비율을 **경우③ 대본**으로: 이동 후 배회에서 목적지 방을 제외하고 "
                      "원래 방을 한 번 강제 재방문. 나머지는 경우② 대본(목적지 방 강제 방문). "
                      "무작위 배회로는 ③이 안 생긴다(v2: 이동 18·③ 0) — AUDIT 제안1")
+ap.add_argument("--evidence", default=None,
+                help="K:D — ② 역할 이동 후 궤적이 물체에서 거리 D(m) 인 지점을 K 번 들른다 "
+                     "(물체를 향해 1.5m 직진 구간으로 진입 → 그 방향을 보며 걷는다). 증거량을 "
+                     "시나리오 우연이 아닌 통제 변수로 (EVAL_PROTOCOL_V2)")
 ap.add_argument("--far", type=float, default=0.5,
                 help="이동 중 '가장 먼 방'으로 보내는 비율 — 경우③ 표본 확보용")
 ap.add_argument("--w", type=int, default=768)
@@ -318,6 +322,22 @@ def line_of_sight(cam, oid):
     h = res.hits[0]
     return h.object_id == OBJID[oid] or abs(h.ray_distance - L) < 0.15
 
+def evidence_goals(oid, pos, K, D):
+    # 거리 D 에서 시선이 닿는 보행점 K 개 → 각각 [멀리(D+1.5) → 가까이(D)] 두 목적지로 심는다.
+    # 두 번째 구간을 걸을 때 진행 방향 = 물체 방향이므로 카메라가 물체를 본다.
+    tg = obj_center(oid); out = []; start = float(rng.uniform(0, 360))
+    for ang in np.linspace(start, start + 360, 16, endpoint=False):
+        a = np.radians(ang); dirv = np.array([np.sin(a), 0, np.cos(a)])
+        near = sim.pathfinder.snap_point(np.array([pos[0], pos[1], pos[2]]) + D * dirv)
+        far = sim.pathfinder.snap_point(np.array([pos[0], pos[1], pos[2]]) + (D + 1.5) * dirv)
+        if not (np.isfinite(near).all() and np.isfinite(far).all()): continue
+        dn = float(np.hypot(near[0] - pos[0], near[2] - pos[2]))
+        if not (0.6 * D <= dn <= 1.4 * D): continue
+        if not line_of_sight(np.array(near, float) + np.array([0, 1.5, 0]), oid): continue
+        out.append((("pt", np.array(far, float)), ("pt", np.array(near, float))))
+        if len(out) >= K: break
+    return out
+
 def witness(oid, pos, t, k):
     # 새 자리 주위 8방향 중 보행 가능한 2m 지점에서 물체를 향해 렌더 — 시선이 닿으면 저장
     os.makedirs(os.path.join(args.out, "witness"), exist_ok=True)
@@ -353,15 +373,19 @@ while t < args.frames:
     if ri + 1 >= len(route):
         if forced_goals or (MOVE and MOVE.get("dwell")):
             # 대본 목적지가 있으면 그 방, 아니면 방 체류 가중(③ 제외 방은 뺀다)
+            r_pick = None; goal = None
             if forced_goals:
-                r_pick = forced_goals.pop(0)
+                fg = forced_goals.pop(0)
+                if isinstance(fg, tuple) and fg[0] == "pt": goal = np.array(fg[1], float)
+                else: r_pick = fg
             else:
                 rs_ = [r for r in polys if r not in excluded_rooms] or list(polys)
                 wv = np.array([MOVE["dwell"].get(_rtype(r), 0.1) for r in rs_], float)
                 r_pick = rs_[int(rng.choice(len(rs_), p=wv / wv.sum()))]
-            c_ = np.array(polys[r_pick]).mean(0)
-            goal = sim.pathfinder.get_random_navigable_point_near(
-                np.array([c_[0], float(cur[1]), c_[1]]), 3.0)
+            if goal is None:
+                c_ = np.array(polys[r_pick]).mean(0)
+                goal = sim.pathfinder.get_random_navigable_point_near(
+                    np.array([c_[0], float(cur[1]), c_[1]]), 3.0)
             if not np.isfinite(goal).all():
                 goal = sim.pathfinder.get_random_navigable_point()
         else:
@@ -444,7 +468,17 @@ while t < args.frames:
                         excluded_rooms.add(real); forced_goals.append(moves[-1]["frm"])
                         hidden_oids.append(oid)
                     else:
-                        forced_goals.append(real)
+                        if args.evidence:
+                            _K, _D = args.evidence.split(":"); _K, _D = int(_K), float(_D)
+                            _evs = evidence_goals(oid, newp, _K, _D)
+                            _low = sorted(polys, key=lambda r: (MOVE or {}).get("dwell", {}).get(_rtype(r), 0.1))
+                            for _j, (_gf, _gn) in enumerate(_evs):
+                                forced_goals += [_gf, _gn]
+                                if _j < len(_evs) - 1 and _low:   # 방문 사이에 다른 방을 끼워 별개 방문으로
+                                    forced_goals.append(_low[0] if _low[0] != real else (_low[1] if len(_low) > 1 else _low[0]))
+                            moves[-1]["evidence_visits"] = len(_evs)
+                        else:
+                            forced_goals.append(real)
                     obj_room[oid] = real
                 else:
                     # 기하 게이트 실패(허공/박힘/시선 없음) → **원위치로 되돌리고 기록하지 않는다**
