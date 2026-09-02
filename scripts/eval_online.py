@@ -138,7 +138,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         TS = QS[:, j] + STx[:, j]
         vis = np.array([oid in live[t].get("vis", []) for t in ts])
         base = float(np.median(TS))
-        _vr = np.random.default_rng(hash((hn, oid)) % 2**31)
+        _vr = np.random.default_rng(__import__('zlib').crc32((hn + '|' + oid).encode()))   # 문자열 hash 는 프로세스마다 달라 결과가 흔들렸다
 
         def loc_of(idx):
             acc = {r: 0.0 for r in rids}

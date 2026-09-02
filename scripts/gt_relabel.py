@@ -22,16 +22,16 @@ for f in sorted(glob.glob(os.path.join(root, "house_*", "gt.json"))):
     def room_at(x, z):
         hits = [r for r, pl in polys.items() if pip((x, z), pl)]
         if hits: return min(hits, key=lambda r: (lambda P: abs(sum(P[k][0]*P[(k+1)%len(P)][1]-P[(k+1)%len(P)][0]*P[k][1] for k in range(len(P)))))(polys[r]))   # 겹치면 면적 작은 방
-        return min(polys, key=lambda r: min((x - v[0]) ** 2 + (z - v[1]) ** 2 for v in polys[r]))
+        return None   # 폴리곤 밖 → 기존 라벨 유지 (HSSD region 은 바닥 전체를 덮지 않는다)
     for oid, v in g["gt0"].items():
-        r = room_at(v["pos"][0], v["pos"][2]); tot["gt0"][1] += 1; tot["gt0"][0] += (r != v["room"])
+        r = room_at(v["pos"][0], v["pos"][2]) or v["room"]; tot["gt0"][1] += 1; tot["gt0"][0] += (r != v["room"])
         if apply: v["room"] = r
     for m in g["moves"]:
         if m.get("pos"):
-            r = room_at(m["pos"][0], m["pos"][2]); tot["moves"][1] += 1; tot["moves"][0] += (r != m["to"])
+            r = room_at(m["pos"][0], m["pos"][2]) or m["to"]; tot["moves"][1] += 1; tot["moves"][0] += (r != m["to"])
             if apply: m["to"] = r
     for l in g["live"]:
-        r = room_at(l["apos"][0], l["apos"][1]); tot["live"][1] += 1; tot["live"][0] += (r != l["room"])
+        r = room_at(l["apos"][0], l["apos"][1]) or l["room"]; tot["live"][1] += 1; tot["live"][0] += (r != l["room"])
         if apply: l["room"] = r
     if apply:
         last = {}
