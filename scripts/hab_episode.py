@@ -52,6 +52,16 @@ rng = np.random.default_rng(args.seed)
 W = H = args.w
 F = (W / 2.0) / np.tan(np.radians(45.0))
 
+def _pip(pt, poly):
+    # 점-폴리곤(ray casting). AABB 는 HSSD 처럼 L자·겹치는 방에서 틀린다.
+    x, z = float(pt[0]), float(pt[1]); ins = False; n = len(poly)
+    for k in range(n):
+        x1, z1 = poly[k]; x2, z2 = poly[(k + 1) % n]
+        if (z1 > z) != (z2 > z):
+            xi = x1 + (z - z1) * (x2 - x1) / ((z2 - z1) or 1e-9)
+            if x < xi: ins = not ins
+    return ins
+
 STRUCT = {"wall", "floor", "ceiling", "door", "window", "picture", "curtain", "rug",
           "mirror", "blinds", "stairs", "railing", "beam", "frame", "tvscreen"}
 MOVABLE = ("book", "cushion", "plate", "bowl", "cup", "mug", "lamp", "clock", "vase",
@@ -133,6 +143,8 @@ if not polys:
         polys["room|%d" % c] = [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]]
     for (oid, v), c in zip(objs.items(), lab): obj_room[oid] = "room|%d" % c
 def room_at(x, z):
+    hits = [r for r, pl in polys.items() if _pip((x, z), pl)]
+    if hits: return min(hits, key=lambda r: len(polys[r]))        # GT 라벨: 폴리곤 (AABB 는 겹침에서 오류)
     best = (1e9, None)
     for r, pl in polys.items():
         a = np.array(pl); c = a.mean(0)
@@ -477,6 +489,7 @@ while t < args.frames:
                                 if _j < len(_evs) - 1 and _low:   # 방문 사이에 다른 방을 끼워 별개 방문으로
                                     forced_goals.append(_low[0] if _low[0] != real else (_low[1] if len(_low) > 1 else _low[0]))
                             moves[-1]["evidence_visits"] = len(_evs)
+                            if not _evs: forced_goals.append(real)   # 시선 지점 없으면 방 방문으로 후퇴
                         else:
                             forced_goals.append(real)
                     obj_room[oid] = real

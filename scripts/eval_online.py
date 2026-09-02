@@ -64,12 +64,12 @@ if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
 
 # ── 재료 사다리 (AUDIT_20260902 조치1): 어떤 GT 가 들어갔는지 사람이 아니라 코드가 찍는다 ──
 _LG = os.environ.get("LOC_GEO", "0") == "1"
-LADDER = "초기맵:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s" % (
+LADDER = "초기맵:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s · c0창:%s" % (
     "GT" if SG_INIT == "gt" else "검출",
     ("GT" if os.environ.get("LOC_YAW_GT") == "1" else "투표") if _LG else "융합(비기하)",
     ("DA" if os.environ.get("GEO_DEPTH") else "GT") if _LG else "—",
     "실측" if VSC is not None else "모의(GT vis)",
-    os.path.basename(PRIOR_JSON))
+    os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"))
 _NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT"))
 print("재료 사다리 → " + LADDER, flush=True)
 if _NGT:
@@ -118,7 +118,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     arm = np.array([live[t]["room"] for t in ts])
     AS = S[:, nT:]
     im = {}; im_inst = {}
-    imf = os.path.join(os.path.realpath(hd), "initmap_owl.json")
+    imf = os.path.join(os.path.realpath(hd), os.environ.get("INITMAP_FILE", "initmap_owl.json"))
     if os.path.exists(imf):
         best = {}
         for i2 in json.load(open(imf)):
@@ -325,7 +325,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     _qv = [QS[i2, j] for i2, _s in _pas]
                     _qm = float(np.median(_qv))
                     _pas = [(i2, s_) for (i2, s_), q in zip(_pas, _qv) if q >= _qm] or _pas
-                _pick = [i2 for i2, _s in _pas][:3]
+                _pick = [i2 for i2, _s in _pas][:int(os.environ.get("C0_WIN", "3"))]   # 채택 창 (기본 최신 3장)
                 if len(_pick) >= C0_MIN:
                     _rays = [r for r in (_geo_ray(i2) for i2 in _pick) if r]
                     _pts = []

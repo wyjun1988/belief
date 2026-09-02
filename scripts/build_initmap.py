@@ -22,6 +22,16 @@ ROOT = os.environ.get("THOR_ROOT", "data/hssd20")
 A3P = os.environ.get("A3_PREFIX", "/tmp/hs_a_")
 TH = float(os.environ.get("TH", "0.12"))
 DEV = "mps" if torch.backends.mps.is_available() else "cpu"
+
+def _pip(pt, poly):
+    # 점-폴리곤(ray casting). AABB 는 HSSD 처럼 L자·겹치는 방에서 틀린다.
+    x, z = float(pt[0]), float(pt[1]); ins = False; n = len(poly)
+    for k in range(n):
+        x1, z1 = poly[k]; x2, z2 = poly[(k + 1) % n]
+        if (z1 > z) != (z2 > z):
+            xi = x1 + (z - z1) * (x2 - x1) / ((z2 - z1) or 1e-9)
+            if x < xi: ins = not ins
+    return ins
 if os.environ.get("INITMAP_GEO", "1") != "1":
     print("⚠️  INITMAP_GEO=0 — 프레임의 방을 그대로 쓴다. 문 너머 물체가 오염되어\n"
           "    방 배정이 0.32 수준으로 무너진다(§121 후속 실측). 비교용으로만.", flush=True)
@@ -53,6 +63,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     Wf = float(os.environ.get("FRAME_W", "768")); Ff = Wf / 2
     def pbx(cx): return np.degrees(np.arctan((cx - Wf / 2) / Ff))
     def room_pt(pt):
+        hits = [r for r, pl in polys.items() if _pip(pt, pl)]
+        if hits: return min(hits, key=lambda r: len(polys[r]))     # 겹치면 작은(안쪽) 방
         best = (1e9, None)
         for r, pl in polys.items():
             a = np.array(pl); c = a.mean(0)
@@ -143,7 +155,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                         conf=round(sc2[best_r] / tot, 3), n=int(cs.get(best_r, 0))))
     if os.environ.get("INITMAP_INST", "1") == "1" and inst_out:
         out = inst_out          # 인스턴스판 사용 (타입당 여러 방 허용)
-    json.dump(out, open(os.path.join(os.path.realpath(hd), "initmap_owl.json"), "w"))
+    json.dump(out, open(os.path.join(os.path.realpath(hd), os.environ.get("INITMAP_OUT", "initmap_owl.json")), "w"))
     # 정확도 진단 (GT 대조 — 기록만, 구축엔 미사용)
     gt_room = {}
     for v in g["gt0"].values(): gt_room.setdefault(v["type"], v["room"])
