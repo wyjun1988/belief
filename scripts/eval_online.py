@@ -208,12 +208,16 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             def pb(cx): return np.degrees(np.arctan((cx - FRAME_W/2.0) / FF))
             def br(dx, dz): return np.degrees(np.arctan2(dx, dz))
             def pxof(pi): return (pi % pw + .5) / pw * FRAME_W
+            if os.environ.get("LOC_YAW_GT") == "1" and m.get("yaw") is not None:
+                # 사다리 ①: 포즈 = 시뮬 제공물. ⚠️ 이 분기는 2026-09-02 밤까지 **없었다** — "포즈:GT" 로
+                # 표기된 HSSD 판 전부가 실제로는 앵커 투표(구 게이트)로 돌았다 (§129 정정).
+                return ap, float(m["yaw"]) + pb(pxof(P[i, ti]))
             hyp = []
             # 앵커 **존재 게이트** (2026-09-02): exemplar 점수만으로는 보이지 않는 앵커도 통과해
             # 쓰레기 투표가 된다(오차 23~54°). exemplar ≥ ANCH_EX 이고 그 타입의 OWL 검출이
             # ≥ ANCH_TY 이며 두 패치가 ≤ ANCH_DP 칸 안에서 일치할 때만 가설 (1채 실측: 커버리지
             # 0.55 · 오차 중앙 3.4° · <10° 0.67).
-            for k2 in np.where(_XSc[i] >= _ANCH_EX)[0]:
+            for k2 in np.where(_XS[i] >= _ANCH_EX)[0]:      # 원점수 (중앙값 뺀 _XSc 에 0.80 을 걸면 아무것도 안 남는다)
                 a = _axids[k2]
                 if a not in stp: continue
                 _ty = sm["static"].get(a, {}).get("type")
@@ -336,6 +340,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     _qm = float(np.median(_qv))
                     _pas = [(i2, s_) for (i2, s_), q in zip(_pas, _qv) if q >= _qm] or _pas
                 _pick = [i2 for i2, _s in _pas][:int(os.environ.get("C0_WIN", "3"))]   # 채택 창 (기본 최신 3장)
+                if os.environ.get("C0_DIAG") == "1":
+                    _dg = dict(house=hn, oid=oid, n_rr=len(_rr), n_pas=len(_pas), pick=[int(ts[i2]) for i2 in _pick],
+                               rays=[bool(_geo_ray(i2)) for i2 in _pick], record=record)
                 if len(_pick) >= C0_MIN:
                     _rays = [r for r in (_geo_ray(i2) for i2 in _pick) if r]
                     _pts = []
@@ -346,11 +353,15 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     if _pts:                        # 삼각측량 성공 = 강한 증거
                         _rm = _room_pt(np.median(np.array(_pts), 0))
                         if _rm and _rm != record: alt = _rm
+                        if os.environ.get("C0_DIAG") == "1": _dg.update(tri_room=_rm, n_pts=len(_pts))
                     else:                           # 프레임별 투영 2장+ 합의 요구
                         _rms = [x for x in (_geo_room_d(i2) for i2 in _pick) if x]
                         _cc = Counter(_rms).most_common(1)
                         if _cc and _cc[0][1] >= min(2, C0_MIN) and _cc[0][0] != record:
                             alt = _cc[0][0]
+                        if os.environ.get("C0_DIAG") == "1": _dg.update(proj_rooms=_rms)
+                if os.environ.get("C0_DIAG") == "1" and "_dg" in dir():
+                    _dg.update(alt=alt, geo=_geo is not None); print("C0_DIAG " + json.dumps(_dg, ensure_ascii=False), flush=True)
         if record is None:
             record = max(((PR.get(v0["type"], {}).get(_rtn(rt[r]), .25)/max(nrt[rt[r]],1), r)
                           for r in rids))[1]
