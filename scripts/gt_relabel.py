@@ -21,7 +21,7 @@ for f in sorted(glob.glob(os.path.join(root, "house_*", "gt.json"))):
     g = json.load(open(f)); polys = g["scene_meta"]["polys"]
     def room_at(x, z):
         hits = [r for r, pl in polys.items() if pip((x, z), pl)]
-        if hits: return min(hits, key=lambda r: len(polys[r]))
+        if hits: return min(hits, key=lambda r: (lambda P: abs(sum(P[k][0]*P[(k+1)%len(P)][1]-P[(k+1)%len(P)][0]*P[k][1] for k in range(len(P)))))(polys[r]))   # 겹치면 면적 작은 방
         return min(polys, key=lambda r: min((x - v[0]) ** 2 + (z - v[1]) ** 2 for v in polys[r]))
     for oid, v in g["gt0"].items():
         r = room_at(v["pos"][0], v["pos"][2]); tot["gt0"][1] += 1; tot["gt0"][0] += (r != v["room"])

@@ -144,7 +144,7 @@ if not polys:
     for (oid, v), c in zip(objs.items(), lab): obj_room[oid] = "room|%d" % c
 def room_at(x, z):
     hits = [r for r, pl in polys.items() if _pip((x, z), pl)]
-    if hits: return min(hits, key=lambda r: len(polys[r]))        # GT 라벨: 폴리곤 (AABB 는 겹침에서 오류)
+    if hits: return min(hits, key=lambda r: (lambda P: abs(sum(P[k][0]*P[(k+1)%len(P)][1]-P[(k+1)%len(P)][0]*P[k][1] for k in range(len(P)))))(polys[r]))   # 겹치면 면적 작은 방
     best = (1e9, None)
     for r, pl in polys.items():
         a = np.array(pl); c = a.mean(0)
