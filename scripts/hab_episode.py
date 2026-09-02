@@ -287,7 +287,9 @@ for i2, oid in enumerate(cands[:args.moves]):
     role = "c3" if int(round((i2 + 1) * args.case3)) > int(round(i2 * args.case3)) else "c2"
     if role == "c3":
         _dw = (MOVE or {}).get("dwell", {})
-        _low = [r for r in others if _dw.get(_rtype(r), 0.1) <= 0.35] or others
+        _in = [r for r in others if not any(k in _rtype(r) for k in
+                                            ("outdoor", "balcony", "porch", "garage", "yard"))] or others
+        _low = [r for r in _in if _dw.get(_rtype(r), 0.1) <= 0.35] or _in      # 실외는 ④ 몫 — ③ 목적지에서 제외
         tgt = max(_low, key=lambda r: float(np.linalg.norm(cen[r] - cen[obj_room[oid]])))
     plan[int(rng.integers(args.frames // 5, args.frames * 3 // 5))] = (oid, tgt, role)
 print("이동 계획 %d건 (③대본 %d)" % (len(plan), sum(1 for v in plan.values() if v[2] == "c3")), flush=True)
