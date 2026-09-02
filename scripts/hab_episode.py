@@ -33,6 +33,10 @@ ap.add_argument("--move", default=None,
 ap.add_argument("--outdoor", type=float, default=0.0,
                 help="이동 중 이 비율은 **집 밖**(outdoor/balcony/porch/garage)으로 — "
                      "'가방에 넣어 나갔다' 시나리오. 답은 '밖'이 되어야 한다")
+ap.add_argument("--case3", type=float, default=0.5,
+                help="이동 중 이 비율을 **경우③ 대본**으로: 이동 후 배회에서 목적지 방을 제외하고 "
+                     "원래 방을 한 번 강제 재방문. 나머지는 경우② 대본(목적지 방 강제 방문). "
+                     "무작위 배회로는 ③이 안 생긴다(v2: 이동 18·③ 0) — AUDIT 제안1")
 ap.add_argument("--far", type=float, default=0.5,
                 help="이동 중 '가장 먼 방'으로 보내는 비율 — 경우③ 표본 확보용")
 ap.add_argument("--w", type=int, default=768)
@@ -207,8 +211,10 @@ def place_at(o, x, z, y_s, off):
 # ── 이동 계획: 타입 단일 + 옮길 만한 것 ──
 from collections import Counter
 cnt = Counter(v["type"] for v in objs.values())
+MOUNTED = ("ceiling", "wall lamp", "wall clock", "curtain", "chandelier", "sconce")
 cands = [o for o, v in objs.items()
-         if cnt[v["type"]] == 1 and any(m in v["type"] for m in MOVABLE)]
+         if cnt[v["type"]] == 1 and any(m in v["type"] for m in MOVABLE)
+         and not any(m in v["type"] for m in MOUNTED)]
 _n0 = len(cands)
 cands = [o_ for o_ in cands if obj_handle(o_)]
 _n1 = len(cands)
@@ -250,12 +256,15 @@ for i2, oid in enumerate(cands[:args.moves]):
               else rng.choice(others)
     else:
         tgt = rng.choice(others)
-    plan[int(rng.integers(args.frames // 5, args.frames * 3 // 5))] = (oid, tgt)
-print("이동 계획 %d건" % len(plan), flush=True)
+    role = "c3" if i2 < int(round(args.moves * args.case3)) else "c2"
+    plan[int(rng.integers(args.frames // 5, args.frames * 3 // 5))] = (oid, tgt, role)
+print("이동 계획 %d건 (③대본 %d)" % (len(plan), sum(1 for v in plan.values() if v[2] == "c3")), flush=True)
+excluded_rooms = set()      # ③ 대본: 이동 후 배회에서 제외할 목적지 방
+forced_goals = []           # 대본이 요구하는 다음 목적지 방 (③: 원래 방 / ②: 목적지 방)
 
 # ── 연속 보행 궤적 (텔레포트 아님) ──
 
-plan_oids = {o for o, _d in plan.values()}
+plan_oids = {v[0] for v in plan.values()}
 live, moves = [], []
 gt0 = {oid: dict(type=v["type"], room=obj_room[oid],
                  pos=[round(v["pos"][0], 3), round(v["pos"][1], 3), round(v["pos"][2], 3)])
@@ -331,11 +340,14 @@ ri, t = 0, 0
 yaw = 0.0
 while t < args.frames:
     if ri + 1 >= len(route):
-        if MOVE and MOVE.get("dwell"):
-            # 방 체류 가중으로 다음 목적지 방을 고른다 — 거실 오래, 창고 짧게
-            rs_ = list(polys); wv = np.array([MOVE["dwell"].get(_rtype(r), 0.1)
-                                              for r in rs_], float)
-            r_pick = rs_[int(rng.choice(len(rs_), p=wv / wv.sum()))]
+        if forced_goals or (MOVE and MOVE.get("dwell")):
+            # 대본 목적지가 있으면 그 방, 아니면 방 체류 가중(③ 제외 방은 뺀다)
+            if forced_goals:
+                r_pick = forced_goals.pop(0)
+            else:
+                rs_ = [r for r in polys if r not in excluded_rooms] or list(polys)
+                wv = np.array([MOVE["dwell"].get(_rtype(r), 0.1) for r in rs_], float)
+                r_pick = rs_[int(rng.choice(len(rs_), p=wv / wv.sum()))]
             c_ = np.array(polys[r_pick]).mean(0)
             goal = sim.pathfinder.get_random_navigable_point_near(
                 np.array([c_[0], float(cur[1]), c_[1]]), 3.0)
@@ -360,7 +372,7 @@ while t < args.frames:
         sim.get_agent(0).set_state(st)
         # 이동 사건 실행 (관측 밖 여부는 GT 로 기록만 — 채점 시 사용)
         if t in plan:
-            oid, dest = plan[t]
+            oid, dest, role = plan[t]
             pl = np.array(polys[dest]); c = pl.mean(0)
             np_ = sim.pathfinder.get_random_navigable_point_near(np.array([c[0], p[1], c[1]]), 2.0)
             h = obj_handle(oid)
@@ -393,6 +405,11 @@ while t < args.frames:
                     moves.append(dict(t=t, oid=oid, frm=obj_room[oid], to=real, intended=dest,
                                       pos=[round(v, 3) for v in newp], witness=True, supported=True,
                                       witness_file=wit_file, witness_ctr=wit))
+                    moves[-1]["role"] = role
+                    if role == "c3":
+                        excluded_rooms.add(real); forced_goals.append(moves[-1]["frm"])
+                    else:
+                        forced_goals.append(real)
                     obj_room[oid] = real
                 else:
                     # 기하 게이트 실패(허공/박힘/시선 없음) → **원위치로 되돌리고 기록하지 않는다**
