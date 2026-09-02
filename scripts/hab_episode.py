@@ -206,8 +206,10 @@ cands = [o for o, v in objs.items()
 _n0 = len(cands)
 cands = [o_ for o_ in cands if obj_handle(o_)]
 _n1 = len(cands)
+def _hpos(o_):   # rigid 노드(COM 보정) 좌표 — 인스턴스 좌표(자산 원점)와 최대 1.3m 다르다
+    return [float(v) for v in rom.get_object_by_handle(obj_handle(o_)).translation]
 cands = [o_ for o_ in cands
-         if support_offset(rom.get_object_by_handle(obj_handle(o_)), objs[o_]["pos"]) <= 0.6]
+         if support_offset(rom.get_object_by_handle(obj_handle(o_)), _hpos(o_)) <= 0.6]
 print("이동 후보 %d → 핸들 있음 %d → 벽걸이 제외 %d" % (_n0, _n1, len(cands)), flush=True)
 rng.shuffle(cands)
 plan = {}
@@ -266,6 +268,11 @@ for _oid in objs:
         _o = rom.get_object_by_handle(_h)
         if _o is not None: OBJID[_oid] = _o.object_id
 print("물체 %d 중 rigid 핸들 대응 %d" % (len(objs), len(OBJID)), flush=True)
+for _oid, _id in OBJID.items():
+    try:
+        _p = [float(v) for v in rom.get_object_by_id(_id).translation]
+        state[_oid]["pos"] = _p; gt0[_oid]["pos"] = [round(v, 3) for v in _p]
+    except Exception: pass
 
 def obj_center(oid):
     if oid in OBJID:
