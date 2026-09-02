@@ -17,6 +17,8 @@ import argparse, glob, json, os
 import numpy as np
 from PIL import Image
 import habitat_sim
+import magnum as mn
+from PIL import ImageDraw
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--scene", required=True)
@@ -198,6 +200,80 @@ gt0 = {oid: dict(type=v["type"], room=obj_room[oid],
                  pos=[round(v["pos"][0], 3), round(v["pos"][1], 3), round(v["pos"][2], 3)])
        for oid, v in objs.items()}
 state = {oid: dict(v) for oid, v in objs.items()}
+
+# ── 배치·가시성 정직성 (AUDIT 2026-09-02 후속) ──
+# 종전: 이동 시 x·z 만 바닥 보행점으로 옮기고 **높이는 원래 값 유지** → 테이블 위 램프가
+# 새 자리에서 소파 몸체에 박혀 렌더에 없었다(이동 후 OWL 검출 0/417). GT 는 "보인다" 고
+# 했으므로 ② 는 처음부터 풀 수 없는 문제였다. 고침: 받침면 레이캐스트 배치 + GT 는 실제
+# 좌표 + 가시성은 카메라→물체 시선 검사 + 이동마다 증인 렌더 self-test.
+OBJID = {}
+for _oid in objs:
+    _h = obj_handle(_oid)
+    if _h:
+        _o = rom.get_object_by_handle(_h)
+        if _o is not None: OBJID[_oid] = _o.object_id
+print("물체 %d 중 rigid 핸들 대응 %d" % (len(objs), len(OBJID)), flush=True)
+
+def _down_hits(x, y_top, z, skip_id):
+    ray = habitat_sim.geo.Ray(mn.Vector3(float(x), float(y_top), float(z)), mn.Vector3(0., -1., 0.))
+    res = sim.cast_ray(ray, max_distance=6.0)
+    return [h for h in res.hits if h.object_id != skip_id] if res.has_hits() else []
+
+def support_offset(o, pos):
+    # 물체 원점이 받침면 위 얼마나 떠 있나 — 자산마다 원점 규약(바닥/중심)이 달라 실측
+    hs = [h for h in _down_hits(pos[0], pos[1] + 1.0, pos[2], o.object_id) if h.point[1] <= pos[1] + 0.05]
+    return (pos[1] - max(h.point[1] for h in hs)) if hs else 0.0
+
+def place_on_surface(o, x, z, floor_y, off):
+    # 새 자리 받침면: 바닥점 2.5m 위에서 내려쏘아 테이블 높이(≤1.2m) 이하의 가장 높은 면
+    hs = [h for h in _down_hits(x, floor_y + 2.5, z, o.object_id) if h.point[1] <= floor_y + 1.2]
+    y_s = max((h.point[1] for h in hs), default=floor_y)
+    o.motion_type = habitat_sim.physics.MotionType.KINEMATIC
+    o.translation = mn.Vector3(float(x), float(y_s + off), float(z))
+    return [float(v) for v in o.translation]
+
+def obj_center(oid):
+    if oid in OBJID:
+        try:
+            o = rom.get_object_by_id(OBJID[oid]); bb = o.root_scene_node.cumulative_bb
+            return np.array(o.transformation.transform_point(bb.center()), float)
+        except Exception: pass
+    q = state[oid]["pos"]; return np.array([q[0], q[1] + 0.05, q[2]], float)
+
+def line_of_sight(cam, oid):
+    # 카메라→물체 광선의 첫 충돌이 그 물체인가. None = 판정 불가(핸들 없음) → depth 후퇴
+    if oid not in OBJID: return None
+    tg = obj_center(oid); d = tg - np.asarray(cam, float); L = float(np.linalg.norm(d))
+    if L < 1e-3: return True
+    ray = habitat_sim.geo.Ray(mn.Vector3(*[float(v) for v in cam]), mn.Vector3(*[float(v) for v in d / L]))
+    res = sim.cast_ray(ray, max_distance=L + 0.3)
+    if not res.has_hits(): return True
+    h = res.hits[0]
+    return h.object_id == OBJID[oid] or abs(h.ray_distance - L) < 0.15
+
+def witness(oid, pos, t, k):
+    # 새 자리 주위 8방향 중 보행 가능한 2m 지점에서 물체를 향해 렌더 — 시선이 닿으면 저장
+    os.makedirs(os.path.join(args.out, "witness"), exist_ok=True)
+    tg = obj_center(oid)
+    for ang in range(0, 360, 45):
+        a = np.radians(ang)
+        q = sim.pathfinder.snap_point(np.array([pos[0] + 2.0 * np.sin(a), pos[1], pos[2] + 2.0 * np.cos(a)]))
+        if not np.isfinite(q).all() or np.hypot(q[0] - pos[0], q[2] - pos[2]) < 1.0: continue
+        cam = np.array(q, float) + np.array([0, 1.5, 0]); d = tg - cam
+        ry = float(np.arctan2(-d[0], -d[2]))
+        st = habitat_sim.AgentState(); st.position = q
+        st.rotation = np.quaternion(np.cos(ry / 2), 0, np.sin(ry / 2), 0)
+        sim.get_agent(0).set_state(st)
+        if not line_of_sight(cam, oid): continue
+        ob = sim.get_sensor_observations()
+        fwd = np.array([-np.sin(ry), 0, -np.cos(ry)]); rgt = np.array([np.cos(ry), 0, -np.sin(ry)])
+        zc = float(d @ fwd); u = W / 2 + F * float(d @ rgt) / zc; vv = H / 2 - F * float(d[1]) / zc
+        im = Image.fromarray(ob["rgb"][..., :3])
+        ImageDraw.Draw(im).ellipse([u - 12, vv - 12, u + 12, vv + 12], outline="red", width=3)
+        im.save(os.path.join(args.out, "witness", "%02d_t%d_%s.jpg" % (k, t, objs[oid]["type"].replace(" ", "_"))), quality=85)
+        return True
+    return False
+skipped_moves = 0
 cur = sim.pathfinder.get_random_navigable_point()
 goal = sim.pathfinder.get_random_navigable_point()
 path = habitat_sim.ShortestPath(); path.requested_start, path.requested_end = cur, goal
@@ -238,24 +314,23 @@ while t < args.frames:
         if t in plan:
             oid, dest = plan[t]
             pl = np.array(polys[dest]); c = pl.mean(0)
-            np_ = sim.pathfinder.get_random_navigable_point_near(
-                np.array([c[0], p[1], c[1]]), 2.0)
-            if np.isfinite(np_).all():
-                h = obj_handle(oid)
-                if h:
-                    o = rom.get_object_by_handle(h)
-                    if o is not None:
-                        import magnum as mn
-                        o.translation = mn.Vector3(float(np_[0]),
-                                                   float(state[oid]["pos"][1]), float(np_[2]))
-                else:
-                    print("  ⚠ 핸들 못 찾음(렌더 미반영, GT 만 갱신): %s" % oid, flush=True)
-                # ⚠️ navigable 지점이 목적지 방 폴리곤 밖일 수 있다(반경 2m 탐색).
-                # **실제 좌표로 방을 재판정**해야 GT 가 정직하다 (31% 불일치 실측).
-                real = room_at(float(np_[0]), float(np_[2]))
-                moves.append(dict(t=t, oid=oid, frm=obj_room[oid], to=real,
-                                  intended=dest))
-                state[oid]["pos"] = [float(np_[0]), state[oid]["pos"][1], float(np_[2])]
+            np_ = sim.pathfinder.get_random_navigable_point_near(np.array([c[0], p[1], c[1]]), 2.0)
+            h = obj_handle(oid)
+            o = rom.get_object_by_handle(h) if h else None
+            if not np.isfinite(np_).all() or o is None:
+                # 렌더에 반영 못 하는 이동은 **기록하지 않는다** (종전: GT 만 갱신 → 거짓 ②)
+                skipped_moves += 1
+                print("  ⚠ 이동 건너뜀(핸들/보행점 없음): %s" % oid, flush=True)
+            else:
+                off = support_offset(o, state[oid]["pos"])
+                newp = place_on_surface(o, np_[0], np_[2], float(np_[1]), off)
+                real = room_at(newp[0], newp[2])          # 실제 좌표로 방 재판정
+                state[oid]["pos"] = newp                  # GT = 실제 배치 좌표
+                _st = sim.get_agent(0).get_state()
+                wit = witness(oid, newp, t, len(moves))
+                sim.get_agent(0).set_state(_st)
+                moves.append(dict(t=t, oid=oid, frm=obj_room[oid], to=real, intended=dest,
+                                  pos=[round(v, 3) for v in newp], witness=bool(wit)))
                 obj_room[oid] = real
         obs = sim.get_sensor_observations()
         dep = obs["dep"]
@@ -271,7 +346,10 @@ while t < args.frames:
             u = W / 2 + F * float(d3 @ rgt) / zc
             vv = H / 2 - F * float(d3 @ up) / zc
             if not (5 <= u < W - 5 and 5 <= vv < H - 5): continue
-            if abs(float(dep[int(vv), int(u)]) - zc) > 0.6: continue     # 가림 배제
+            _los = line_of_sight(cam, oid)
+            if _los is None:
+                if abs(float(dep[int(vv), int(u)]) - zc) > 0.6: continue     # depth 후퇴
+            elif not _los: continue                                          # 시선 차단(가구 속 등)
             vis.append(oid); ctr[oid] = [round(u, 1), round(vv, 1)]
             dist[oid] = round(float(np.hypot(d3[0], d3[2])), 2)
             if oid not in plan_oids:            # 정적 물체 = 앵커 (exemplar 재국소화용)
@@ -372,3 +450,6 @@ json.dump(dict(house=0, rooms=[dict(id=r, type=rt[r]) for r in polys], room_type
                scene_meta=dict(polys=polys, static=static, doors=[])),
           open(os.path.join(args.out, "gt.json"), "w"))
 print("프레임 %d · 이동 %d · 방 %d → %s" % (len(live), len(moves), len(polys), args.out))
+
+print("이동 기록 %d · 렌더 미반영 건너뜀 %d · 증인 렌더 OK %d/%d"
+      % (len(moves), skipped_moves, sum(1 for m in moves if m.get("witness")), len(moves)), flush=True)

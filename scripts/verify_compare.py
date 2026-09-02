@@ -72,3 +72,64 @@ for c, nm in enumerate(names):
 # 결합: VLM 과 exemplar 의 z 합
 xz = Z[:, 0] + Z[:, 2]; th = np.quantile(xz[~y], 0.95)
 print("%-22s %-9.3f %-9s %-11.3f" % ("z(s_ab)+z(QS) 결합", auc(y, xz), "—", float((xz[y] >= th).mean())))
+
+# ── 크롭 단위 진실: "프레임에 보임"(GT) ≠ "OWL 박스가 그 물체를 잡음" ──
+# 진짜 프레임이라도 박스가 다른 데 있으면 크롭엔 물체가 없다 → 검증기가 우연 수준인 게 당연.
+R_PX = float(os.environ.get("HIT_PX", "60"))
+hit = np.zeros(len(rows), bool); dist_t = np.full(len(rows), np.nan)
+k_ = 0
+for rc in recs:
+    hn, oid = rc["house"], rc["oid"]
+    if hn not in cache: continue
+    za, zq, g, live, mvt = cache[hn]
+    if oid not in list(zq["tg"]) or oid not in mvt: continue
+    vocab = list(za["vocab"]); ti = vocab.index(g["gt0"][oid]["type"])
+    BX = za["bx"] if "bx" in za.files else None
+    ts, P_, pw, ph = za["ts"], za["p"], int(za["pw"]), int(za["ph"])
+    def _bc(i):   # 검출 중심 px — 박스 있으면 박스, 없으면 argmax 패치 중심 (파이프라인과 동일 후퇴)
+        if BX is not None: return float(BX[i, ti][0]) * 768, float(BX[i, ti][1]) * 768
+        return (int(P_[i, ti]) % pw + .5) / pw * 768, (int(P_[i, ti]) // pw + .5) / ph * 768
+    for i, s_ab, s_ac in rc["scored"]:
+        t = int(ts[i]); m = live.get(t, {})
+        c = (m.get("ctr") or {}).get(oid)
+        if c:
+            bcx, bcy = _bc(i)
+            hit[k_] = np.hypot(bcx - c[0], bcy - c[1]) <= R_PX
+            dist_t[k_] = (m.get("dist") or {}).get(oid, np.nan)
+        k_ += 1
+print("박스 캐시:", "있음" if any("bx" in v[0].files for v in cache.values()) else "없음 → 패치 중심으로 적중 판정")
+post = y
+print()
+print("진짜(이동후 목격) %d 중 OWL 박스가 물체 %.0fpx 안에 있음: %d (%.2f)  |  <5m: %d/%d  5m+: %d/%d"
+      % (post.sum(), R_PX, (post & hit).sum(), (post & hit).sum() / max(post.sum(), 1),
+         (post & hit & near).sum(), near.sum(), (post & hit & ~near).sum(), (post & ~near).sum()))
+# 박스가 물체를 잡은 크롭(hit) vs 순수 오검출(비진짜) 로 다시 AUC — 검증기 본연의 분리력
+neg = ~y
+for c, nm in enumerate(names[:3]):
+    x = R[:, 2 + c]; yy = np.concatenate([np.ones((post & hit).sum(), bool), np.zeros(neg.sum(), bool)])
+    xx = np.concatenate([x[post & hit], x[neg]]); th = np.quantile(x[neg], 0.95)
+    print("  %-22s AUC(박스적중 진짜 vs 오검출) %.3f · 수용@기각.95 %.3f (n진짜=%d)"
+          % (nm, auc(yy, xx), float((x[post & hit] >= th).mean()) if (post & hit).any() else float("nan"), (post & hit).sum()))
+
+# ── 상류: 이동 후 보인 **모든** 프레임에서 OWL 이 물체를 검출했는가 (후보 목록과 무관) ──
+TH_OWL = float(os.environ.get("TH", "0.12"))
+rec_b = {"<2m": [0, 0], "2-5m": [0, 0], "5m+": [0, 0]}
+for hn, (za, zq, g, live, mvt) in cache.items():
+    S, ts, vocab = za["s"], za["ts"], list(za["vocab"]); BX = za["bx"] if "bx" in za.files else None
+    for oid, t0 in mvt.items():
+        if oid not in g["gt0"] or g["gt0"][oid]["type"] not in vocab: continue
+        ti = vocab.index(g["gt0"][oid]["type"])
+        for i in range(len(ts)):
+            t = int(ts[i]); m = live.get(t)
+            if not m or t <= t0 or oid not in (m.get("vis") or []): continue
+            d = (m.get("dist") or {}).get(oid, 99); c = (m.get("ctr") or {}).get(oid)
+            b = "<2m" if d < 2 else "2-5m" if d < 5 else "5m+"
+            rec_b[b][1] += 1
+            if c is not None and S[i, ti] >= TH_OWL:
+                if BX is not None: bcx, bcy = float(BX[i, ti][0]) * 768, float(BX[i, ti][1]) * 768
+                else:
+                    P_, pw, ph = za["p"], int(za["pw"]), int(za["ph"])
+                    bcx, bcy = (int(P_[i, ti]) % pw + .5) / pw * 768, (int(P_[i, ti]) // pw + .5) / ph * 768
+                if np.hypot(bcx - c[0], bcy - c[1]) <= R_PX: rec_b[b][0] += 1
+print("OWL 검출 회수율 (이동 후 보인 전 프레임, S≥%.2f & 박스 %.0fpx): %s"
+      % (TH_OWL, R_PX, " · ".join("%s %d/%d=%.2f" % (k, v[0], v[1], v[0] / max(v[1], 1)) for k, v in rec_b.items())))
