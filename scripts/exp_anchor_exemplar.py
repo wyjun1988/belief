@@ -58,11 +58,13 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     live = {m["t"]: m for m in g["live"]}
     # ── 앵커마다 **가장 잘 보인 프레임**을 고른다. 화면 중앙에 가까울수록 잘림이 적다 ──
     best = {}
+    _Wf, _Hf = Image.open(lv[0]).size            # ⚠️ 종전 384 하드코딩(THOR 시절): 768 프레임에서 패치 인덱스가
+                                                 #    격자를 넘어 우하단 구석으로 클램프 → exemplar 전부 같은 패치 → 점수 포화
     for k, t in enumerate(ts):
         for a, c in (live[t].get("anch") or {}).items():
             if not c or a not in sm["static"]:
                 continue
-            q = -abs(c[0] - 192) - abs(c[1] - 192)      # 384px 중앙 기준
+            q = -abs(c[0] - _Wf / 2) - abs(c[1] - _Hf / 2)      # 프레임 중앙 기준
             if q > best.get(a, (-1e9,))[0]:
                 best[a] = (q, k, c)
     anch = sorted(best, key=lambda a: -best[a][0])[:MAXA]
@@ -77,8 +79,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         ce, ph, pw = feats([Image.open(lv[k]).convert("RGB")])
         for a in alist:
             c = best[a][2]
-            cy = min(max(int(c[1] / 384 * ph), 0), ph - 1)
-            cx = min(max(int(c[0] / 384 * pw), 0), pw - 1)
+            cy = min(max(int(c[1] / _Hf * ph), 0), ph - 1)
+            cx = min(max(int(c[0] / _Wf * pw), 0), pw - 1)
             QE[a] = ce[0, cy * pw + cx]
     keys = list(QE)
     Q = torch.stack([QE[a] for a in keys])
