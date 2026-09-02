@@ -281,7 +281,10 @@ for i2, oid in enumerate(cands[:args.moves]):
               else rng.choice(others)
     else:
         tgt = rng.choice(others)
-    role = "c3" if i2 < int(round(args.moves * args.case3)) else "c2"
+    # 역할은 **실제 후보 수** 에 대한 비율로 번갈아(c2 먼저) — 종전 `i2 < moves*case3` 는 채당 후보가
+    # 1~3개라 전부 ③ 이 됐다 (v3/v3b: c3 34 · c2 1 → ② 5건). N=1→c2, N=2→c2,c3, N=3→c2,c3,c2
+    _N = min(len(cands), args.moves)
+    role = "c3" if int(round((i2 + 1) * args.case3)) > int(round(i2 * args.case3)) else "c2"
     if role == "c3":
         _dw = (MOVE or {}).get("dwell", {})
         _low = [r for r in others if _dw.get(_rtype(r), 0.1) <= 0.35] or others
