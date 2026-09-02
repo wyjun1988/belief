@@ -197,7 +197,7 @@ def is_supported(o, off):
     # 배치 후 COM 에서 내려쏘아 첫 비자기 충돌이 오프셋 근처인가 — 허공에 뜬 물체를 잡는다
     p = np.array(o.translation, float)
     hs = _down_hits(p[0], p[1], p[2], o.object_id)
-    return bool(hs) and abs(float(p[1] - hs[0].point[1]) - off) <= 0.08
+    return bool(hs) and abs(float(p[1] - hs[0].point[1]) - off) <= 0.15
 
 def place_at(o, x, z, y_s, off):
     o.motion_type = habitat_sim.physics.MotionType.KINEMATIC
@@ -372,7 +372,12 @@ while t < args.frames:
             else:
                 off = support_offset(o, state[oid]["pos"])
                 if on_floor_originally(o, state[oid]["pos"]):
-                    x1, z1, y1 = float(np_[0]), float(np_[2]), float(np_[1])
+                    # 바닥 높이는 navmesh 점이 아니라 **실제 바닥 메시**(내려쏘기)로 — navmesh 는
+                    # 발높이 근사라 10~20cm 어긋나 받침 검사에 걸렸다
+                    _fh = [h for h in _down_hits(np_[0], float(np_[1]) + 1.0, np_[2], o.object_id)
+                           if float(h.normal[1]) > 0.7 and abs(float(h.point[1]) - float(np_[1])) < 0.5]
+                    x1, z1 = float(np_[0]), float(np_[2])
+                    y1 = float(_fh[0].point[1]) if _fh else float(np_[1])
                 else:
                     x1, z1, y1 = pick_receptacle(o, np_)
                 _orig_tr = o.translation
