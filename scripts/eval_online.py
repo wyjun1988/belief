@@ -65,13 +65,15 @@ if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
 # ── 재료 사다리 (AUDIT_20260902 조치1): 어떤 GT 가 들어갔는지 사람이 아니라 코드가 찍는다 ──
 _LG = os.environ.get("LOC_GEO", "0") == "1"
 _ANCH_EX = float(os.environ.get("ANCH_EX", "0.80")); _ANCH_TY = float(os.environ.get("ANCH_TY", "0.10")); _ANCH_DP = int(os.environ.get("ANCH_DP", "2"))
-LADDER = "초기맵:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s · c0창:%s%s · 앵커게이트:%.2f/%.2f/%d%s" % (
+LADDER = "초기맵:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s · c0창:%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
     "GT" if SG_INIT == "gt" else "검출",
     ("GT" if os.environ.get("LOC_YAW_GT") == "1" else "투표") if _LG else "융합(비기하)",
     ("DA" if os.environ.get("GEO_DEPTH") else "GT") if _LG else "—",
     "실측" if VSC is not None else "모의(GT vis)",
-    os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), "(광선만)" if os.environ.get("C0_RAYPICK") == "1" else "", _ANCH_EX, _ANCH_TY, _ANCH_DP,
-    " · yaw대체:이동방향" if os.environ.get("YAW_FALLBACK") == "motion" else "")
+    os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), "(광선만)" if os.environ.get("C0_RAYPICK") == "1" else "",
+    ("(≤%sm)" % os.environ.get("C0_MAXD")) if os.environ.get("C0_MAXD") else "", _ANCH_EX, _ANCH_TY, _ANCH_DP,
+    " · yaw대체:이동방향" if os.environ.get("YAW_FALLBACK") == "motion" else "",
+    ("기하(%s)" % os.environ.get("ABS_MODE", "spot")) if ABS_GEO else "점수마진")
 _NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT"))
 print("재료 사다리 → " + LADDER, flush=True)
 if _NGT:
@@ -349,6 +351,12 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     _qm = float(np.median(_qv))
                     _pas = [(i2, s_) for (i2, s_), q in zip(_pas, _qv) if q >= _qm] or _pas
                 _pick = [i2 for i2, _s in _pas][:int(os.environ.get("C0_WIN", "3"))]   # 채택 창 (기본 최신 3장)
+                _c0maxd = float(os.environ.get("C0_MAXD", "0"))
+                if _c0maxd > 0:
+                    # 원거리 목격은 광선 방위 오차가 방을 넘긴다 (v3: k=0 타겟 거짓 인계 3/25) → 거리 상한
+                    _pas = [(i2, s_) for i2, s_ in _pas
+                            if ((live[ts[i2]].get("dist") or {}).get(oid) or 0) <= _c0maxd]
+                    _pick = [i2 for i2, _s in _pas][:int(os.environ.get("C0_WIN", "3"))]
                 if os.environ.get("C0_RAYPICK") == "1":
                     # 광선(국소화 가능)이 있는 채택만 창에 — 투표 커버리지 0.64 에서 창이 비는 것을 막는다
                     _pick = [i2 for i2, _s in _pas if _geo_ray(i2)][:int(os.environ.get("C0_WIN", "3"))]
