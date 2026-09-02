@@ -436,7 +436,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         # 3경우 분해 (GT 기준): ①이동없음 ②이동+재촬영 ③이동+미재촬영(→부재확인
         # 가능하면 belief 로 넘겨야 하는 부류 — 실제로 넘긴 비율이 핵심)
         _outk = ("outdoor", "balcony", "porch", "garage", "yard")
-        _is_out = any(k in (rt.get(tgt, tgt) or "").lower() for k in _outk)
+        _is_out = any(k in (rt.get(tgt, tgt) or "").lower() for k in _outk) or (tgt not in rids)   # 범위 밖 방/outside 반출도 ④
         if mv:
             _t0 = mv[-1]["t"]
             _seen = bool(np.any(vis & (ts > _t0)))
