@@ -13,7 +13,7 @@ THOR 와 다른 점(포토리얼 검증의 본질):
       + live/*.jpg. 기존 평가군(eval_online·georoom)이 그대로 읽는다.
 방 구획: region 주석이 없으면 물체 클러스터로 자동 분할(k=--rooms).
 """
-import argparse, glob, json, os
+import argparse, glob, json, os, sys
 import numpy as np
 from PIL import Image
 import habitat_sim
@@ -41,6 +41,10 @@ ap.add_argument("--evidence", default=None,
                 help="K:D — ② 역할 이동 후 궤적이 물체에서 거리 D(m) 인 지점을 K 번 들른다 "
                      "(물체를 향해 1.5m 직진 구간으로 진입 → 그 방향을 보며 걷는다). 증거량을 "
                      "시나리오 우연이 아닌 통제 변수로 (EVAL_PROTOCOL_V2)")
+ap.add_argument("--remap", action="store_true",
+                help="매핑워크만 다시 돌려 기존 --out 의 map/ 과 gt.json[map] 을 교체 (live 는 그대로). "
+                     "종전 매핑워크는 live 루프 뒤(이동 후 장면)에서 돌았고 좌표가 인스턴스 원점이라 "
+                     "이동 물체 exemplar 가 빈자리 크롭이었다 (2026-09-02)")
 ap.add_argument("--far", type=float, default=0.5,
                 help="이동 중 '가장 먼 방'으로 보내는 비율 — 경우③ 표본 확보용")
 ap.add_argument("--w", type=int, default=768)
@@ -378,6 +382,75 @@ goal = sim.pathfinder.get_random_navigable_point()
 path = habitat_sim.ShortestPath(); path.requested_start, path.requested_end = cur, goal
 sim.pathfinder.find_path(path)
 route = list(path.points) if path.points else [cur]
+# ── 매핑 워크: 방마다 들러 360° 스캔 — **이동 전**(live 루프 앞)에 돈다 ──
+# 좌표는 rigid COM(obj_center), 가림은 시선 레이캐스트, 박스는 bbox 8꼭짓점 투영.
+mapwalk = []
+_mapdir = os.path.join(args.out, "map")
+if args.remap:
+    for _f in glob.glob(os.path.join(_mapdir, "*.jpg")): os.remove(_f)
+os.makedirs(_mapdir, exist_ok=True)
+mi = 0
+for r, pl in polys.items():
+    c = np.array(pl).mean(0)
+    mp_pt = sim.pathfinder.get_random_navigable_point_near(np.array([c[0], 0.1, c[1]]), 3.0)
+    if not np.isfinite(mp_pt).all(): continue
+    for yy in (0, 60, 120, 180, 240, 300):
+        st = habitat_sim.AgentState(); st.position = mp_pt
+        ry = np.radians(yy)
+        st.rotation = np.quaternion(np.cos(ry / 2), 0, np.sin(ry / 2), 0)
+        sim.get_agent(0).set_state(st)
+        ob = sim.get_sensor_observations()
+        dep2 = ob["dep"]
+        cam2 = np.array(mp_pt) + np.array([0, 1.5, 0])
+        f2 = np.array([-np.sin(ry), 0, -np.cos(ry)])
+        r2 = np.array([np.cos(ry), 0, -np.sin(ry)])
+        u2 = np.array([0, 1.0, 0])
+        box = {}; dist_ = {}
+        for oid, v in objs.items():
+            pos3 = obj_center(oid) if oid in OBJID else np.array(v["pos"], float)
+            d3 = pos3 - cam2
+            zc = float(d3 @ f2)
+            if not (0.3 < zc < 12): continue
+            uu = W / 2 + F * float(d3 @ r2) / zc
+            vv = H / 2 - F * float(d3 @ u2) / zc
+            if not (5 <= uu < W - 5 and 5 <= vv < H - 5): continue
+            if oid in OBJID:
+                if not line_of_sight(cam2, oid): continue
+            elif abs(float(dep2[int(vv), int(uu)]) - zc) > 0.6: continue
+            half = max(12.0, F * 0.25 / max(zc, 0.3))
+            b_ = [uu - half, vv - half, uu + half, vv + half]
+            if oid in OBJID:
+                try:
+                    o_ = rom.get_object_by_id(OBJID[oid]); bb = o_.root_scene_node.cumulative_bb; T_ = o_.transformation
+                    us, vs = [], []
+                    for cx_ in (bb.min[0], bb.max[0]):
+                        for cy_ in (bb.min[1], bb.max[1]):
+                            for cz_ in (bb.min[2], bb.max[2]):
+                                pw_ = np.array(T_.transform_point(mn.Vector3(cx_, cy_, cz_)), float) - cam2
+                                z_ = float(pw_ @ f2)
+                                if z_ <= 0.1: continue
+                                us.append(W / 2 + F * float(pw_ @ r2) / z_); vs.append(H / 2 - F * float(pw_ @ u2) / z_)
+                    if len(us) >= 4: b_ = [min(us), min(vs), max(us), max(vs)]
+                except Exception: pass
+            bx_ = [int(max(0, b_[0])), int(max(0, b_[1])), int(min(W, b_[2])), int(min(H, b_[3]))]
+            if bx_[2] - bx_[0] < 8 or bx_[3] - bx_[1] < 8: continue
+            box[oid] = bx_; dist_[oid] = round(float(np.hypot(pos3[0] - mp_pt[0], pos3[2] - mp_pt[2])), 2)
+        Image.fromarray(ob["rgb"][..., :3]).save(os.path.join(_mapdir, "%04d.jpg" % mi), quality=88)
+        mapwalk.append(dict(room=r, yaw=float(yy), box=box,
+                            apos=[round(float(mp_pt[0]), 2), round(float(mp_pt[2]), 2)],
+                            ctr={o: [round((b[0]+b[2])/2, 1), round((b[1]+b[3])/2, 1)] for o, b in box.items()},
+                            dist=dist_))
+        mi += 1
+print("매핑 워크 %d장 · exemplar 물체 %d" % (mi, len({o for x in mapwalk for o in x["box"]})), flush=True)
+if args.remap:
+    for _m in mapwalk:                  # 좌표 규약(x 미러·yaw 부호) — 본 경로의 마지막 블록과 동일
+        _m["apos"] = [round(-_m["apos"][0], 2), _m["apos"][1]]
+        _m["yaw"] = round((-(_m["yaw"]) + 180.0) % 360, 1)
+    _gp = os.path.join(args.out, "gt.json"); _g = json.load(open(_gp))
+    _g["map"] = mapwalk; _g["_remap"] = True
+    json.dump(_g, open(_gp, "w"))
+    print("remap 완료 → %s (map %d장)" % (_gp, len(mapwalk)), flush=True); sys.exit(0)
+
 ri, t = 0, 0
 yaw = 0.0
 _retry = 0
@@ -530,53 +603,6 @@ while t < args.frames:
         t += 1
     cur = b; ri += 1
 
-# ── 매핑 워크: 방마다 들러 360° 스캔 (THOR gen2 --mapwalk 대응) ──
-# 이게 없으면 초기 프레임이 한두 방만 돌아 **이동 물체가 exemplar 를 못 가진다**
-# → 평가 타겟 목록에서 빠진다(HSSD 20채 1차 실패의 원인).
-mapwalk = []
-os.makedirs(os.path.join(args.out, "map"), exist_ok=True)
-mi = 0
-for r, pl in polys.items():
-    c = np.array(pl).mean(0)
-    mp_pt = sim.pathfinder.get_random_navigable_point_near(
-        np.array([c[0], 0.1, c[1]]), 3.0)
-    if not np.isfinite(mp_pt).all(): continue
-    for yy in (0, 60, 120, 180, 240, 300):
-        st = habitat_sim.AgentState(); st.position = mp_pt
-        ry = np.radians(yy)
-        st.rotation = np.quaternion(np.cos(ry / 2), 0, np.sin(ry / 2), 0)
-        sim.get_agent(0).set_state(st)
-        ob = sim.get_sensor_observations()
-        dep2 = ob["dep"]
-        cam2 = np.array(mp_pt) + np.array([0, 1.5, 0])
-        f2 = np.array([-np.sin(ry), 0, -np.cos(ry)])
-        r2 = np.array([np.cos(ry), 0, -np.sin(ry)])
-        u2 = np.array([0, 1.0, 0])
-        box = {}
-        for oid, v in objs.items():
-            d3 = np.array(v["pos"]) - cam2
-            zc = float(d3 @ f2)
-            if not (0.3 < zc < 12): continue
-            uu = W / 2 + F * float(d3 @ r2) / zc
-            vv = H / 2 - F * float(d3 @ u2) / zc
-            if not (5 <= uu < W - 5 and 5 <= vv < H - 5): continue
-            if abs(float(dep2[int(vv), int(uu)]) - zc) > 0.6: continue
-            half = max(12.0, F * 0.25 / max(zc, 0.3))
-            box[oid] = [int(max(0, uu - half)), int(max(0, vv - half)),
-                        int(min(W, uu + half)), int(min(H, vv + half))]
-        Image.fromarray(ob["rgb"][..., :3]).save(
-            os.path.join(args.out, "map", "%04d.jpg" % mi), quality=88)
-        # 투영 기반 initmap 을 위해 포즈·거리도 남긴다 (box 만으로는 방 판정 불가 —
-        # "보이는 방 ≠ 있는 방" 이 초기맵 구축에서 그대로 재현된다, §121 후속)
-        mapwalk.append(dict(room=r, yaw=float(yy), box=box,
-                            apos=[round(float(mp_pt[0]), 2), round(float(mp_pt[2]), 2)],
-                            ctr={o: [round((b[0]+b[2])/2, 1), round((b[1]+b[3])/2, 1)]
-                                 for o, b in box.items()},
-                            dist={o: round(float(np.hypot(objs[o]["pos"][0]-mp_pt[0],
-                                                          objs[o]["pos"][2]-mp_pt[2])), 2)
-                                  for o in box}))
-        mi += 1
-print("매핑 워크 %d장 · exemplar 물체 %d" % (mi, len({o for x in mapwalk for o in x["box"]})), flush=True)
 
 # ⚠️ 좌표 규약 정합: habitat 은 화면 오른쪽이 방위각 **감소** 방향(왼손 회전),
 # 우리 투영 규약(THOR/georoom)은 증가 방향이다. x 축을 미러링하고 yaw 부호를
