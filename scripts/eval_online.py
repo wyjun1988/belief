@@ -445,6 +445,19 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         res.setdefault("ck", Counter())[(_ck, _br, ans == tgt)] += 1
         res.setdefault("rows", []).append((hn, _ck, ans == tgt, record0 == tgt,
                                            base_new == tgt, base_pri == tgt))
+        # ── 증거 조건부 ② (평가 프로토콜 v2, 2026-09-02): 시나리오가 준 목격 수와 시스템 능력을 분리 ──
+        if mv and VSC is not None and (hn, oid) in VSC:
+            _t0e = mv[-1]["t"]; _k = 0; _at = 0; _af = 0; _fr = []
+            for _i, _sab, _sac in VSC[(hn, oid)]:
+                _tt = int(ts[_i]); _m = live.get(_tt, {})
+                _tr = _tt > _t0e and oid in (_m.get("vis") or [])
+                _ok = _sab >= VTH and _sac >= VTH2
+                if _tr:
+                    _d = (_m.get("dist") or {}).get(oid, 99); _k += (_d < 5); _at += _ok
+                    _fr.append(("<2m" if _d < 2 else "2-5m" if _d < 5 else "5m+", _ok))
+                else:
+                    _af += _ok
+            res.setdefault("ev", []).append((hn, _k, _at, _af, ans == tgt, _br, _fr))
         if os.environ.get("DUMP_JSONL"):
             _dp = dict(house=hn, oid=oid, type=v0["type"], branch=_br, ans=ans,
                        tgt=tgt, record=record, ok=bool(ans == tgt), moved=bool(mv))
@@ -517,6 +530,24 @@ if rows:
         print("  %-12s %-5d %s" % (c3, cells[0][3],
               " ".join("%.3f[%.2f,%.2f]  " % (a, lo, hi) for a, lo, hi, _n in cells)))
     print("  (CI 폭이 차이보다 넓으면 그 차이는 결론이 아니다)")
+ev = res.get("ev", [])
+if ev:
+    print("  ── ② 증거 조건부 (능력 곡선 — 시나리오 목격 분포와 분리) ──")
+    fr = {"<2m": [0, 0], "2-5m": [0, 0], "5m+": [0, 0]}
+    for e in ev:
+        for b, ok in e[6]: fr[b][1] += 1; fr[b][0] += ok
+    print("  진짜 목격 프레임 검증 통과율: " + " · ".join("%s %d/%d=%.2f" % (b, v[0], v[1], v[0]/max(v[1], 1)) for b, v in fr.items()))
+    _nfa = sum(e[3] for e in ev); _ncand = sum(len(VSC[(e[0], None)]) if False else 0 for e in ev)
+    print("  오채택(물체 없는 후보 통과) 총 %d장 / 타겟 %d" % (_nfa, len(ev)))
+    print("  %-10s %-4s %-8s %-10s %-8s %-8s" % ("근거리목격k", "n", "정답률", "진짜채택≥1", "c0발동", "c0정답"))
+    for lo, hi, lab in ((0, 0, "0"), (1, 2, "1-2"), (3, 5, "3-5"), (6, 999, "6+")):
+        sel = [e for e in ev if lo <= e[1] <= hi]
+        if not sel: continue
+        c0 = [e for e in sel if e[5] == "c0"]
+        print("  %-10s %-4d %-8.2f %-10.2f %-8.2f %-8s" % (lab, len(sel), np.mean([e[4] for e in sel]),
+              np.mean([e[2] >= 1 for e in sel]), len(c0) / len(sel),
+              ("%.2f" % np.mean([e[4] for e in c0])) if c0 else "—"))
+    print("  (k=0 행의 c0발동 = 거짓 인계율 → 0 이어야 · 6+ 행의 정답률 = 증거가 충분할 때의 판정 능력)")
 print("  분기별 정오 (분기, 이동?, 건수, 정답률):")
 for b2 in ("c0", "c2", "rec"):
     for mvf in (True, False):
