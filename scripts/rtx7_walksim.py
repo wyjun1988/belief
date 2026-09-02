@@ -47,16 +47,45 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 if (m.get("dist") or {}).get(oid, 99) < 5: near.add(i)
         tgt.append((TS, ts, post, near))
 
+# ── 후보 선정 전략 (STATUS 제안2: A율 정면 공략) ──
+# recent : 문턱 통과분을 최신순 (현행)
+# strat  : **시간 계층** — 에피소드를 STRAT_K 구간으로 나눠 구간마다 상위를 고른다.
+#          이동 후 목격은 소수·후반이라 최신순만으론 이동 전 다수에 밀린다.
+# tw     : 시간 가중 점수 (TS × (1 + TW·정규화시각))
+STRATS = os.environ.get("STRATS", "recent,strat,tw").split(",")
+STRAT_K = int(os.environ.get("STRAT_K", "6"))
+TW = float(os.environ.get("TW", "1.0"))
+
+def pick(TS, ts, fl, dp, how):
+    th = np.quantile(TS, fl)
+    ok = np.where(TS >= th)[0]
+    if how == "recent":
+        return sorted(ok, key=lambda i: -ts[i])[:dp]
+    if how == "tw":
+        t0, t1 = float(np.min(ts)), float(np.max(ts))
+        sc = TS + TW * TS.std() * (ts - t0) / max(t1 - t0, 1)
+        return sorted(np.argsort(-sc)[:dp * 2], key=lambda i: -ts[i])[:dp]
+    # strat: 시간 구간별 균등 배분
+    edges = np.linspace(float(np.min(ts)), float(np.max(ts)) + 1, STRAT_K + 1)
+    per = max(1, dp // STRAT_K); out = []
+    for b in range(STRAT_K - 1, -1, -1):          # 최근 구간부터
+        seg = [i for i in ok if edges[b] <= ts[i] < edges[b + 1]]
+        out += sorted(seg, key=lambda i: -TS[i])[:per]
+    if len(out) < dp:                              # 남으면 점수순으로 채움
+        rest = [i for i in sorted(ok, key=lambda i: -TS[i]) if i not in out]
+        out += rest[:dp - len(out)]
+    return out[:dp]
+
 print("타겟 %d (이동물체·타입단일)" % len(tgt))
-print("%-8s %-6s %-8s %-10s %-12s" % ("floor", "depth", "A율", "진짜/목록", "그중<5m"))
-for fl in FLOORS:
+print("%-8s %-6s %-7s %-8s %-10s %-12s" % ("전략", "floor", "depth", "A율", "진짜/목록", "그중<5m"))
+for how in STRATS:
+  for fl in FLOORS:
     for dp in DEPTHS:
         A = 0; npost = []; nnear = []
         for TS, ts, post, near in tgt:
-            th = np.quantile(TS, fl)
-            c = sorted(np.where(TS >= th)[0], key=lambda i: -ts[i])[:dp]
+            c = pick(TS, ts, fl, dp, how)
             p = sum(1 for i in c if i in post)
             if p == 0: A += 1
             npost.append(p); nnear.append(sum(1 for i in c if i in near))
-        print("q%-7.2f %-6d %-8.3f %-10.1f %-12.1f"
-              % (fl, dp, A / len(tgt), np.mean(npost), np.mean(nnear)))
+        print("%-8s q%-6.2f %-7d %-8.3f %-10.1f %-12.1f"
+              % (how, fl, dp, A / len(tgt), np.mean(npost), np.mean(nnear)))
