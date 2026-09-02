@@ -65,12 +65,13 @@ if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
 # ── 재료 사다리 (AUDIT_20260902 조치1): 어떤 GT 가 들어갔는지 사람이 아니라 코드가 찍는다 ──
 _LG = os.environ.get("LOC_GEO", "0") == "1"
 _ANCH_EX = float(os.environ.get("ANCH_EX", "0.80")); _ANCH_TY = float(os.environ.get("ANCH_TY", "0.10")); _ANCH_DP = int(os.environ.get("ANCH_DP", "2"))
-LADDER = "초기맵:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s · c0창:%s · 앵커게이트:%.2f/%.2f/%d" % (
+LADDER = "초기맵:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s · c0창:%s%s · 앵커게이트:%.2f/%.2f/%d%s" % (
     "GT" if SG_INIT == "gt" else "검출",
     ("GT" if os.environ.get("LOC_YAW_GT") == "1" else "투표") if _LG else "융합(비기하)",
     ("DA" if os.environ.get("GEO_DEPTH") else "GT") if _LG else "—",
     "실측" if VSC is not None else "모의(GT vis)",
-    os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), _ANCH_EX, _ANCH_TY, _ANCH_DP)
+    os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), "(광선만)" if os.environ.get("C0_RAYPICK") == "1" else "", _ANCH_EX, _ANCH_TY, _ANCH_DP,
+    " · yaw대체:이동방향" if os.environ.get("YAW_FALLBACK") == "motion" else "")
 _NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT"))
 print("재료 사다리 → " + LADDER, flush=True)
 if _NGT:
@@ -232,6 +233,14 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 cx = pxof(P[i, c])
                 for pos in inst:
                     hyp.append((br(pos[0]-ap[0], pos[1]-ap[1]) - pb(cx), 1.0/len(inst)))
+            if (not hyp) and os.environ.get("YAW_FALLBACK") == "motion":
+                # 투표 불가 프레임: 앞뒤 1프레임 위치 차이의 방위를 yaw 로 (생성기는 카메라를
+                # 진행 방향으로 부드럽게 돌린다). 회전 중에는 틀리므로 이동량 ≥0.2m 일 때만.
+                _t = ts[i]; _a, _b2 = live.get(int(_t) - 1), live.get(int(_t) + 1)
+                if _a and _b2 and _a.get("apos") and _b2.get("apos"):
+                    _dx, _dz = _b2["apos"][0] - _a["apos"][0], _b2["apos"][1] - _a["apos"][1]
+                    if np.hypot(_dx, _dz) >= 0.2:
+                        return ap, br(_dx, _dz) + pb(pxof(P[i, ti]))
             if not hyp: return None
             best = (0.0, None)
             for y0, _w in hyp:
@@ -340,6 +349,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     _qm = float(np.median(_qv))
                     _pas = [(i2, s_) for (i2, s_), q in zip(_pas, _qv) if q >= _qm] or _pas
                 _pick = [i2 for i2, _s in _pas][:int(os.environ.get("C0_WIN", "3"))]   # 채택 창 (기본 최신 3장)
+                if os.environ.get("C0_RAYPICK") == "1":
+                    # 광선(국소화 가능)이 있는 채택만 창에 — 투표 커버리지 0.64 에서 창이 비는 것을 막는다
+                    _pick = [i2 for i2, _s in _pas if _geo_ray(i2)][:int(os.environ.get("C0_WIN", "3"))]
                 if os.environ.get("C0_DIAG") == "1":
                     _dg = dict(house=hn, oid=oid, n_rr=len(_rr), n_pas=len(_pas), pick=[int(ts[i2]) for i2 in _pick],
                                rays=[bool(_geo_ray(i2)) for i2 in _pick], record=record)
