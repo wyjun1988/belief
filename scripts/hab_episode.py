@@ -259,8 +259,8 @@ for i2, oid in enumerate(cands[:args.moves]):
     role = "c3" if i2 < int(round(args.moves * args.case3)) else "c2"
     if role == "c3":
         _dw = (MOVE or {}).get("dwell", {})
-        tgt = min(others, key=lambda r: (_dw.get(_rtype(r), 0.1),
-                                         -float(np.linalg.norm(cen[r] - cen[obj_room[oid]]))))
+        _low = [r for r in others if _dw.get(_rtype(r), 0.1) <= 0.35] or others
+        tgt = max(_low, key=lambda r: float(np.linalg.norm(cen[r] - cen[obj_room[oid]])))
     plan[int(rng.integers(args.frames // 5, args.frames * 3 // 5))] = (oid, tgt, role)
 print("이동 계획 %d건 (③대본 %d)" % (len(plan), sum(1 for v in plan.values() if v[2] == "c3")), flush=True)
 excluded_rooms = set()      # ③ 대본: 이동 후 배회에서 제외할 목적지 방
@@ -362,7 +362,7 @@ while t < args.frames:
             goal = sim.pathfinder.get_random_navigable_point()
         path = habitat_sim.ShortestPath(); path.requested_start, path.requested_end = cur, goal
         if not sim.pathfinder.find_path(path) or len(path.points) < 2: continue
-        if excluded_rooms and _retry < 12 and any(
+        if excluded_rooms and _retry < 30 and any(
                 room_at(float(q[0]), float(q[2])) in excluded_rooms for q in path.points):
             _retry += 1; continue          # ③ 대본: 제외 방을 **경유**하는 경로도 버린다
         _retry = 0
@@ -407,8 +407,10 @@ while t < args.frames:
                 _st = sim.get_agent(0).get_state()
                 wit = witness(oid, newp, t, len(moves)) if sup else None
                 sim.get_agent(0).set_state(_st)
+                real = room_at(newp[0], newp[2])          # 실제 좌표로 방 재판정
+                if real == obj_room[oid]:
+                    sup = False                           # 같은 방 = 이동이 아니다 → 취소
                 if sup and wit is not None:
-                    real = room_at(newp[0], newp[2])      # 실제 좌표로 방 재판정
                     state[oid]["pos"] = newp              # GT = 실제 배치 좌표
                     wit_file = "witness/%02d_t%d_%s.jpg" % (len(moves), t, objs[oid]["type"].replace(" ", "_"))
                     moves.append(dict(t=t, oid=oid, frm=obj_room[oid], to=real, intended=dest,

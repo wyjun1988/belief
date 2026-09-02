@@ -32,7 +32,7 @@ if [ "${SKIP_GEN:-0}" != 1 ]; then
   rm -rf "$OUT"; mkdir -p "$OUT"; i=0
   for SC in $(cat "$SCENES"); do
     $HAB -u scripts/hab_episode.py --scene "$SC" --dataset "$HSSD_DATASET" --move data/hssd_move.json \
-      --frames "$FRAMES" --moves 8 --far 0.25 --seed $((i+200)) --out "$OUT/house_$(printf %04d $i)" 2>&1 \
+      --frames "$FRAMES" --moves 8 --case3 "${CASE3:-0.5}" --far "${FAR:-0.0}" --seed $((i+200)) --out "$OUT/house_$(printf %04d $i)" 2>&1 \
       | grep -E "이동 후보|이동 기록|이동 취소|증인 렌더" || echo "  $SC 실패"
     i=$((i+1))
   done
@@ -87,4 +87,4 @@ bench "$B2/scores/t1_floor0.8_d40.jsonl" "run0 챔피언 (SCORER=$SCORER)"
 # ── 5. 단일 노브: 후보 문턱 제거 (§124) ──
 score 0.0 160 "$B2/scores/t1_floor0.0_d160.jsonl"
 bench "$B2/scores/t1_floor0.0_d160.jsonl" "run1 단일노브 VERIFY_JSONL=floor0.0_d160"
-echo BENCH_V2_DONE
+echo BENCH_V2_DONE   # (BENCH_DIR/OUT 로 v3 이상도 같은 스크립트)
