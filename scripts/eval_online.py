@@ -64,12 +64,13 @@ if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
 
 # ── 재료 사다리 (AUDIT_20260902 조치1): 어떤 GT 가 들어갔는지 사람이 아니라 코드가 찍는다 ──
 _LG = os.environ.get("LOC_GEO", "0") == "1"
-LADDER = "초기맵:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s · c0창:%s" % (
+_ANCH_EX = float(os.environ.get("ANCH_EX", "0.80")); _ANCH_TY = float(os.environ.get("ANCH_TY", "0.10")); _ANCH_DP = int(os.environ.get("ANCH_DP", "2"))
+LADDER = "초기맵:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s · c0창:%s · 앵커게이트:%.2f/%.2f/%d" % (
     "GT" if SG_INIT == "gt" else "검출",
     ("GT" if os.environ.get("LOC_YAW_GT") == "1" else "투표") if _LG else "융합(비기하)",
     ("DA" if os.environ.get("GEO_DEPTH") else "GT") if _LG else "—",
     "실측" if VSC is not None else "모의(GT vis)",
-    os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"))
+    os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), _ANCH_EX, _ANCH_TY, _ANCH_DP)
 _NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT"))
 print("재료 사다리 → " + LADDER, flush=True)
 if _NGT:
@@ -208,13 +209,22 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             def br(dx, dz): return np.degrees(np.arctan2(dx, dz))
             def pxof(pi): return (pi % pw + .5) / pw * FRAME_W
             hyp = []
-            for k2 in np.where(_XSc[i] >= 0.15)[0]:
+            # 앵커 **존재 게이트** (2026-09-02): exemplar 점수만으로는 보이지 않는 앵커도 통과해
+            # 쓰레기 투표가 된다(오차 23~54°). exemplar ≥ ANCH_EX 이고 그 타입의 OWL 검출이
+            # ≥ ANCH_TY 이며 두 패치가 ≤ ANCH_DP 칸 안에서 일치할 때만 가설 (1채 실측: 커버리지
+            # 0.55 · 오차 중앙 3.4° · <10° 0.67).
+            for k2 in np.where(_XSc[i] >= _ANCH_EX)[0]:
                 a = _axids[k2]
                 if a not in stp: continue
-                hyp.append((br(stp[a][0]-ap[0], stp[a][1]-ap[1]) - pb(pxof(_XPp[i, k2])), 2.0))
-            for c in range(nT, len(vocab)):
+                _ty = sm["static"].get(a, {}).get("type")
+                _c = vocab.index(_ty) if _ty in vocab else None
+                if _c is None or S[i, _c] < _ANCH_TY: continue
+                _pe, _pt = int(_XPp[i, k2]), int(P[i, _c])
+                if abs(_pe % pw - _pt % pw) > _ANCH_DP or abs(_pe // pw - _pt // pw) > _ANCH_DP: continue
+                hyp.append((br(stp[a][0]-ap[0], stp[a][1]-ap[1]) - pb(pxof(_pe)), 2.0))
+            for c in (range(nT, len(vocab)) if not hyp else []):     # 타입 가설은 앵커 가설이 없을 때만
                 inst = byt.get(vocab[c], [])
-                if not inst or len(inst) > 4 or S[i, c] < 0.15: continue
+                if not inst or len(inst) > 4 or S[i, c] < 0.25: continue
                 cx = pxof(P[i, c])
                 for pos in inst:
                     hyp.append((br(pos[0]-ap[0], pos[1]-ap[1]) - pb(cx), 1.0/len(inst)))
