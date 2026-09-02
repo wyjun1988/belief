@@ -205,7 +205,12 @@ def is_supported(o, off):
 
 def place_at(o, x, z, y_s, off):
     o.motion_type = habitat_sim.physics.MotionType.KINEMATIC
-    o.translation = mn.Vector3(float(x), float(y_s + off), float(z))
+    o.translation = mn.Vector3(float(x), float(y_s + off + 0.02), float(z))
+    # 2단: 격자 지점의 받침면과 물체 바로 아래 받침면이 다를 수 있다 → 제자리에서 다시 재서 스냅
+    hs = [h for h in _down_hits(x, float(y_s + off + 0.5), z, o.object_id)
+          if float(h.normal[1]) > 0.5 and float(h.point[1]) <= y_s + off + 0.5]
+    if hs:
+        o.translation = mn.Vector3(float(x), float(hs[0].point[1] + off), float(z))
     return [float(v) for v in o.translation]
 
 # ── 이동 계획: 타입 단일 + 옮길 만한 것 ──
@@ -264,6 +269,7 @@ for i2, oid in enumerate(cands[:args.moves]):
     plan[int(rng.integers(args.frames // 5, args.frames * 3 // 5))] = (oid, tgt, role)
 print("이동 계획 %d건 (③대본 %d)" % (len(plan), sum(1 for v in plan.values() if v[2] == "c3")), flush=True)
 excluded_rooms = set()      # ③ 대본: 이동 후 배회에서 제외할 목적지 방
+hidden_oids = []            # ③ 대본: 배회 경로에서 시선이 닿으면 안 되는 물체
 forced_goals = []           # 대본이 요구하는 다음 목적지 방 (③: 원래 방 / ②: 목적지 방)
 
 # ── 연속 보행 궤적 (텔레포트 아님) ──
@@ -365,6 +371,23 @@ while t < args.frames:
         if excluded_rooms and _retry < 30 and any(
                 room_at(float(q[0]), float(q[2])) in excluded_rooms for q in path.points):
             _retry += 1; continue          # ③ 대본: 제외 방을 **경유**하는 경로도 버린다
+        if hidden_oids and _retry < 30:
+            # ③ 대본: 경로 위 어느 지점(눈높이)에서든 ③ 물체가 12m 안에서 **시선에 들어오면** 버린다
+            # (옷장 속 시계가 침실 문 너머로 보이던 실측 — 방 제외만으로는 못 막는다)
+            _pts = [np.array(q, float) for q in path.points]
+            _dense = []
+            for _a, _b in zip(_pts[:-1], _pts[1:]):
+                _n = max(1, int(np.linalg.norm(_b - _a) / 0.75))
+                _dense += [_a + (_b - _a) * (k_ / _n) for k_ in range(_n)]
+            _leak = False
+            for q in _dense + [_pts[-1]]:
+                camq = q + np.array([0, 1.5, 0])
+                for ho in hidden_oids:
+                    tg = obj_center(ho)
+                    if np.linalg.norm(tg - camq) < 12.0 and line_of_sight(camq, ho):
+                        _leak = True; break
+                if _leak: break
+            if _leak: _retry += 1; continue
         _retry = 0
         route, ri = list(path.points), 0
     a, b = np.array(route[ri]), np.array(route[ri + 1])
@@ -419,6 +442,7 @@ while t < args.frames:
                     moves[-1]["role"] = role
                     if role == "c3":
                         excluded_rooms.add(real); forced_goals.append(moves[-1]["frm"])
+                        hidden_oids.append(oid)
                     else:
                         forced_goals.append(real)
                     obj_room[oid] = real
