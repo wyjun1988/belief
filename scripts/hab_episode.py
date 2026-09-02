@@ -193,6 +193,12 @@ def pick_receptacle(o, np_):
                     break
     return best if best else (float(np_[0]), float(np_[2]), fy)
 
+def is_supported(o, off):
+    # 배치 후 COM 에서 내려쏘아 첫 비자기 충돌이 오프셋 근처인가 — 허공에 뜬 물체를 잡는다
+    p = np.array(o.translation, float)
+    hs = _down_hits(p[0], p[1], p[2], o.object_id)
+    return bool(hs) and abs(float(p[1] - hs[0].point[1]) - off) <= 0.08
+
 def place_at(o, x, z, y_s, off):
     o.motion_type = habitat_sim.physics.MotionType.KINEMATIC
     o.translation = mn.Vector3(float(x), float(y_s + off), float(z))
@@ -369,17 +375,25 @@ while t < args.frames:
                     x1, z1, y1 = float(np_[0]), float(np_[2]), float(np_[1])
                 else:
                     x1, z1, y1 = pick_receptacle(o, np_)
+                _orig_tr = o.translation
                 newp = place_at(o, x1, z1, y1, off)
-                real = room_at(newp[0], newp[2])          # 실제 좌표로 방 재판정
-                state[oid]["pos"] = newp                  # GT = 실제 배치 좌표
+                sup = is_supported(o, off)
                 _st = sim.get_agent(0).get_state()
-                wit = witness(oid, newp, t, len(moves))
-                wit_file = ("witness/%02d_t%d_%s.jpg" % (len(moves), t, objs[oid]["type"].replace(" ", "_"))) if wit else None
+                wit = witness(oid, newp, t, len(moves)) if sup else None
                 sim.get_agent(0).set_state(_st)
-                moves.append(dict(t=t, oid=oid, frm=obj_room[oid], to=real, intended=dest,
-                                  pos=[round(v, 3) for v in newp], witness=bool(wit),
-                                  witness_file=wit_file, witness_ctr=wit))
-                obj_room[oid] = real
+                if sup and wit is not None:
+                    real = room_at(newp[0], newp[2])      # 실제 좌표로 방 재판정
+                    state[oid]["pos"] = newp              # GT = 실제 배치 좌표
+                    wit_file = "witness/%02d_t%d_%s.jpg" % (len(moves), t, objs[oid]["type"].replace(" ", "_"))
+                    moves.append(dict(t=t, oid=oid, frm=obj_room[oid], to=real, intended=dest,
+                                      pos=[round(v, 3) for v in newp], witness=True, supported=True,
+                                      witness_file=wit_file, witness_ctr=wit))
+                    obj_room[oid] = real
+                else:
+                    # 기하 게이트 실패(허공/박힘/시선 없음) → **원위치로 되돌리고 기록하지 않는다**
+                    o.translation = _orig_tr
+                    skipped_moves += 1
+                    print("  ⚠ 이동 취소(받침 %s·시선 %s): %s" % (sup, wit is not None, oid), flush=True)
         obs = sim.get_sensor_observations()
         dep = obs["dep"]
         cam = np.array(p) + np.array([0, 1.5, 0])
