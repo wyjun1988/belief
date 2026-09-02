@@ -257,6 +257,10 @@ for i2, oid in enumerate(cands[:args.moves]):
     else:
         tgt = rng.choice(others)
     role = "c3" if i2 < int(round(args.moves * args.case3)) else "c2"
+    if role == "c3":
+        _dw = (MOVE or {}).get("dwell", {})
+        tgt = min(others, key=lambda r: (_dw.get(_rtype(r), 0.1),
+                                         -float(np.linalg.norm(cen[r] - cen[obj_room[oid]]))))
     plan[int(rng.integers(args.frames // 5, args.frames * 3 // 5))] = (oid, tgt, role)
 print("이동 계획 %d건 (③대본 %d)" % (len(plan), sum(1 for v in plan.values() if v[2] == "c3")), flush=True)
 excluded_rooms = set()      # ③ 대본: 이동 후 배회에서 제외할 목적지 방
@@ -338,6 +342,7 @@ sim.pathfinder.find_path(path)
 route = list(path.points) if path.points else [cur]
 ri, t = 0, 0
 yaw = 0.0
+_retry = 0
 while t < args.frames:
     if ri + 1 >= len(route):
         if forced_goals or (MOVE and MOVE.get("dwell")):
@@ -357,6 +362,10 @@ while t < args.frames:
             goal = sim.pathfinder.get_random_navigable_point()
         path = habitat_sim.ShortestPath(); path.requested_start, path.requested_end = cur, goal
         if not sim.pathfinder.find_path(path) or len(path.points) < 2: continue
+        if excluded_rooms and _retry < 12 and any(
+                room_at(float(q[0]), float(q[2])) in excluded_rooms for q in path.points):
+            _retry += 1; continue          # ③ 대본: 제외 방을 **경유**하는 경로도 버린다
+        _retry = 0
         route, ri = list(path.points), 0
     a, b = np.array(route[ri]), np.array(route[ri + 1])
     seg = np.linalg.norm(b - a)
