@@ -53,10 +53,18 @@ for hd in sys.argv[1:]:
                 S, (px, py) = detect(os.path.join(hd, "live", "%06d.jpg" % l["t"]), ty); c = l["ctr"][oid]
                 acc[1] += 1; acc[0] += int(S >= TH and np.hypot(px - c[0], py - c[1]) <= R)
     rp = pre[0] / max(pre[1], 1); rq = post[0] / max(post[1], 1)
-    ok = post[1] == 0 or rq >= 0.5 * rp
+    # 1차 게이트: **증인 렌더(2m 정면)에서 검출** — 배치 버그(박힘·허공)는 여기서 걸린다.
+    # 이동 전후 검출률은 참고(같은 물체라도 새 자리의 배경·유사물체로 정당하게 낮아질 수 있다).
+    wit_ok = 0; wit_n = 0
+    for m in g["moves"]:
+        if not m.get("witness_file") or not m.get("witness_ctr"): continue
+        wit_n += 1
+        S, (px, py) = detect(os.path.join(hd, m["witness_file"]), g["gt0"][m["oid"]]["type"])
+        c = m["witness_ctr"]; wit_ok += int(S >= TH and np.hypot(px - c[0], py - c[1]) <= 90)
+    ok = (wit_n == len(g["moves"])) and (wit_ok == wit_n)
     fails += (not ok)
-    print("%s 이동 %d · 증인 %d · 검출률 이동전 %d/%d=%.2f  이동후 %d/%d=%.2f  → %s"
-          % (os.path.basename(hd), len(g["moves"]), wit, pre[0], pre[1], rp, post[0], post[1], rq,
-             "OK" if ok else "**실패(배치 버그 의심)**"), flush=True)
+    print("%s 이동 %d · 증인검출 %d/%d · (참고) 검출률 이동전 %d/%d=%.2f 이동후 %d/%d=%.2f → %s"
+          % (os.path.basename(hd), len(g["moves"]), wit_ok, wit_n, pre[0], pre[1], rp, post[0], post[1], rq,
+             "OK" if ok else "**실패(증인 미검출/미기록)**"), flush=True)
 print("자가검사 실패 %d/%d채" % (fails, len(sys.argv[1:])))
 sys.exit(1 if fails else 0)

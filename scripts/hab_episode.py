@@ -48,7 +48,8 @@ STRUCT = {"wall", "floor", "ceiling", "door", "window", "picture", "curtain", "r
           "mirror", "blinds", "stairs", "railing", "beam", "frame", "tvscreen"}
 MOVABLE = ("book", "cushion", "plate", "bowl", "cup", "mug", "lamp", "clock", "vase",
            "basket", "kitchenutensil", "sponge", "toy", "phone", "laptop", "can",
-           "box", "picture frame", "plant", "shoe", "bottle", "handbag")
+           "box", "picture frame", "plant", "shoe", "bottle", "handbag", "drinkware",
+           "toiletry", "candle", "clothing", "tray", "kettle", "remote", "bag", "hat")
 
 cfg = habitat_sim.SimulatorConfiguration()
 cfg.scene_id = args.scene
@@ -99,7 +100,7 @@ for k, oi in enumerate(inst.get("object_instances", [])):
             if b2.startswith(pre): b2 = b2[len(pre):]
         lab = "".join(c for c in b2 if c.isalpha()).lower()
     if not lab or lab in STRUCT: continue
-    objs["%s|%d" % (lab, k)] = dict(type=lab, pos=[float(x) for x in oi["translation"]])
+    objs["%s|%d" % (lab, k)] = dict(type=lab, pos=[float(x) for x in oi["translation"]], tmpl=base)
 assert objs, "물체 0개"
 print("물체 %d" % len(objs), flush=True)
 
@@ -136,11 +137,78 @@ for oid, v in objs.items():
 rt = {r: (r.split("|")[0] if "|" in r else r) for r in polys}
 print("방 %d: %s" % (len(polys), list(polys)[:6]), flush=True)
 
+rom = sim.get_rigid_object_manager()
+# 핸들 ↔ 인스턴스: HSSD 는 COM 보정으로 rigid 좌표가 인스턴스 좌표와 최대 1.3m 어긋난다
+# (55개 중 19개만 최근접 매칭됨 → 이동 후보 소실). 핸들은 "<템플릿해시>_:NNNN" 이므로
+# **템플릿 해시로 먼저 맞추고** 같은 템플릿끼리만 xz 최근접으로 가른다.
+_H = []
+for h in rom.get_object_handles():
+    o = rom.get_object_by_handle(h)
+    if o is None: continue
+    try: _H.append((h, np.array(o.translation, float)))
+    except Exception: pass
+_HBY = {}
+for h, t in _H: _HBY.setdefault(h.split("_:")[0].split("/")[-1], []).append((h, t))
+print("rigid 핸들 %d" % len(_H), flush=True)
+def obj_handle(oid):
+    if not _H: return None
+    p0 = np.array(objs[oid]["pos"], float)
+    pool = _HBY.get(objs[oid].get("tmpl"))
+    if pool:
+        h, d = min(((h, float(np.hypot(t[0]-p0[0], t[2]-p0[2]))) for h, t in pool), key=lambda x: x[1])
+        return h if d < 1.5 else None
+    h, d = min(((h, float(np.linalg.norm(t - p0))) for h, t in _H), key=lambda x: x[1])
+    return h if d < 0.35 else None
+
+def _down_hits(x, y_top, z, skip_id):
+    ray = habitat_sim.geo.Ray(mn.Vector3(float(x), float(y_top), float(z)), mn.Vector3(0., -1., 0.))
+    res = sim.cast_ray(ray, max_distance=6.0)
+    return [h for h in res.hits if h.object_id != skip_id] if res.has_hits() else []
+
+def support_offset(o, pos):
+    # 물체 원점이 받침면 위 얼마나 떠 있나 — 자산마다 원점 규약(바닥/중심)이 달라 실측.
+    # 0.6m 초과 = 벽걸이(시계·벽등): 받침면이 없으니 **이동 대상에서 제외**한다(§125 후속:
+    # 원래 높이를 재현하면 허공에 뜬다).
+    hs = [h for h in _down_hits(pos[0], pos[1] + 1.0, pos[2], o.object_id) if h.point[1] <= pos[1] + 0.05]
+    return (pos[1] - max(h.point[1] for h in hs)) if hs else 0.0
+
+def on_floor_originally(o, pos):
+    # 원래 받침면이 바닥인가 — 플로어램프·휴지통이 카운터 위로 올라가는 것을 막는다
+    hs = [h for h in _down_hits(pos[0], pos[1] + 1.0, pos[2], o.object_id) if h.point[1] <= pos[1] + 0.05]
+    if not hs: return True
+    y_sup = max(h.point[1] for h in hs); y_floor = min(h.point[1] for h in hs)
+    return (y_sup - y_floor) < 0.15
+
+def pick_receptacle(o, np_):
+    # 보행점 주변 1m 격자에서 **테이블/카운터 상판**(바닥 위 0.25~1.2m, 수평면) 우선, 없으면 바닥.
+    # 바닥에만 놓으면 접시·컵이 눈높이에서 안 보이고 비현실적이다(§125 후속 실측).
+    fy = float(np_[1]); best = None
+    for dx in (-1.0, -0.5, 0.0, 0.5, 1.0):
+        for dz in (-1.0, -0.5, 0.0, 0.5, 1.0):
+            x, z = float(np_[0]) + dx, float(np_[2]) + dz
+            for h in _down_hits(x, fy + 2.0, z, o.object_id):
+                hy = float(h.point[1])
+                if 0.25 <= hy - fy <= 1.2 and float(h.normal[1]) > 0.7:
+                    if best is None or hy > best[2]: best = (x, z, hy)
+                    break
+    return best if best else (float(np_[0]), float(np_[2]), fy)
+
+def place_at(o, x, z, y_s, off):
+    o.motion_type = habitat_sim.physics.MotionType.KINEMATIC
+    o.translation = mn.Vector3(float(x), float(y_s + off), float(z))
+    return [float(v) for v in o.translation]
+
 # ── 이동 계획: 타입 단일 + 옮길 만한 것 ──
 from collections import Counter
 cnt = Counter(v["type"] for v in objs.values())
 cands = [o for o, v in objs.items()
          if cnt[v["type"]] == 1 and any(m in v["type"] for m in MOVABLE)]
+_n0 = len(cands)
+cands = [o_ for o_ in cands if obj_handle(o_)]
+_n1 = len(cands)
+cands = [o_ for o_ in cands
+         if support_offset(rom.get_object_by_handle(obj_handle(o_)), objs[o_]["pos"]) <= 0.6]
+print("이동 후보 %d → 핸들 있음 %d → 벽걸이 제외 %d" % (_n0, _n1, len(cands)), flush=True)
 rng.shuffle(cands)
 plan = {}
 # 경우③(부재→belief) 표본: --far 비율만큼은 **현재 방에서 가장 먼 방**으로 옮긴다
@@ -178,21 +246,6 @@ for i2, oid in enumerate(cands[:args.moves]):
 print("이동 계획 %d건" % len(plan), flush=True)
 
 # ── 연속 보행 궤적 (텔레포트 아님) ──
-rom = sim.get_rigid_object_manager()
-# 핸들 ↔ 인스턴스 대응: 이름이 아니라 **초기 좌표 최근접**으로 찾는다
-# (핸들 문자열은 템플릿 해시/접두어라 라벨과 안 맞는다)
-_H = []
-for h in rom.get_object_handles():
-    o = rom.get_object_by_handle(h)
-    if o is None: continue
-    try: _H.append((h, np.array(o.translation, float)))
-    except Exception: pass
-print("rigid 핸들 %d" % len(_H), flush=True)
-def obj_handle(oid):
-    if not _H: return None
-    p0 = np.array(objs[oid]["pos"], float)
-    h, d = min(((h, float(np.linalg.norm(t - p0))) for h, t in _H), key=lambda x: x[1])
-    return h if d < 0.35 else None
 
 plan_oids = {o for o, _d in plan.values()}
 live, moves = [], []
@@ -213,24 +266,6 @@ for _oid in objs:
         _o = rom.get_object_by_handle(_h)
         if _o is not None: OBJID[_oid] = _o.object_id
 print("물체 %d 중 rigid 핸들 대응 %d" % (len(objs), len(OBJID)), flush=True)
-
-def _down_hits(x, y_top, z, skip_id):
-    ray = habitat_sim.geo.Ray(mn.Vector3(float(x), float(y_top), float(z)), mn.Vector3(0., -1., 0.))
-    res = sim.cast_ray(ray, max_distance=6.0)
-    return [h for h in res.hits if h.object_id != skip_id] if res.has_hits() else []
-
-def support_offset(o, pos):
-    # 물체 원점이 받침면 위 얼마나 떠 있나 — 자산마다 원점 규약(바닥/중심)이 달라 실측
-    hs = [h for h in _down_hits(pos[0], pos[1] + 1.0, pos[2], o.object_id) if h.point[1] <= pos[1] + 0.05]
-    return (pos[1] - max(h.point[1] for h in hs)) if hs else 0.0
-
-def place_on_surface(o, x, z, floor_y, off):
-    # 새 자리 받침면: 바닥점 2.5m 위에서 내려쏘아 테이블 높이(≤1.2m) 이하의 가장 높은 면
-    hs = [h for h in _down_hits(x, floor_y + 2.5, z, o.object_id) if h.point[1] <= floor_y + 1.2]
-    y_s = max((h.point[1] for h in hs), default=floor_y)
-    o.motion_type = habitat_sim.physics.MotionType.KINEMATIC
-    o.translation = mn.Vector3(float(x), float(y_s + off), float(z))
-    return [float(v) for v in o.translation]
 
 def obj_center(oid):
     if oid in OBJID:
@@ -271,8 +306,8 @@ def witness(oid, pos, t, k):
         im = Image.fromarray(ob["rgb"][..., :3])
         ImageDraw.Draw(im).ellipse([u - 12, vv - 12, u + 12, vv + 12], outline="red", width=3)
         im.save(os.path.join(args.out, "witness", "%02d_t%d_%s.jpg" % (k, t, objs[oid]["type"].replace(" ", "_"))), quality=85)
-        return True
-    return False
+        return [round(float(u), 1), round(float(vv), 1)]
+    return None
 skipped_moves = 0
 cur = sim.pathfinder.get_random_navigable_point()
 goal = sim.pathfinder.get_random_navigable_point()
@@ -323,14 +358,20 @@ while t < args.frames:
                 print("  ⚠ 이동 건너뜀(핸들/보행점 없음): %s" % oid, flush=True)
             else:
                 off = support_offset(o, state[oid]["pos"])
-                newp = place_on_surface(o, np_[0], np_[2], float(np_[1]), off)
+                if on_floor_originally(o, state[oid]["pos"]):
+                    x1, z1, y1 = float(np_[0]), float(np_[2]), float(np_[1])
+                else:
+                    x1, z1, y1 = pick_receptacle(o, np_)
+                newp = place_at(o, x1, z1, y1, off)
                 real = room_at(newp[0], newp[2])          # 실제 좌표로 방 재판정
                 state[oid]["pos"] = newp                  # GT = 실제 배치 좌표
                 _st = sim.get_agent(0).get_state()
                 wit = witness(oid, newp, t, len(moves))
+                wit_file = ("witness/%02d_t%d_%s.jpg" % (len(moves), t, objs[oid]["type"].replace(" ", "_"))) if wit else None
                 sim.get_agent(0).set_state(_st)
                 moves.append(dict(t=t, oid=oid, frm=obj_room[oid], to=real, intended=dest,
-                                  pos=[round(v, 3) for v in newp], witness=bool(wit)))
+                                  pos=[round(v, 3) for v in newp], witness=bool(wit),
+                                  witness_file=wit_file, witness_ctr=wit))
                 obj_room[oid] = real
         obs = sim.get_sensor_observations()
         dep = obs["dep"]
@@ -340,7 +381,7 @@ while t < args.frames:
         up = np.array([0, 1.0, 0])
         vis, ctr, dist, anch = [], {}, {}, {}
         for oid, v in state.items():
-            d3 = np.array(v["pos"]) - cam
+            d3 = (obj_center(oid) if oid in OBJID else np.array(v["pos"])) - cam
             zc = float(d3 @ fwd)
             if not (0.3 < zc < 12): continue
             u = W / 2 + F * float(d3 @ rgt) / zc
