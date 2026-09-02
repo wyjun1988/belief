@@ -12,6 +12,8 @@
 """
 import json, glob, os
 import numpy as np
+import re as _re
+_rtn = lambda x: _re.sub(r"\.\d+$", "", x or "")   # 방유형 정규화 (HSSD region)
 from collections import Counter
 
 ROOT = os.environ.get("THOR_ROOT", "data/thor4")
@@ -53,7 +55,25 @@ if os.environ.get("GEO_DEPTH"):
         _d = json.loads(_l)
         GDEP[(_d["house"], _d["t"], _d["oid"])] = _d["d"]
     print("mono-depth %d표본" % len(GDEP), flush=True)
-PR = json.load(open("data/thor_prior.json"))
+PRIOR_JSON = os.environ.get("PRIOR_JSON", "data/thor_prior.json")
+PR = json.load(open(PRIOR_JSON))
+if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
+    PR = PR["dest"]          # hssd_move.json 형식 {"dwell","mobility","dest"}
+# ⚠️ 종전엔 thor_prior.json(THOR 어휘)을 HSSD 타입에 적용해 전부 미등록 → 인계분 답이
+#    사실상 난수였다 (AUDIT_20260902). PRIOR_JSON 으로 도메인 어휘를 지정할 것.
+
+# ── 재료 사다리 (AUDIT_20260902 조치1): 어떤 GT 가 들어갔는지 사람이 아니라 코드가 찍는다 ──
+_LG = os.environ.get("LOC_GEO", "0") == "1"
+LADDER = "초기맵:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s" % (
+    "GT" if SG_INIT == "gt" else "검출",
+    ("GT" if os.environ.get("LOC_YAW_GT") == "1" else "투표") if _LG else "융합(비기하)",
+    ("DA" if os.environ.get("GEO_DEPTH") else "GT") if _LG else "—",
+    "실측" if VSC is not None else "모의(GT vis)",
+    os.path.basename(PRIOR_JSON))
+_NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT"))
+print("재료 사다리 → " + LADDER, flush=True)
+if _NGT:
+    print("⚠️  GT 재료 %d종 포함 — 이 수치를 '무GT' 라 부르지 말 것" % _NGT, flush=True)
 
 res = {"rec": [], "sys": [], "static": [], "moved_sys": [], "moved_rec": [],
        "case": Counter()}
@@ -260,6 +280,13 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 ver_all += ver
         if record is None and ver_all:
             record = loc_of(sorted(ver_all)[:5])   # 온라인 등록 (이른 것)
+        record0 = record                       # 기준선 '초기맵만' (갱신 전)
+        # 기준선 '최신 강검출': 점수 상위 10% 중 가장 최근 프레임의 카메라 방
+        _top = np.where(TS >= np.quantile(TS, 0.90))[0]
+        base_new = arm[int(max(_top, key=lambda i2: ts[i2]))] if len(_top) else None
+        # 기준선 '사전확률만': 그 타입이 있을 법한 방 (c2 와 같은 식, 기록 제외 없음)
+        base_pri = max(((PR.get(v0["type"], {}).get(_rtn(rt[r]), .25)/max(nrt[rt[r]],1), r)
+                        for r in rids))[1]
         # 질의용: 최신 검증 3장의 방 질량
         alt = None
         if ver_all:
@@ -315,7 +342,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                         if _cc and _cc[0][1] >= min(2, C0_MIN) and _cc[0][0] != record:
                             alt = _cc[0][0]
         if record is None:
-            record = max(((PR.get(v0["type"], {}).get(rt[r], .25)/max(nrt[rt[r]],1), r)
+            record = max(((PR.get(v0["type"], {}).get(_rtn(rt[r]), .25)/max(nrt[rt[r]],1), r)
                           for r in rids))[1]
         # 질의: 기록 방 부재 게이팅 (온라인 앞/뒤 1/3 + 앵커 게이팅)
         inr = np.where(arm == record)[0]
@@ -385,13 +412,13 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             ans = alt
             res["case"]["c0"] += 1
         elif fired:
-            ans = max(((PR.get(v0["type"], {}).get(rt[r], .25)/max(nrt[rt[r]],1), r)
+            ans = max(((PR.get(v0["type"], {}).get(_rtn(rt[r]), .25)/max(nrt[rt[r]],1), r)
                        for r in rids if r != record))[1]
             res["case"]["c2"] += 1
         else:
             ans = record
             res["case"]["rec"] += 1
-        _bel2 = max(((PR.get(v0["type"], {}).get(rt[r], .25)/max(nrt[rt[r]],1), r)
+        _bel2 = max(((PR.get(v0["type"], {}).get(_rtn(rt[r]), .25)/max(nrt[rt[r]],1), r)
                      for r in rids if r != (alt if alt else record)))[1]
         _ans2 = (record if alt is not None else record if fired else _bel2)
         res.setdefault("sys2", []).append(tgt in (ans, _ans2))
@@ -416,6 +443,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         else:
             _ck = "①이동없음"
         res.setdefault("ck", Counter())[(_ck, _br, ans == tgt)] += 1
+        res.setdefault("rows", []).append((hn, _ck, ans == tgt, record0 == tgt,
+                                           base_new == tgt, base_pri == tgt))
         if os.environ.get("DUMP_JSONL"):
             _dp = dict(house=hn, oid=oid, type=v0["type"], branch=_br, ans=ans,
                        tgt=tgt, record=record, ok=bool(ans == tgt), moved=bool(mv))
@@ -432,8 +461,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             res["moved_sys"].append(ans == tgt); res["moved_rec"].append(record == tgt)
 
 n = len(res["sys"])
-print("=== 온라인 상태기계 v1 · %s · SG_INIT=%s%s · n=%d ==="
-      % (ROOT, SG_INIT, " ⚠️GT" if SG_INIT == "gt" else " (무GT)", n))
+print("=== 온라인 상태기계 v1 · %s · SG_INIT=%s · n=%d ===" % (ROOT, SG_INIT, n))
+print("  재료: " + LADDER)
 print("  정지 지도(t=0 GT)        %.3f" % np.mean(res["static"]))
 print("  **기록(갱신 후)**         **%.3f**" % np.mean(res["rec"]))
 print("  **최종 답(부재분기 포함)** **%.3f**" % np.mean(res["sys"]))
@@ -466,6 +495,28 @@ for c3 in ("①이동없음", "②재촬영", "③belief대상", "③확인기�
         c0o = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ == "c0" and o_)
         line += " | 목격채택(c0) %.2f · 채택분 정답 %.3f" % (c0n / tot, c0o / max(c0n, 1))
     print(line)
+# ── 기준선 대조 + 집 단위 부트스트랩 95% CI (AUDIT 조치3) ──
+rows = res.get("rows", [])
+if rows:
+    _rng = np.random.default_rng(0)
+    _hs = sorted({r[0] for r in rows}); _byh = {h: [r for r in rows if r[0] == h] for h in _hs}
+    def _acc_ci(c3, k):
+        sel = [r for r in rows if c3 == "전체" or r[1] == c3]
+        if not sel: return None
+        acc = float(np.mean([r[k] for r in sel])); bs = []
+        for _ in range(1000):
+            pick = _rng.choice(_hs, size=len(_hs), replace=True)
+            v = [r[k] for h in pick for r in _byh[h] if c3 == "전체" or r[1] == c3]
+            if v: bs.append(np.mean(v))
+        return acc, float(np.percentile(bs, 2.5)), float(np.percentile(bs, 97.5)), len(sel)
+    print("  ── 기준선 대조 (집 %d채 부트스트랩 95%% CI) ──" % len(_hs))
+    print("  %-12s %-5s %-18s %-18s %-18s %-18s" % ("경우", "n", "시스템", "초기맵만", "최신강검출", "사전확률만"))
+    for c3 in ("전체", "①이동없음", "②재촬영", "③belief대상", "③확인기회O", "③확인기회X", "③재방문없음", "④집밖반출"):
+        cells = [_acc_ci(c3, k) for k in (2, 3, 4, 5)]
+        if cells[0] is None: continue
+        print("  %-12s %-5d %s" % (c3, cells[0][3],
+              " ".join("%.3f[%.2f,%.2f]  " % (a, lo, hi) for a, lo, hi, _n in cells)))
+    print("  (CI 폭이 차이보다 넓으면 그 차이는 결론이 아니다)")
 print("  분기별 정오 (분기, 이동?, 건수, 정답률):")
 for b2 in ("c0", "c2", "rec"):
     for mvf in (True, False):
