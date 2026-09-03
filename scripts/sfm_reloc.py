@@ -85,21 +85,25 @@ def best_rec(recs):
 rec_map_dir = os.path.join(work, "rec_map"); rec_all_dir = os.path.join(work, "rec_all")
 rm = None
 if not a.redo and os.path.isdir(rec_map_dir) and any(os.path.isdir(os.path.join(rec_map_dir, d)) for d in os.listdir(rec_map_dir)):
-    rm = pycolmap.Reconstruction(os.path.join(rec_map_dir, sorted(os.listdir(rec_map_dir))[0]))
+    rm = pycolmap.Reconstruction(os.path.join(rec_map_dir, sorted(d for d in os.listdir(rec_map_dir) if os.path.isdir(os.path.join(rec_map_dir, d)))[0]))
 else:
     os.makedirs(rec_map_dir, exist_ok=True)
     rm = best_rec(pycolmap.incremental_mapping(db, hd, rec_map_dir, mapper_opts(names_map, False)))
-if rm is None: sys.exit("map 재구성 실패")
-log("map 재구성: 등록 %d/%d · 점 %d · 재투영 %.2fpx" % (rm.num_reg_images(), len(maps), rm.num_points3D(), rm.compute_mean_reprojection_error()))
-# map 재구성 디렉터리 안의 모델 경로(0/ 같은 하위)
-sub = [d for d in sorted(os.listdir(rec_map_dir)) if os.path.isdir(os.path.join(rec_map_dir, d))]
-in_path = os.path.join(rec_map_dir, sub[0]) if sub else rec_map_dir
+# 지점 회전만 있는 매핑워크(HSSD 밀집 remap)는 시차가 없어 map 만으로는 초기화가 안 되거나 몇 장만 붙는다 →
+# 그때는 map+live 를 한 번에 재구성(joint). live 보행이 기준선을 준다. (OG 는 SPEC 3-b 이동 프레임으로 map 만으로도 되게)
+map_ok = rm is not None and rm.num_reg_images() >= max(10, 0.3 * len(maps))
+if rm is not None: log("map 재구성: 등록 %d/%d · 점 %d · 재투영 %.2fpx%s" % (rm.num_reg_images(), len(maps), rm.num_points3D(), rm.compute_mean_reprojection_error(), "" if map_ok else " → 빈약, joint 로"))
+else: log("map 재구성 실패 → joint 로")
+sub = [d for d in sorted(os.listdir(rec_map_dir)) if os.path.isdir(os.path.join(rec_map_dir, d))] if os.path.isdir(rec_map_dir) else []
+in_path = os.path.join(rec_map_dir, sub[0]) if (sub and map_ok) else ""
 os.makedirs(rec_all_dir, exist_ok=True)
 _subs = [d for d in sorted(os.listdir(rec_all_dir)) if os.path.isdir(os.path.join(rec_all_dir, d))]
 if not a.redo and _subs:                     # live 등록 결과 캐시 (10~17분짜리) — 가장 큰 모델
     ra = best_rec({d: pycolmap.Reconstruction(os.path.join(rec_all_dir, d)) for d in _subs}); log("live 등록 캐시 사용 (%d모델)" % len(_subs))
-else:
+elif in_path:
     ra = best_rec(pycolmap.incremental_mapping(db, hd, rec_all_dir, mapper_opts([], True), input_path=in_path))
+else:
+    ra = best_rec(pycolmap.incremental_mapping(db, hd, rec_all_dir, mapper_opts([], False)))
 if ra is None: sys.exit("live 등록 실패")
 n_live_reg = sum(1 for im in ra.images.values() if im.name.startswith("live/") and im.has_pose)
 log("live 등록: %d/%d" % (n_live_reg, len(lives)))
@@ -195,7 +199,7 @@ with open(os.path.join(work, "map_pose_%s.jsonl" % hn), "w") as fo:
     for nm, m in zip(names_map, gm):
         if nm in P:
             apos, yaw = to_ours(*P[nm]); fo.write(json.dumps(dict(house=hn, name=nm, apos=apos, yaw=yaw, apos_gt=m["apos"], yaw_gt=m["yaw"])) + "\n")
-json.dump(dict(house=hn, map_reg=rm.num_reg_images(), n_map=len(maps), live_reg=len(rows), live_reg_raw=n_before, n_live=len(lives), cov=cov, vmax=a.vmax, strict=a.strict,
+json.dump(dict(house=hn, map_reg=(rm.num_reg_images() if rm is not None else 0), n_map=len(maps), map_joint=(not map_ok), live_reg=len(rows), live_reg_raw=n_before, n_live=len(lives), cov=cov, vmax=a.vmax, strict=a.strict,
                ate_med=float(np.median(ate)) if len(ate) else None, ate_lt05=float((ate < 0.5).mean()) if len(ate) else None,
                yaw_med=float(np.median(yerr)) if len(yerr) else None, room_hit=(hit / nhit) if nhit else None, n_room=nhit,
                sim3_rms=float(rms), sim3_inl=INL, scale=float(s), mirror=bool(mirror), sec=time.time() - T0), open(os.path.join(work, "summary_%s.json" % hn), "w"), indent=1, default=float)
