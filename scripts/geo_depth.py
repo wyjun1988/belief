@@ -62,13 +62,17 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     QT, QS, STx = list(zq["tg"]), zq["si"], zq["st"]
     g = json.load(open(hd + "/gt.json"))
     sm = g.get("scene_meta") or {}
-    stp = {k: v["pos"] for k, v in sm.get("static", {}).items() if v.get("pos")}
+    # ⚠️ HSSD static.pos 는 3D [x,y,z] — 종전엔 [1](높이)을 z 로 써서 지도 거리가 엉망이었다 (2026-09-03)
+    stp = {k: ([v["pos"][0], v["pos"][2]] if len(v["pos"]) == 3 else v["pos"])
+           for k, v in sm.get("static", {}).items() if v.get("pos")}
+    SA = za["s"]
     ZX = np.load(AXP + hn + ".npz", allow_pickle=True) if os.path.exists(AXP + hn + ".npz") else None
     axids = [a for a in (list(ZX["anch"]) if ZX is not None else []) if a in sm.get("static", {})]
     if ZX is not None and axids:
         _cols = [k for k, a in enumerate(list(ZX["anch"])) if a in sm["static"]]
-        AXS = ZX["s"][:, _cols]; AXS = AXS - np.median(AXS, axis=0, keepdims=True)
+        AXS = ZX["s"][:, _cols]                      # 원점수 (중앙값 보정치에 0.15 는 새 캐시에서 굶는다)
         AXPp = ZX["p"][:, _cols]
+        _atype = {a: (vocab.index(sm["static"][a]["type"]) if sm["static"][a].get("type") in vocab else None) for a in axids}
     else:
         AXS = None
     live = {m["t"]: m for m in g["live"]}
@@ -123,9 +127,14 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         m = live.get(tsl[i], {}); ap = m.get("apos")
         if ap is None: continue
         Z = zmap[i]; H, W = Z.shape; c2 = max(4, (W // pw) // 2)
-        for k in np.where(AXS[i] >= 0.15)[0]:
+        for k in np.where(AXS[i] >= float(os.environ.get("ANCH_EX", "0.80")))[0]:
             a = axids[k]
             if a not in stp: continue
+            # 앵커 존재 게이트 (eval_online 과 동일): 타입 검출 ≥ ANCH_TY 이고 두 패치가 ≤ ANCH_DP 칸 일치
+            _c = _atype.get(a)
+            if _c is None or SA[i, _c] < float(os.environ.get("ANCH_TY", "0.10")): continue
+            _pe, _pt = int(AXPp[i, k]), int(P[i, _c]); _dp = int(os.environ.get("ANCH_DP", "2"))
+            if abs(_pe % pw - _pt % pw) > _dp or abs(_pe // pw - _pt // pw) > _dp: continue
             cx = int((AXPp[i, k] % pw + .5) / pw * W); cy = int((AXPp[i, k] // pw + .5) / ph * H)
             zp = zpatch(Z, cx, cy, c2)
             d_map = float(np.hypot(stp[a][0] - ap[0], stp[a][1] - ap[1]))
