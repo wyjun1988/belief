@@ -192,14 +192,14 @@ def run(seq_dir, out_dir, model_name="da3metric-large", mode="window",
         print("[%d/%d] window %d..%d  owned %d  (metric=%s)"
               % (wi + 1, len(starts), idx[0], idx[-1], len(mine), pred.is_metric), flush=True)
         del pred
-        torch.cuda.empty_cache()
+        if device == "cuda": torch.cuda.empty_cache()
 
     if mode == "anchor":
         np.savetxt(os.path.join(out_dir, "pose", "poses_da3_anchor%s.txt" % raw_suffix),
                    gpose.reshape(n, 16), fmt="%.9g")
         meta["anchor_solved"] = int(solved.sum())
         meta["anchor_fallbacks"] = n_fallback[0]
-    meta["peak_vram_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 2)
+    meta["peak_vram_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 2) if device == "cuda" else None
     meta["raw_dir"] = os.path.basename(raw_dir)
     with open(os.path.join(out_dir, "da3_meta%s.json" % raw_suffix), "w") as f:
         json.dump(meta, f)
