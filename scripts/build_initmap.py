@@ -57,10 +57,11 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         for _k, _m in enumerate(mp):
             _r = _pm.get("map/%04d.jpg" % _k)
             _m["apos_gt"], _m["yaw_gt"] = _m.get("apos"), _m.get("yaw")
-            if _r: _m["apos"], _m["yaw"] = _r["apos"], _r["yaw"]; _npose += 1
+            if _r and (os.environ.get("MAP_PROP", "1") == "1" or not _r.get("prop")): _m["apos"], _m["yaw"] = _r["apos"], _r["yaw"]; _npose += 1
             else: _m["apos"] = None                      # SfM 미등록 맵 프레임은 투영에서 뺀다
         print("  %s 맵 포즈 SfM 대체 %d/%d" % (_hn0, _npose, len(mp)), flush=True)
-    _DAD = os.environ.get("MAP_DEPTH") == "da"; _DAK = float(os.environ.get("DA_K", "0.468"))
+    _DAD = os.environ.get("MAP_DEPTH") in ("da", "pts"); _DAK = float(os.environ.get("DA_K", "0.468"))
+    _DAFB = os.environ.get("MAP_DEPTH") == "da"        # pts: SfM 점 깊이만(없으면 검출 버림) · da: 없으면 DA 깊이
     _MPTS = None                                     # 맵 프레임 SfM 점 (있으면 DA 보다 우선)
     if _MPD and os.environ.get("MAP_POINTS", "1") == "1":
         _fp = os.path.join(os.path.expanduser(_MPD), _hn0, "map_points_%s.npz" % _hn0)
@@ -69,7 +70,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             for _kk in np.unique(_z["k"]):
                 _sel = _z["k"] == _kk; _MPTS[int(_kk)] = (_z["u"][_sel], _z["v"][_sel], _z["d"][_sel])
             print("  %s 맵 SfM 점 %d 프레임" % (_hn0, len(_MPTS)), flush=True)
-    if _DAD and "_damdl" not in globals():
+    if _DAFB and "_damdl" not in globals():
         from transformers import AutoImageProcessor, AutoModelForDepthEstimation
         _dname = "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf"
         _dadev = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
@@ -126,7 +127,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             if ap is None: continue
             yaw = float(mp[k]["yaw"])
             dmap = mp[k].get("dist") or {}
-            _Dk = _da_depth(im) if _DAD else None
+            _Dk = _da_depth(im) if _DAFB else None
             oid_of = {}
             for oid2, c2 in (mp[k].get("ctr") or {}).items():
                 oid_of.setdefault(round(c2[0] / 20), []).append(oid2)
@@ -135,12 +136,14 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 cx = (P_[c] % pw + .5) / pw * Wf
                 b = yaw + pbx(cx)
                 if _DAD:                                    # 거리: 패치 안 SfM 점 중앙값(≥3개) → 없으면 DA 깊이(5×5 중앙값). GT 물체 매칭 없음
-                    _cy = (P_[c] // pw + .5) / ph * _Dk.shape[0]; _cxp = cx / Wf * _Dk.shape[1]
+                    _Hm, _Wm = im.size[1], im.size[0]
+                    _cy = (P_[c] // pw + .5) / ph * _Hm; _cxp = cx / Wf * _Wm
                     d_ = None
                     if _MPTS is not None and k in _MPTS:
                         _u, _v, _d = _MPTS[k]; _sel = (np.abs(_u - _cxp) < 48) & (np.abs(_v - _cy) < 48)
                         if _sel.sum() >= 3: d_ = float(np.median(_d[_sel]))
                     if d_ is None:
+                        if _Dk is None: continue            # pts 모드: SfM 점 없는 검출은 버린다
                         _y0, _x0 = int(np.clip(_cy, 2, _Dk.shape[0] - 3)), int(np.clip(_cxp, 2, _Dk.shape[1] - 3))
                         d_ = float(np.median(_Dk[_y0-2:_y0+3, _x0-2:_x0+3]))
                     if not (0.3 < d_ < 12): continue
