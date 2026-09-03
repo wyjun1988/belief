@@ -48,6 +48,37 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     if not os.path.exists(fa): continue
     g = json.load(open(os.path.join(hd, "gt.json")))
     mp = g.get("map") or []
+    # ── 실물 재료 (2026-09-04): 맵 포즈를 SfM(map_pose_<house>.jsonl)으로, 거리를 DA-V2×상수로 ──
+    _MPD = os.environ.get("MAP_POSE_DIR")            # 예: ~/khcache/sfm → <dir>/<house>/map_pose_<house>.jsonl
+    _hn0 = os.path.basename(os.path.realpath(hd)); _npose = 0
+    if _MPD:
+        _f = os.path.join(os.path.expanduser(_MPD), _hn0, "map_pose_%s.jsonl" % _hn0)
+        _pm = {json.loads(l)["name"]: json.loads(l) for l in open(_f)} if os.path.exists(_f) else {}
+        for _k, _m in enumerate(mp):
+            _r = _pm.get("map/%04d.jpg" % _k)
+            _m["apos_gt"], _m["yaw_gt"] = _m.get("apos"), _m.get("yaw")
+            if _r: _m["apos"], _m["yaw"] = _r["apos"], _r["yaw"]; _npose += 1
+            else: _m["apos"] = None                      # SfM 미등록 맵 프레임은 투영에서 뺀다
+        print("  %s 맵 포즈 SfM 대체 %d/%d" % (_hn0, _npose, len(mp)), flush=True)
+    _DAD = os.environ.get("MAP_DEPTH") == "da"; _DAK = float(os.environ.get("DA_K", "0.468"))
+    _MPTS = None                                     # 맵 프레임 SfM 점 (있으면 DA 보다 우선)
+    if _MPD and os.environ.get("MAP_POINTS", "1") == "1":
+        _fp = os.path.join(os.path.expanduser(_MPD), _hn0, "map_points_%s.npz" % _hn0)
+        if os.path.exists(_fp):
+            _z = np.load(_fp); _MPTS = {}
+            for _kk in np.unique(_z["k"]):
+                _sel = _z["k"] == _kk; _MPTS[int(_kk)] = (_z["u"][_sel], _z["v"][_sel], _z["d"][_sel])
+            print("  %s 맵 SfM 점 %d 프레임" % (_hn0, len(_MPTS)), flush=True)
+    if _DAD and "_damdl" not in globals():
+        from transformers import AutoImageProcessor, AutoModelForDepthEstimation
+        _dname = "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf"
+        _dadev = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+        _daproc = AutoImageProcessor.from_pretrained(_dname); _damdl = AutoModelForDepthEstimation.from_pretrained(_dname).to(_dadev).eval()
+        print("  거리: DA-V2 metric × %.3f (%s)" % (_DAK, _dadev), flush=True)
+    def _da_depth(img):
+        inp = _daproc(images=img, return_tensors="pt").to(_dadev)
+        with torch.no_grad(): d = _damdl(**inp).predicted_depth
+        return torch.nn.functional.interpolate(d[None], size=img.size[::-1], mode="bicubic", align_corners=False)[0, 0].float().cpu().numpy() * _DAK
     mfs = sorted(glob.glob(os.path.join(hd, "map", "*.jpg")))
     if not mp or not mfs:
         print("  %s 매핑워크 없음 — 건너뜀" % hn, flush=True); continue
@@ -91,21 +122,35 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         if GEO:
             # 검출 패치 → 방위 → (GT 거리) → 지도 투영 → 방
             P_ = torch.sigmoid(lg).argmax(1)[0].int().cpu().numpy()
-            ap = mp[k]["apos"]; yaw = float(mp[k]["yaw"])
+            ap = mp[k]["apos"]
+            if ap is None: continue
+            yaw = float(mp[k]["yaw"])
             dmap = mp[k].get("dist") or {}
+            _Dk = _da_depth(im) if _DAD else None
             oid_of = {}
             for oid2, c2 in (mp[k].get("ctr") or {}).items():
                 oid_of.setdefault(round(c2[0] / 20), []).append(oid2)
             for c, v in enumerate(vocab):
                 if s[c] < TH: continue
                 cx = (P_[c] % pw + .5) / pw * Wf
-                # 거리: 그 화면 위치에 가장 가까운 GT 물체의 거리 (배포에선 depth)
-                cand = [(abs(((mp[k]["ctr"][o][0]) - cx)), o) for o in dmap]
-                if not cand: continue
-                dd, o_near = min(cand)
-                if dd > 80: continue
                 b = yaw + pbx(cx)
-                d_ = dmap[o_near]
+                if _DAD:                                    # 거리: 패치 안 SfM 점 중앙값(≥3개) → 없으면 DA 깊이(5×5 중앙값). GT 물체 매칭 없음
+                    _cy = (P_[c] // pw + .5) / ph * _Dk.shape[0]; _cxp = cx / Wf * _Dk.shape[1]
+                    d_ = None
+                    if _MPTS is not None and k in _MPTS:
+                        _u, _v, _d = _MPTS[k]; _sel = (np.abs(_u - _cxp) < 48) & (np.abs(_v - _cy) < 48)
+                        if _sel.sum() >= 3: d_ = float(np.median(_d[_sel]))
+                    if d_ is None:
+                        _y0, _x0 = int(np.clip(_cy, 2, _Dk.shape[0] - 3)), int(np.clip(_cxp, 2, _Dk.shape[1] - 3))
+                        d_ = float(np.median(_Dk[_y0-2:_y0+3, _x0-2:_x0+3]))
+                    if not (0.3 < d_ < 12): continue
+                else:
+                    # 거리: 그 화면 위치에 가장 가까운 GT 물체의 거리 (GT 재료)
+                    cand = [(abs(((mp[k]["ctr"][o][0]) - cx)), o) for o in dmap]
+                    if not cand: continue
+                    dd, o_near = min(cand)
+                    if dd > 80: continue
+                    d_ = dmap[o_near]
                 pt = [ap[0] + d_ * np.sin(np.radians(b)), ap[1] + d_ * np.cos(np.radians(b))]
                 pts_.setdefault(v, []).append((pt, float(s[c]), (float(ap[0]), float(ap[1]))))
                 rr = room_pt(pt)

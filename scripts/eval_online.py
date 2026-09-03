@@ -74,14 +74,14 @@ if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
 # ── 재료 사다리 (AUDIT_20260902 조치1): 어떤 GT 가 들어갔는지 사람이 아니라 코드가 찍는다 ──
 _LG = os.environ.get("LOC_GEO", "0") == "1"
 _ANCH_EX = float(os.environ.get("ANCH_EX", "0.80")); _ANCH_TY = float(os.environ.get("ANCH_TY", "0.10")); _ANCH_DP = int(os.environ.get("ANCH_DP", "2"))
-LADDER = "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT%s · 사전확률:%s · c0창:%s%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
+LADDER = "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:%s%s · 사전확률:%s · c0창:%s%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
     "GT" if SG_INIT == "gt" else "검출",
     "SfM" if POSE is not None else "GT(apos)",
     # POSE_JSONL 이 있으면 live 의 apos·yaw 가 SfM 값으로 덮인다 → LOC_YAW_GT=1 경로가 읽는 m["yaw"] 는 SfM yaw 다
     (("SfM" if os.environ.get("LOC_YAW_GT") == "1" else "투표") if POSE is not None else ("GT" if os.environ.get("LOC_YAW_GT") == "1" else "투표")) if _LG else "융합(비기하)",
     ("DA" if os.environ.get("GEO_DEPTH") else "GT") if _LG else "—",
     "실측" if VSC is not None else "모의(GT vis)",
-    "(열린공간 병합)" if os.environ.get("ROOM_GROUPS") == "1" else "",
+    "SfM" if POSE is not None else "GT", "(열린공간 병합)" if os.environ.get("ROOM_GROUPS") == "1" else "",
     os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), "(광선만)" if os.environ.get("C0_RAYPICK") == "1" else "",
     ("(≤%sm)" % os.environ.get("C0_MAXD")) if os.environ.get("C0_MAXD") else "", "(방위다양)" if os.environ.get("C0_DIVERSE") == "1" else "", _ANCH_EX, _ANCH_TY, _ANCH_DP,
     (" · yaw:이동방향우선(정지시 투표)" if os.environ.get("YAW_ORDER") == "motion_first" else " · yaw대체:이동방향" if os.environ.get("YAW_FALLBACK") == "motion" else ""),
@@ -158,6 +158,26 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             for k, v in sm["static"].items():
                 if v.get("pos"): _byt.setdefault(v["type"], []).append(v["pos"])
             _geo = (sm["polys"], _stp, _byt)
+    # 카메라방: POSE_JSONL 이 있으면 SfM 위치를 평면도(사용자 입력)에 넣어 정한다 — GT live.room 대신 (사다리 '카메라방:SfM')
+    if POSE is not None and _geo is not None:
+        def _room_pt0(pt):
+            polys = _geo[0]
+            def _pls(pl): return pl if (pl and isinstance(pl[0][0], (list, tuple))) else [pl]
+            for r in polys:
+                for pl in _pls(polys[r]):
+                    x, z = pt; n2 = len(pl); c2 = False
+                    for j2 in range(n2):
+                        x1, z1 = pl[j2]; x2, z2 = pl[(j2 + 1) % n2]
+                        if (z1 > z) != (z2 > z) and x < (x2-x1)*(z-z1)/(z2-z1+1e-12)+x1: c2 = not c2
+                    if c2: return r
+            return min(polys, key=lambda r: min((pt[0]-v[0])**2 + (pt[1]-v[1])**2 for pl in _pls(polys[r]) for v in pl))
+        _nr = 0
+        for t, m_ in live.items():
+            m_["room_gt"] = m_.get("room")
+            if m_.get("apos") is not None: m_["room"] = _room_pt0(m_["apos"]); _nr += 1
+            else: m_["room"] = None                       # 포즈 없는 프레임: 카메라방 미상
+        _hit = np.mean([m_["room"] == m_["room_gt"] for m_ in live.values() if m_["room"] is not None]) if _nr else 0
+        print("  %s 카메라방 SfM 판정 %d/%d · GT 일치 %.2f" % (hn, _nr, len(live), _hit), flush=True)
     arm = np.array([live[t]["room"] for t in ts])
     AS = S[:, nT:]
     im = {}; im_inst = {}

@@ -299,10 +299,45 @@ if len(_P3):
 out = a.out or os.path.join(work, "pose_%s.jsonl" % hn)
 with open(out, "w") as fo:
     for r in rows: fo.write(json.dumps(r) + "\n")
+# 맵 포즈 내보내기 + **지점 전파**: 매핑 프로토콜은 지점당 NA 각도(45° 스텝)다. 지점 회전 프레임은 시차가 없어 절반쯤 SfM 에
+# 안 붙는데, 같은 지점의 등록 프레임이 하나라도 있으면 위치는 그 평균, yaw 는 45°×(각도 차)로 채운다(프로토콜 지식, GT 아님).
+NA = int(os.environ.get("MAP_ANGLES", "8")); STEP = float(os.environ.get("MAP_YAW_STEP", "45"))
+mpose = {nm: to_ours(*P[nm]) for nm in names_map if nm in P}
+_sgn = []
+for b0 in range(0, len(names_map), NA):
+    ks = [k for k in range(b0, min(b0 + NA, len(names_map))) if names_map[k] in mpose]
+    for i1 in range(len(ks)):
+        for i2 in range(i1 + 1, len(ks)):
+            dy = (mpose[names_map[ks[i2]]][1] - mpose[names_map[ks[i1]]][1] + 180) % 360 - 180
+            _sgn.append(np.sign(dy) * (abs(dy) / (STEP * (ks[i2] - ks[i1])) > 0.5))
+sgn = 1.0 if not _sgn or np.mean(_sgn) >= 0 else -1.0
+n_prop = 0
+for b0 in range(0, len(names_map), NA):
+    ks = [k for k in range(b0, min(b0 + NA, len(names_map))) if names_map[k] in mpose]
+    if not ks: continue
+    cpos = np.mean([mpose[names_map[k]][0] for k in ks], 0); kref = ks[0]; yref = mpose[names_map[kref]][1]
+    for k in range(b0, min(b0 + NA, len(names_map))):
+        if names_map[k] not in mpose:
+            mpose[names_map[k]] = ([round(float(cpos[0]), 3), round(float(cpos[1]), 3)], round((yref + sgn * STEP * (k - kref)) % 360, 1)); n_prop += 1
+if n_prop: log("지점 전파: 맵 포즈 %d → %d (지점당 %d각·%g° 스텝·방향 %+d)" % (len(mpose) - n_prop, len(mpose), NA, STEP, int(sgn)))
 with open(os.path.join(work, "map_pose_%s.jsonl" % hn), "w") as fo:
     for nm, m in zip(names_map, gm):
-        if nm in P:
-            apos, yaw = to_ours(*P[nm]); fo.write(json.dumps(dict(house=hn, name=nm, apos=apos, yaw=yaw, apos_gt=m["apos"], yaw_gt=m["yaw"])) + "\n")
+        if nm in mpose:
+            apos, yaw = mpose[nm]; fo.write(json.dumps(dict(house=hn, name=nm, apos=apos, yaw=yaw, prop=(nm not in P), apos_gt=m["apos"], yaw_gt=m["yaw"])) + "\n")
+# 맵 프레임의 SfM 3D 점 (픽셀 u,v + 메트릭 깊이) — 초기맵 거리용 (DA 보다 정확, 있는 곳만)
+_mu, _mv, _md, _mi, _mn = [], [], [], [], []
+for k, nm in enumerate(names_map):
+    im = next((i for i in ra.images.values() if i.name == nm and i.has_pose), None)
+    if im is None: continue
+    p2 = [q for q in im.points2D if q.has_point3D()]
+    if not p2: continue
+    X = np.array([ra.points3D[q.point3D_id].xyz for q in p2]); xy = np.array([q.xy for q in p2])
+    cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world; z = (cfw * X)[:, 2] * S3
+    _mu.append(xy[:, 0]); _mv.append(xy[:, 1]); _md.append(z); _mi.append(np.full(len(z), k)); _mn.append(nm)
+if _mu:
+    np.savez_compressed(os.path.join(work, "map_points_%s.npz" % hn), u=np.concatenate(_mu).astype(np.float32), v=np.concatenate(_mv).astype(np.float32),
+                        d=np.concatenate(_md).astype(np.float32), k=np.concatenate(_mi).astype(np.int32))
+    log("맵 프레임 SfM 점 %d (프레임 %d)" % (sum(len(x) for x in _mu), len(_mn)))
 json.dump(dict(house=hn, map_reg=(rm.num_reg_images() if rm is not None else 0), n_map=len(maps), map_joint=(not map_ok), live_reg=len(rows), live_reg_raw=n_before, n_live=len(lives), cov=cov, vmax=a.vmax, strict=a.strict,
                ate_med=float(np.median(ate)) if len(ate) else None, ate_lt05=float((ate < 0.5).mean()) if len(ate) else None,
                yaw_med=float(np.median(yerr)) if len(yerr) else None, room_hit=(hit / nhit) if nhit else None, n_room=nhit,
