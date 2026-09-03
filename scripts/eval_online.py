@@ -72,14 +72,14 @@ if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
 # ── 재료 사다리 (AUDIT_20260902 조치1): 어떤 GT 가 들어갔는지 사람이 아니라 코드가 찍는다 ──
 _LG = os.environ.get("LOC_GEO", "0") == "1"
 _ANCH_EX = float(os.environ.get("ANCH_EX", "0.80")); _ANCH_TY = float(os.environ.get("ANCH_TY", "0.10")); _ANCH_DP = int(os.environ.get("ANCH_DP", "2"))
-LADDER = "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s · c0창:%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
+LADDER = "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s · c0창:%s%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
     "GT" if SG_INIT == "gt" else "검출",
     "SfM" if POSE is not None else "GT(apos)",
     ("SfM" if POSE is not None and os.environ.get("LOC_YAW_GT") != "1" else "GT" if os.environ.get("LOC_YAW_GT") == "1" else "투표") if _LG else "융합(비기하)",
     ("DA" if os.environ.get("GEO_DEPTH") else "GT") if _LG else "—",
     "실측" if VSC is not None else "모의(GT vis)",
     os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), "(광선만)" if os.environ.get("C0_RAYPICK") == "1" else "",
-    ("(≤%sm)" % os.environ.get("C0_MAXD")) if os.environ.get("C0_MAXD") else "", _ANCH_EX, _ANCH_TY, _ANCH_DP,
+    ("(≤%sm)" % os.environ.get("C0_MAXD")) if os.environ.get("C0_MAXD") else "", "(방위다양)" if os.environ.get("C0_DIVERSE") == "1" else "", _ANCH_EX, _ANCH_TY, _ANCH_DP,
     (" · yaw:이동방향우선(정지시 투표)" if os.environ.get("YAW_ORDER") == "motion_first" else " · yaw대체:이동방향" if os.environ.get("YAW_FALLBACK") == "motion" else ""),
     ("기하(%s)" % os.environ.get("ABS_MODE", "spot")) if ABS_GEO else "점수마진")
 _NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT", "위치:GT"))
@@ -389,6 +389,19 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 if os.environ.get("C0_DIAG") == "1":
                     _dg = dict(house=hn, oid=oid, n_rr=len(_rr), n_pas=len(_pas), pick=[int(ts[i2]) for i2 in _pick],
                                rays=[bool(_geo_ray(i2)) for i2 in _pick], record=record)
+                if os.environ.get("C0_DIVERSE") == "1" and len(_pas) >= 2:
+                    # 거리 불필요한 삼각측량을 살리려면 **방위차가 큰 두 시점**이 필요하다. 최신 3장은 같은 방문(같은 각도)이기
+                    # 쉬워 단일 투영(거리 오차)으로 떨어진다. 통과 크롭 전체에서 방위차 최대 쌍 + 최신 1장을 고른다.
+                    _cand = [(i2, _geo_ray(i2)) for i2, _s in _pas[:12]]
+                    _cand = [(i2, r) for i2, r in _cand if r]
+                    _bestp, _bestd = None, 0.0
+                    for _a in range(len(_cand)):
+                        for _b in range(_a + 1, len(_cand)):
+                            (_p1, _b1), (_p2, _b2) = _cand[_a][1], _cand[_b][1]
+                            _dd = abs((_b1 - _b2 + 180) % 360 - 180)
+                            if _dd > _bestd and np.hypot(_p1[0]-_p2[0], _p1[1]-_p2[1]) >= 0.5: _bestd, _bestp = _dd, (_cand[_a][0], _cand[_b][0])
+                    if _bestp and _bestd >= 15:
+                        _pick = list(_bestp) + [i2 for i2, _s in _pas[:1] if i2 not in _bestp]
                 if len(_pick) >= C0_MIN:
                     _rays = [r for r in (_geo_ray(i2) for i2 in _pick) if r]
                     _pts = []
