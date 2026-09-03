@@ -405,3 +405,21 @@ v4 델타는 `patch -p1` 로 붙였다(og_episode 6헝크 중 1 — 예산 자�
 
 패치 `og_spec3_spec44_20260903.patch` 는 드라이브에 아직 없다(E:\ 에만). 올라오면 base d43ce4a
 위에 적용한다 — 아이맥 HEAD 의 og_* 는 d6eaff1(v3 본체+v4 델타+yaw 변환) 이후 손대지 않아 충돌 없을 것.
+
+
+---
+
+## 14. 아이맥 반영 (2026-09-03 저녁) — Wainscott 검증과 20채 재시작에 대해
+
+Wainscott(방 8, `--case4 2`) 단일 검증: ① 15 · ② 7 · ③ 7 · ④ 2/2 통과, `moving_frame_frac` 0.605 만 실패.
+§13 의 case4 시선 누출 방지(`raw_room_points` 깊숙한 지점 우선 + `case4_invisible_from_scope` 방마다 20샘플)
+구현 확인. 20채는 첫 채 완료 시 멈춰 확인 후 진행 — 맞는 절차.
+
+**결정**: `moving_frame_frac` 게이트를 **≤ 0.6** 으로 완화 (SPEC 4-4.1 수정). 이유: 큰 씬의 보행량은
+구조적(prelude 2회 + 증거 방문 3 + 경유방)이라 체류로 못 잡고, 체류 120프레임(2분/정지)을 더 늘리면
+사실성이 반대로 깨진다. 보행을 줄이려면 **횟수**를 줄여라: prelude 2회는 재방문이 부족한 정적 물체의
+방에만, 경유방은 최근접(이미 반영). `--dwell 120·--filler-dwell-mult 2.0·--frames-max-factor 4.0` 은 유지.
+평가 쪽 영향: 체류 프레임이 늘면 앵커 투표·부재 판정에 유리하고 ② 증거 수는 `--evidence` 가 결정하므로 불변.
+
+**요청**: 첫 채 확인 시 `audit.json` 의 5줄 + `dwell_frame_frac`·`mean_dwell_frames`·`room_switches(목적지)`
+·`case4_invisible` 결과를 보고. 완료 후 델타 패치(경유방 최근접·prelude 2회·case4 구현·시선 검사)를 드라이브에.
