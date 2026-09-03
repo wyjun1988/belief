@@ -375,6 +375,16 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     _first = next((i2 for i2 in range(len(ts)) if vis[i2]), None)
                     _p0 = _proj(_first) if _first is not None else None
                     if _p0: record = min(_cands, key=lambda c3: (c3[0][0]-_p0[0])**2 + (c3[0][1]-_p0[1])**2)[1]
+                elif os.environ.get("INST_SEL", "vote") == "prior":
+                    # 후보 인스턴스를 **방 사전확률 × 검출 가중**으로 — 투영(거리 잡음)에 의존하지 않는 GT-free 선택
+                    record = max(_cands, key=lambda c3: _prior(v0["type"], rt.get(c3[1], c3[1])) * (c3[2] ** 0.5))[1]
+                elif os.environ.get("INST_SEL", "vote") == "priorvote":
+                    _src = _vpass if _vpass else (sorted(hits)[:8] if len(hits) else [])
+                    _votes = Counter()
+                    for i2 in _src[:12]:
+                        _p0 = _proj(i2)
+                        if _p0: _votes[min(_cands, key=lambda c3: (c3[0][0]-_p0[0])**2 + (c3[0][1]-_p0[1])**2)[1]] += 1
+                    record = max(_cands, key=lambda c3: (1 + _votes.get(c3[1], 0)) * _prior(v0["type"], rt.get(c3[1], c3[1])) * (c3[2] ** 0.5))[1]
                 elif os.environ.get("INST_SEL", "vote") == "vote":
                     # 시스템 신호만: 검증 통과 프레임 **전부**의 투영을 모아 다수결(단일 프레임은 거리 잡음에 흔들린다)
                     _src = _vpass if _vpass else (sorted(hits)[:8] if len(hits) else [])

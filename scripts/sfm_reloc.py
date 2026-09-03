@@ -33,6 +33,8 @@ ap.add_argument("--da-n", type=int, default=40)
 ap.add_argument("--reject-outside", action="store_true", help="[기본 OFF — 4채 벤치 0.829→0.805] 정렬 뒤 어느 방 폴리곤에도 들어가지 않는 live 프레임을 기권 처리 — 유령 복제(잘못 등록된 사본)를 GT 없이 거른다. 평면도는 사용자 입력")
 ap.add_argument("--align", default="gt", choices=["gt", "sites"], help="회전·병진 출처: gt=GT 맵포즈 sim3 · sites=등록 때 붙인 지점 라벨이 평면도 폴리곤 안에 들어가게(GT 좌표 불사용; 척도는 --scale da 필수)")
 ap.add_argument("--fast", action="store_true", help="전역 BA 를 덜 자주(1.1→1.3배)·반복 절반 — live 등록 시간 단축(정확도는 4채에서 대조할 것)")
+ap.add_argument("--redo-map", action="store_true", help="DB(특징·매칭)는 두고 재구성만 다시 — 매퍼 노브 실험용")
+ap.add_argument("--minmatch", type=int, default=0, help="매퍼 min_num_matches (기본 15). 반복 구조에서 지도가 접히면 30~40 으로")
 ap.add_argument("--strict", action="store_true", help="PnP 등록 문턱 강화(abs_pose_min_num_inliers 60·inlier_ratio 0.4) — 반복 구조 유령 등록 억제")
 ap.add_argument("--matcher", default="vocab", choices=["vocab", "exhaustive"], help="vocab: 순차+vocab-tree 검색(faiss 판 트리 필요) · exhaustive: 전수")
 ap.add_argument("--gpu", action="store_true", help="CUDA 박스(RTX)에서 SIFT·매칭을 GPU 로")
@@ -79,6 +81,7 @@ def mapper_opts(names, fix):
     o = pycolmap.IncrementalPipelineOptions(); o.num_threads = a.threads; o.image_names = names
     o.ba_refine_focal_length = False; o.ba_refine_principal_point = False; o.ba_refine_extra_params = False
     o.multiple_models = False; o.fix_existing_frames = fix
+    if a.minmatch: o.min_num_matches = a.minmatch; o.mapper.abs_pose_min_num_inliers = max(30, a.minmatch)
     if a.strict:
         o.mapper.abs_pose_min_num_inliers = 60; o.mapper.abs_pose_min_inlier_ratio = 0.4
     if a.fast:
@@ -90,10 +93,11 @@ def best_rec(recs):
 
 rec_map_dir = os.path.join(work, "rec_map"); rec_all_dir = os.path.join(work, "rec_all")
 rm = None
-if not a.redo and os.path.isdir(rec_map_dir) and any(os.path.isdir(os.path.join(rec_map_dir, d)) for d in os.listdir(rec_map_dir)):
+if not (a.redo or a.redo_map) and os.path.isdir(rec_map_dir) and any(os.path.isdir(os.path.join(rec_map_dir, d)) for d in os.listdir(rec_map_dir)):
     rm = pycolmap.Reconstruction(os.path.join(rec_map_dir, sorted(d for d in os.listdir(rec_map_dir) if os.path.isdir(os.path.join(rec_map_dir, d)))[0]))
 else:
     os.makedirs(rec_map_dir, exist_ok=True)
+    if a.redo_map: os.system("rm -rf '%s'/* '%s'/*" % (rec_map_dir, rec_all_dir))
     rm = best_rec(pycolmap.incremental_mapping(db, hd, rec_map_dir, mapper_opts(names_map, False)))
 # 지점 회전만 있는 매핑워크(HSSD 밀집 remap)는 시차가 없어 map 만으로는 초기화가 안 되거나 몇 장만 붙는다 →
 # 그때는 map+live 를 한 번에 재구성(joint). live 보행이 기준선을 준다. (OG 는 SPEC 3-b 이동 프레임으로 map 만으로도 되게)
@@ -104,7 +108,7 @@ sub = [d for d in sorted(os.listdir(rec_map_dir)) if os.path.isdir(os.path.join(
 in_path = os.path.join(rec_map_dir, sub[0]) if (sub and map_ok) else ""
 os.makedirs(rec_all_dir, exist_ok=True)
 _subs = [d for d in sorted(os.listdir(rec_all_dir)) if os.path.isdir(os.path.join(rec_all_dir, d))]
-if not a.redo and _subs:                     # live 등록 결과 캐시 (10~17분짜리) — 가장 큰 모델
+if not (a.redo or a.redo_map) and _subs:      # live 등록 결과 캐시 (10~17분짜리) — 가장 큰 모델
     ra = best_rec({d: pycolmap.Reconstruction(os.path.join(rec_all_dir, d)) for d in _subs}); log("live 등록 캐시 사용 (%d모델)" % len(_subs))
 elif in_path:
     ra = best_rec(pycolmap.incremental_mapping(db, hd, rec_all_dir, mapper_opts([], True), input_path=in_path))
@@ -199,36 +203,37 @@ def align_by_labels():
     cams = [S_FIX * (Rg @ P[nm][0]) for nm in P if nm.startswith("live/")]
     cams = np.array(cams)[:: max(1, len(cams) // 200)]
     pc = {r: np.mean(np.array(pl)[:, [0, -1]], 0) for r, pl in polys.items()}
+    # 정렬 탐색: 중심 맞춤 ±1m 격자는 방 크기가 제각각인 집에서 참값을 놓친다(20채 중 14채 실패, yaw 60~130°).
+    # → **대응 1개 가설**: (지점 s, 그 지점 라벨 방의 중심) 하나가 변환을 정하고, 나머지 지점이 제 방에 들어가는 수로 채점.
+    def _score(sp2, tt):
+        return sum(pip_((q[0] + tt[0], q[1] + tt[1]), polys[r]) for q, (_, r) in zip(sp2, sites))
     best = None
+    _sub = list(range(0, len(sites), max(1, len(sites) // 40)))       # 가설은 최대 40지점만 (비용 절감)
     for mirror in (False, True):
         Mm = np.diag([-1.0, 1.0, 1.0]) if mirror else np.eye(3)
-        for yaw in np.arange(0, 360, 2.0):
+        for yaw in np.arange(0, 360, 3.0):
             y = np.radians(yaw); Ry = np.array([[np.cos(y), 0, np.sin(y)], [0, 1, 0], [-np.sin(y), 0, np.cos(y)]]) @ Mm
-            sp = np.array([Ry @ p for p, _ in sites]); tgt = np.array([pc[r] for _, r in sites])
-            t0 = (tgt - sp[:, [0, 2]]).mean(0)
-            for dx in (-1.0, -0.5, 0, 0.5, 1.0):
-                for dz in (-1.0, -0.5, 0, 0.5, 1.0):
-                    tt = t0 + [dx, dz]
-                    sc = sum(pip_((q[0] + tt[0], q[2] + tt[1]), polys[r]) for q, (_, r) in zip(sp, sites))
-                    cp = np.array([Ry @ q for q in cams]); sc2 = sum(any(pip_((q[0] + tt[0], q[2] + tt[1]), pl) for pl in polys.values()) for q in cp)
-                    key = (sc, sc2)
-                    if best is None or key > best[0]: best = (key, yaw, mirror, Ry, tt)
-    (sc, sc2), yaw, mirror, Ry, tt = best
-    # 국소 정제 0.1m / 1°
+            sp = np.array([Ry @ p for p, _ in sites])[:, [0, 2]]
+            for k in _sub:
+                tt = pc[sites[k][1]] - sp[k]
+                sc = _score(sp, tt)
+                if best is None or sc > best[0]: best = (sc, yaw, mirror, Ry, tt)
+    sc, yaw, mirror, Ry, tt = best
+    # 국소 정제 (yaw ±3° / 0.5°, 이동 ±0.6m / 0.15m) — 동점이면 live 카메라가 폴리곤 안에 드는 수로 가른다
     for _ in range(2):
         cand = []
-        for dy in np.arange(-3, 3.1, 1.0):
-            y = np.radians(yaw + dy); Ry2 = np.array([[np.cos(y), 0, np.sin(y)], [0, 1, 0], [-np.sin(y), 0, np.cos(y)]]) @ (np.diag([-1.0, 1.0, 1.0]) if mirror else np.eye(3))
-            sp = np.array([Ry2 @ p for p, _ in sites]); cp = np.array([Ry2 @ q for q in cams])
-            for dx in np.arange(-0.5, 0.51, 0.1):
-                for dz in np.arange(-0.5, 0.51, 0.1):
+        Mm = np.diag([-1.0, 1.0, 1.0]) if mirror else np.eye(3)
+        for dy in np.arange(-3, 3.01, 0.5):
+            y = np.radians(yaw + dy); Ry2 = np.array([[np.cos(y), 0, np.sin(y)], [0, 1, 0], [-np.sin(y), 0, np.cos(y)]]) @ Mm
+            sp = np.array([Ry2 @ p for p, _ in sites])[:, [0, 2]]; cp = np.array([Ry2 @ q for q in cams])[:, [0, 2]]
+            for dx in np.arange(-0.6, 0.61, 0.15):
+                for dz in np.arange(-0.6, 0.61, 0.15):
                     t2 = tt + [dx, dz]
-                    k = (sum(pip_((q[0] + t2[0], q[2] + t2[1]), polys[r]) for q, (_, r) in zip(sp, sites)),
-                         sum(any(pip_((q[0] + t2[0], q[2] + t2[1]), pl) for pl in polys.values()) for q in cp))
-                    cand.append((k, yaw + dy, Ry2, t2))
+                    k2 = (_score(sp, t2), sum(any(pip_((q[0] + t2[0], q[1] + t2[1]), pl) for pl in polys.values()) for q in cp))
+                    cand.append((k2, yaw + dy, Ry2, t2))
         k, yaw, Ry, tt = max(cand, key=lambda c: c[0])
     R_ = Ry @ Rg; t_ = np.array([tt[0], 1.5 - S_FIX * float(np.mean([(R_ @ P[nm][0])[1] for nm in P])), tt[1]])
-    log("라벨 정렬: 지점 %d/%d 이 제 방 폴리곤 안 · live 카메라 폴리곤 안 %d/%d · yaw %.0f° · 미러 %s" % (k[0], len(sites), k[1], len(cams), yaw, mirror))
+    log("라벨 정렬: 지점 %d/%d 이 제 방 폴리곤 안 · live 카메라 폴리곤 안 %d/%d · yaw %.1f° · 미러 %s" % (k[0], len(sites), k[1], len(cams), yaw, mirror))
     return R_, t_, mirror
 best = None
 if a.align == "sites":
