@@ -378,8 +378,10 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 _c0maxd = float(os.environ.get("C0_MAXD", "0"))
                 if _c0maxd > 0:
                     # 원거리 목격은 광선 방위 오차가 방을 넘긴다 (v3: k=0 타겟 거짓 인계 3/25) → 거리 상한
-                    _pas = [(i2, s_) for i2, s_ in _pas
-                            if ((live[ts[i2]].get("dist") or {}).get(oid) or 0) <= _c0maxd]
+                    def _dist_of(i2):   # 실물 거리(DA) 가 있으면 그것, 없으면 GT dist (사다리 재료와 일치)
+                        _d = GDEP.get((hn, int(ts[i2]), oid)) if GDEP is not None else None
+                        return _d if _d is not None else ((live[ts[i2]].get("dist") or {}).get(oid) or 0)
+                    _pas = [(i2, s_) for i2, s_ in _pas if _dist_of(i2) <= _c0maxd]
                     _pick = [i2 for i2, _s in _pas][:int(os.environ.get("C0_WIN", "3"))]
                 if os.environ.get("C0_RAYPICK") == "1":
                     # 광선(국소화 가능)이 있는 채택만 창에 — 투표 커버리지 0.64 에서 창이 비는 것을 막는다
