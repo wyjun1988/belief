@@ -130,11 +130,15 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             _z = np.load(_fp); _byt = {}
             for _k in range(len(_z["t"])): _byt.setdefault(int(_z["t"][_k]), []).append(_k)
             _n = 0
-            for i in zmap:
+            _fr = sorted(zmap)                                   # 프레임 표본 상한 (아핀은 수천 쌍이면 충분)
+            _fstep = max(1, len(_fr) // int(os.environ.get("SFM_MAXFR", "120")))
+            for i in _fr[::_fstep]:
                 _idx = _byt.get(int(tsl[i]))
                 if not _idx: continue
                 Z = zmap[i]; H, W = Z.shape; c2 = max(2, (W // pw) // 4)
-                for _k in _idx[:400]:
+                _pp = int(os.environ.get("SFM_MAXPT", "40"))
+                _idx = _idx[::max(1, len(_idx) // _pp)][:_pp]
+                for _k in _idx:
                     cx = int(_z["u"][_k] / FRAME_W * W); cy = int(_z["v"][_k] / FRAME_W * H)
                     if not (0 <= cx < W and 0 <= cy < H): continue
                     zp = zpatch(Z, cx, cy, c2); zexp = float(_z["d"][_k]) / kfac(cx, cy, W, H)
