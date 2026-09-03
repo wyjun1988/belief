@@ -57,6 +57,13 @@ if os.environ.get("GEO_DEPTH"):
     print("mono-depth %d표본" % len(GDEP), flush=True)
 PRIOR_JSON = os.environ.get("PRIOR_JSON", "data/thor_prior.json")
 PR = json.load(open(PRIOR_JSON))
+# ── 위치·yaw 를 SfM 추정으로 대체 (사다리 '위치:SfM'): POSE_JSONL = {house,t,apos,yaw} ──
+POSE = None
+if os.environ.get("POSE_JSONL"):
+    POSE = {}
+    for _l in open(os.environ["POSE_JSONL"]):
+        _d = json.loads(_l); POSE[(_d["house"], int(_d["t"]))] = (_d["apos"], _d["yaw"])
+    print("SfM 포즈 %d프레임" % len(POSE), flush=True)
 if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
     PR = PR["dest"]          # hssd_move.json 형식 {"dwell","mobility","dest"}
 # ⚠️ 종전엔 thor_prior.json(THOR 어휘)을 HSSD 타입에 적용해 전부 미등록 → 인계분 답이
@@ -65,9 +72,10 @@ if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
 # ── 재료 사다리 (AUDIT_20260902 조치1): 어떤 GT 가 들어갔는지 사람이 아니라 코드가 찍는다 ──
 _LG = os.environ.get("LOC_GEO", "0") == "1"
 _ANCH_EX = float(os.environ.get("ANCH_EX", "0.80")); _ANCH_TY = float(os.environ.get("ANCH_TY", "0.10")); _ANCH_DP = int(os.environ.get("ANCH_DP", "2"))
-LADDER = "초기맵:%s · 위치:GT(apos) · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s · c0창:%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
+LADDER = "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s · c0창:%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
     "GT" if SG_INIT == "gt" else "검출",
-    ("GT" if os.environ.get("LOC_YAW_GT") == "1" else "투표") if _LG else "융합(비기하)",
+    "SfM" if POSE is not None else "GT(apos)",
+    ("SfM" if POSE is not None and os.environ.get("LOC_YAW_GT") != "1" else "GT" if os.environ.get("LOC_YAW_GT") == "1" else "투표") if _LG else "융합(비기하)",
     ("DA" if os.environ.get("GEO_DEPTH") else "GT") if _LG else "—",
     "실측" if VSC is not None else "모의(GT vis)",
     os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), "(광선만)" if os.environ.get("C0_RAYPICK") == "1" else "",
@@ -92,6 +100,14 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     g = json.load(open(hd + "/gt.json")); sm = g.get("scene_meta")
     if not sm: continue
     live = {m["t"]: m for m in g["live"]}
+    if POSE is not None:
+        _nrep = 0
+        for _t, _m in live.items():
+            _pv = POSE.get((hn, int(_t)))
+            _m["apos_gt"], _m["yaw_gt"] = _m.get("apos"), _m.get("yaw")
+            if _pv: _m["apos"], _m["yaw"] = _pv[0], _pv[1]; _nrep += 1
+            else: _m["apos"] = None                   # 포즈 없는 프레임은 기하에서 기권
+        print("  %s SfM 포즈 대체 %d/%d" % (hn, _nrep, len(live)), flush=True)
     rt = g["room_types"]; rids = sorted(rt)
     nrt = Counter(rt[r] for r in rids)
     rtypes = {}
