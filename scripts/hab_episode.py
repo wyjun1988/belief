@@ -51,6 +51,7 @@ ap.add_argument("--dwell", type=float, default=0.0,
                 help="목적지 도착 후 평균 체류 프레임(방 체류 가중에 비례, 지수분포). 0=종전(쉬지 않고 배회). "
                      "사용자 지적(2026-09-03): '같은 공간을 쉬지 않고 계속 돌고 너무 빠르다'")
 ap.add_argument("--scan", type=float, default=35.0, help="체류 중 고개 스캔 진폭(°)")
+ap.add_argument("--max-turn", type=float, default=999.0, help="프레임당 회전 상한(°). SPEC 4-4: 25")
 ap.add_argument("--far", type=float, default=0.5,
                 help="이동 중 '가장 먼 방'으로 보내는 비율 — 경우③ 표본 확보용")
 ap.add_argument("--w", type=int, default=768)
@@ -531,7 +532,8 @@ while t < args.frames:
             tgt_yaw = _dwell_base + args.scan * float(np.sin(2 * np.pi * k / max(steps, 1)))
         else:
             tgt_yaw = float(np.degrees(np.arctan2(-(b[0] - a[0]), -(b[2] - a[2]))))
-        yaw += ((tgt_yaw - yaw + 180) % 360 - 180) * args.turn      # 부드러운 회전
+        _dy = ((tgt_yaw - yaw + 180) % 360 - 180) * args.turn      # 부드러운 회전
+        yaw += float(np.clip(_dy, -args.max_turn, args.max_turn))    # 프레임당 회전 상한
         st = habitat_sim.AgentState(); st.position = p
         ry = np.radians(yaw)
         st.rotation = np.quaternion(np.cos(ry / 2), 0, np.sin(ry / 2), 0)

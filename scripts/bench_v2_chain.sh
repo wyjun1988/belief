@@ -32,7 +32,7 @@ if [ "${SKIP_GEN:-0}" != 1 ]; then
   rm -rf "$OUT"; mkdir -p "$OUT"; i=0
   for SC in $(cat "$SCENES"); do
     $HAB -u scripts/hab_episode.py --scene "$SC" --dataset "$HSSD_DATASET" --move data/hssd_move.json \
-      --frames "$FRAMES" --moves 8 --case3 "${CASE3:-0.5}" --far "${FAR:-0.0}" --evidence "${EVIDENCE:-3:1.4}" --seed $((i+${SEED0:-200})) --out "$OUT/house_$(printf %04d $i)" 2>&1 \
+      --frames "$FRAMES" --moves 8 --case3 "${CASE3:-0.5}" --far "${FAR:-0.0}" --evidence "${EVIDENCE:-3:1.4}" --dwell "${DWELL:-0}" --pace "${PACE:-0.25}" --turn "${TURN:-0.5}" --scan "${SCAN:-35}" --max-turn "${MAXTURN:-999}" --seed $((i+${SEED0:-200})) --out "$OUT/house_$(printf %04d $i)" 2>&1 \
       | grep -E "이동 후보|이동 기록|이동 취소|증인 렌더" || echo "  $SC 실패"
     i=$((i+1))
   done
