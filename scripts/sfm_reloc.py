@@ -30,6 +30,7 @@ ap.add_argument("--vmax", type=float, default=2.5, help="속도 필터: ±3초 �
 ap.add_argument("--scale", default="gt", choices=["gt", "da"], help="척도 출처: gt=sim3 에서 GT 맵포즈로 · da=단안 메트릭 깊이(DA-V2)×데이터셋 상수(--da-k), 정렬은 회전·병진만 GT 맵포즈")
 ap.add_argument("--da-k", type=float, default=0.468, help="GT/DA 척도 상수 (HSSD 렌더 4채 중앙 0.468, 집별 ±5%%). 새 렌더러(OG)는 1채로 재보정")
 ap.add_argument("--da-n", type=int, default=40)
+ap.add_argument("--align", default="gt", choices=["gt", "sites"], help="회전·병진 출처: gt=GT 맵포즈 sim3 · sites=등록 때 붙인 지점 라벨이 평면도 폴리곤 안에 들어가게(GT 좌표 불사용; 척도는 --scale da 필수)")
 ap.add_argument("--fast", action="store_true", help="전역 BA 를 덜 자주(1.1→1.3배)·반복 절반 — live 등록 시간 단축(정확도는 4채에서 대조할 것)")
 ap.add_argument("--strict", action="store_true", help="PnP 등록 문턱 강화(abs_pose_min_num_inliers 60·inlier_ratio 0.4) — 반복 구조 유령 등록 억제")
 ap.add_argument("--matcher", default="vocab", choices=["vocab", "exhaustive"], help="vocab: 순차+vocab-tree 검색(faiss 판 트리 필요) · exhaustive: 전수")
@@ -172,12 +173,72 @@ def ransac_sim3(X, Y, th=0.5, iters=300, seed=0):
     if best_in is None or best_in.sum() < 4: best_in = np.ones(n, bool)
     s_, R_, t_, e = fit(X[best_in], Y[best_in])
     return s_, R_, t_, float(np.sqrt((e ** 2).mean())), float(best_in.mean())
+def align_by_labels():
+    """GT 좌표 없이 정렬: (1) 중력 = 카메라 y축 평균(피치 0) → y-up, (2) yaw·x·z 는 "지점 i 는 방 label_i 폴리곤 안" 을
+    최대로 만족하는 값(격자 탐색 + 국소 정제). 평면도(폴리곤)는 사용자가 주는 입력, 지점 라벨은 등록 때 사용자가 붙인 것."""
+    assert S_FIX is not None, "--align sites 는 --scale da 와 함께"
+    polys = (g.get("scene_meta") or {}).get("polys") or {}
+    def pip_(pt, poly):
+        x, z = pt; ins = False; n = len(poly)
+        for i in range(n):
+            x1, z1 = poly[i][0], poly[i][-1]; x2, z2 = poly[(i + 1) % n][0], poly[(i + 1) % n][-1]
+            if (z1 > z) != (z2 > z) and x < (x2 - x1) * (z - z1) / (z2 - z1 + 1e-12) + x1: ins = not ins
+        return ins
+    downs = []
+    for im in ra.images.values():
+        if not im.has_pose: continue
+        cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
+        downs.append(cfw.rotation.matrix().T @ np.array([0, 1.0, 0]))
+    up = -np.mean(downs, 0); up /= np.linalg.norm(up)
+    # up → +y 회전
+    v = np.cross(up, [0, 1.0, 0]); c = float(np.dot(up, [0, 1.0, 0])); vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    Rg = np.eye(3) + vx + vx @ vx / (1 + c) if c > -0.999 else np.diag([1, -1, -1.0])
+    sites = [(S_FIX * (Rg @ P[nm][0]), m["room"]) for nm, m in zip(names_map, gm) if nm in P and m["room"] in polys]
+    cams = [S_FIX * (Rg @ P[nm][0]) for nm in P if nm.startswith("live/")]
+    cams = np.array(cams)[:: max(1, len(cams) // 200)]
+    pc = {r: np.mean(np.array(pl)[:, [0, -1]], 0) for r, pl in polys.items()}
+    best = None
+    for mirror in (False, True):
+        Mm = np.diag([-1.0, 1.0, 1.0]) if mirror else np.eye(3)
+        for yaw in np.arange(0, 360, 2.0):
+            y = np.radians(yaw); Ry = np.array([[np.cos(y), 0, np.sin(y)], [0, 1, 0], [-np.sin(y), 0, np.cos(y)]]) @ Mm
+            sp = np.array([Ry @ p for p, _ in sites]); tgt = np.array([pc[r] for _, r in sites])
+            t0 = (tgt - sp[:, [0, 2]]).mean(0)
+            for dx in (-1.0, -0.5, 0, 0.5, 1.0):
+                for dz in (-1.0, -0.5, 0, 0.5, 1.0):
+                    tt = t0 + [dx, dz]
+                    sc = sum(pip_((q[0] + tt[0], q[2] + tt[1]), polys[r]) for q, (_, r) in zip(sp, sites))
+                    cp = np.array([Ry @ q for q in cams]); sc2 = sum(any(pip_((q[0] + tt[0], q[2] + tt[1]), pl) for pl in polys.values()) for q in cp)
+                    key = (sc, sc2)
+                    if best is None or key > best[0]: best = (key, yaw, mirror, Ry, tt)
+    (sc, sc2), yaw, mirror, Ry, tt = best
+    # 국소 정제 0.1m / 1°
+    for _ in range(2):
+        cand = []
+        for dy in np.arange(-3, 3.1, 1.0):
+            y = np.radians(yaw + dy); Ry2 = np.array([[np.cos(y), 0, np.sin(y)], [0, 1, 0], [-np.sin(y), 0, np.cos(y)]]) @ (np.diag([-1.0, 1.0, 1.0]) if mirror else np.eye(3))
+            sp = np.array([Ry2 @ p for p, _ in sites]); cp = np.array([Ry2 @ q for q in cams])
+            for dx in np.arange(-0.5, 0.51, 0.1):
+                for dz in np.arange(-0.5, 0.51, 0.1):
+                    t2 = tt + [dx, dz]
+                    k = (sum(pip_((q[0] + t2[0], q[2] + t2[1]), polys[r]) for q, (_, r) in zip(sp, sites)),
+                         sum(any(pip_((q[0] + t2[0], q[2] + t2[1]), pl) for pl in polys.values()) for q in cp))
+                    cand.append((k, yaw + dy, Ry2, t2))
+        k, yaw, Ry, tt = max(cand, key=lambda c: c[0])
+    R_ = Ry @ Rg; t_ = np.array([tt[0], 1.5 - S_FIX * float(np.mean([(R_ @ P[nm][0])[1] for nm in P])), tt[1]])
+    log("라벨 정렬: 지점 %d/%d 이 제 방 폴리곤 안 · live 카메라 폴리곤 안 %d/%d · yaw %.0f° · 미러 %s" % (k[0], len(sites), k[1], len(cams), yaw, mirror))
+    return R_, t_, mirror
 best = None
-for mirror in (False, True):
-    M = np.diag([-1.0, 1.0, 1.0]) if mirror else np.eye(3)
-    s, R, t, rms, inl = ransac_sim3(src @ M.T, dst)
-    if best is None or (inl, -rms) > (best[6], -best[0]): best = (rms, mirror, M, s, R, t, inl)
-rms, mirror, M, S3, R3, T3, INL = best; s = S3
+if a.align == "sites":
+    R3, T3, mirror = align_by_labels(); S3 = S_FIX; M = np.eye(3)   # 미러는 R3 안에 포함
+    al = (S3 * (R3 @ src.T)).T + T3; rms = float(np.sqrt(((al - dst) ** 2).sum(1).mean())); INL = float((np.linalg.norm(al - dst, axis=1) < 0.5).mean())
+    log("(대조) GT 맵포즈 대비: rms %.3fm · 0.5m 이내 %.2f" % (rms, INL)); s = S3
+else:
+    for mirror in (False, True):
+        M = np.diag([-1.0, 1.0, 1.0]) if mirror else np.eye(3)
+        s, R, t, rms, inl = ransac_sim3(src @ M.T, dst)
+        if best is None or (inl, -rms) > (best[6], -best[0]): best = (rms, mirror, M, s, R, t, inl)
+    rms, mirror, M, S3, R3, T3, INL = best; s = S3
 log("%s 정렬(map %d프레임, RANSAC 0.5m): 인라이어 %.2f · 인라이어 rms %.3fm · 스케일 %.3f · 미러 %s" % ("rigid(척도 DA)" if S_FIX else "sim3", len(src), INL, rms, s, mirror))
 
 def to_ours(c, v):
@@ -229,6 +290,12 @@ log("live 커버리지 %.2f · ATE 중앙 %.2fm 평균 %.2fm <0.5m %.2f <1m %.2f
     cov, np.median(ate) if len(ate) else -1, ate.mean() if len(ate) else -1, (ate < 0.5).mean() if len(ate) else 0,
     (ate < 1).mean() if len(ate) else 0, np.median(yerr) if len(yerr) else -1, (yerr < 10).mean() if len(yerr) else 0,
     ("%.2f (n=%d)" % (hit / nhit, nhit)) if nhit else "—"))
+# 정렬된 3D 점 내보내기 (평면도용: 벽·가구 = 높이 0.2~2.0m 점) — x, z, h(우리 프레임, y-up)
+_P3 = np.array([pt.xyz for pt in ra.points3D.values() if pt.track.length() >= 3]) if ra.num_points3D() else np.zeros((0, 3))
+if len(_P3):
+    _A = (S3 * (R3 @ (M @ _P3.T))).T + T3
+    np.savez_compressed(os.path.join(work, "points_%s.npz" % hn), x=_A[:, 0].astype(np.float32), z=_A[:, 2].astype(np.float32), h=_A[:, 1].astype(np.float32))
+    log("3D 점 %d (트랙≥3) → points_%s.npz · 높이 중앙 %.2fm" % (len(_A), hn, float(np.median(_A[:, 1]))))
 out = a.out or os.path.join(work, "pose_%s.jsonl" % hn)
 with open(out, "w") as fo:
     for r in rows: fo.write(json.dumps(r) + "\n")
@@ -239,5 +306,5 @@ with open(os.path.join(work, "map_pose_%s.jsonl" % hn), "w") as fo:
 json.dump(dict(house=hn, map_reg=(rm.num_reg_images() if rm is not None else 0), n_map=len(maps), map_joint=(not map_ok), live_reg=len(rows), live_reg_raw=n_before, n_live=len(lives), cov=cov, vmax=a.vmax, strict=a.strict,
                ate_med=float(np.median(ate)) if len(ate) else None, ate_lt05=float((ate < 0.5).mean()) if len(ate) else None,
                yaw_med=float(np.median(yerr)) if len(yerr) else None, room_hit=(hit / nhit) if nhit else None, n_room=nhit,
-               sim3_rms=float(rms), sim3_inl=INL, scale=float(s), scale_src=a.scale, da_k=a.da_k, mirror=bool(mirror), sec=time.time() - T0), open(os.path.join(work, "summary_%s.json" % hn), "w"), indent=1, default=float)
+               sim3_rms=float(rms), sim3_inl=INL, scale=float(s), scale_src=a.scale, align_src=a.align, da_k=a.da_k, mirror=bool(mirror), sec=time.time() - T0), open(os.path.join(work, "summary_%s.json" % hn), "w"), indent=1, default=float)
 log("→ %s (%d프레임)" % (out, len(rows)))
