@@ -13,6 +13,7 @@
 import json, glob, os
 import numpy as np
 import re as _re
+_VISGT = os.environ.get("VIS_GT", "1") == "1"   # 0 이면 인스턴스 선택·부재 분할점을 검출 신호로 (GT vis 제거)
 _rtn = lambda x: _re.sub(r"\.\d+$", "", x or "")   # 방유형 정규화 (HSSD region)
 def _prior(tp, rtype):   # 방 그룹("kitchen+living room")은 부분 유형 중 최대
     return max(PR.get(tp, {}).get(_rtn(part), .25) for part in (rtype or "").split("+"))
@@ -74,13 +75,14 @@ if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
 # ── 재료 사다리 (AUDIT_20260902 조치1): 어떤 GT 가 들어갔는지 사람이 아니라 코드가 찍는다 ──
 _LG = os.environ.get("LOC_GEO", "0") == "1"
 _ANCH_EX = float(os.environ.get("ANCH_EX", "0.80")); _ANCH_TY = float(os.environ.get("ANCH_TY", "0.10")); _ANCH_DP = int(os.environ.get("ANCH_DP", "2"))
-LADDER = "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:%s%s · 사전확률:%s · c0창:%s%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
+LADDER = "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:%s · 카메라방:%s%s · 사전확률:%s · c0창:%s%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
     "GT" if SG_INIT == "gt" else "검출",
     "SfM" if POSE is not None else "GT(apos)",
     # POSE_JSONL 이 있으면 live 의 apos·yaw 가 SfM 값으로 덮인다 → LOC_YAW_GT=1 경로가 읽는 m["yaw"] 는 SfM yaw 다
     (("SfM" if os.environ.get("LOC_YAW_GT") == "1" else "투표") if POSE is not None else ("GT" if os.environ.get("LOC_YAW_GT") == "1" else "투표")) if _LG else "융합(비기하)",
     ("DA" if os.environ.get("GEO_DEPTH") else "GT") if _LG else "—",
     "실측" if VSC is not None else "모의(GT vis)",
+    "GT(인스턴스선택·부재분할)" if _VISGT else "검출(경우분류만 GT)",
     "SfM" if POSE is not None else "GT", "(열린공간 병합)" if os.environ.get("ROOM_GROUPS") == "1" else "",
     os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), "(광선만)" if os.environ.get("C0_RAYPICK") == "1" else "",
     ("(≤%sm)" % os.environ.get("C0_MAXD")) if os.environ.get("C0_MAXD") else "", "(방위다양)" if os.environ.get("C0_DIVERSE") == "1" else "", _ANCH_EX, _ANCH_TY, _ANCH_DP,
@@ -201,6 +203,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         tgt = mv[-1]["to"] if mv else v0["room"]
         TS = QS[:, j] + STx[:, j]
         vis = np.array([oid in live[t].get("vis", []) for t in ts])
+        # 시스템 신호로 본 "목격": 실검증을 통과한 프레임 (VIS_GT=0 에서 GT vis 를 대신한다)
+        _vpass = sorted(int(e[0]) for e in VSC.get((hn, oid), [])
+                        if e[1] >= VTH and (len(e) < 3 or e[2] >= VTH2)) if VSC is not None else []
         base = float(np.median(TS))
         _vr = np.random.default_rng(__import__('zlib').crc32((hn + '|' + oid).encode()))   # 문자열 hash 는 프로세스마다 달라 결과가 흔들렸다
 
@@ -358,16 +363,26 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             record = im.get(v0["type"])
             _cands = im_inst.get(v0["type"])
             if _cands and _geo is not None:
-                _first = next((i2 for i2 in range(len(ts)) if vis[i2]), None)
-                if _first is not None:
-                    _ry = _geo_ray(_first)
-                    _d0 = (live[ts[_first]].get("dist") or {}).get(oid)
-                    if _ry and _d0:
-                        _ap, _b = _ry
-                        _p0 = [_ap[0] + _d0 * np.sin(np.radians(_b)),
-                               _ap[1] + _d0 * np.cos(np.radians(_b))]
-                        record = min(_cands, key=lambda c3: (c3[0][0]-_p0[0])**2 +
-                                     (c3[0][1]-_p0[1])**2)[1]
+                # VIS_GT=0: 시스템 신호만 — 검출 점수 상위(hits) 중 가장 이른 프레임 + 실물 거리(DA)
+                def _proj(i2):
+                    _ry = _geo_ray(i2)
+                    _d = (GDEP.get((hn, int(ts[i2]), oid)) if GDEP is not None else None)
+                    if _d is None and _VISGT: _d = (live[ts[i2]].get("dist") or {}).get(oid)
+                    if not (_ry and _d): return None
+                    _ap, _b = _ry
+                    return [_ap[0] + _d * np.sin(np.radians(_b)), _ap[1] + _d * np.cos(np.radians(_b))]
+                if _VISGT:
+                    _first = next((i2 for i2 in range(len(ts)) if vis[i2]), None)
+                    _p0 = _proj(_first) if _first is not None else None
+                    if _p0: record = min(_cands, key=lambda c3: (c3[0][0]-_p0[0])**2 + (c3[0][1]-_p0[1])**2)[1]
+                elif os.environ.get("INST_SEL", "vote") == "vote":
+                    # 시스템 신호만: 검증 통과 프레임 **전부**의 투영을 모아 다수결(단일 프레임은 거리 잡음에 흔들린다)
+                    _src = _vpass if _vpass else (sorted(hits)[:8] if len(hits) else [])
+                    _votes = Counter()
+                    for i2 in _src[:12]:
+                        _p0 = _proj(i2)
+                        if _p0: _votes[min(_cands, key=lambda c3: (c3[0][0]-_p0[0])**2 + (c3[0][1]-_p0[1])**2)[1]] += 1
+                    if _votes: record = _votes.most_common(1)[0][0]
         ver_all = []
         for e in evs:
             ver = [i for i in e[:6] if verify(i)]
@@ -497,7 +512,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             # 분할점: seen=마지막 목격 시각(기본 — 정지는 후반 창이 좁아 ① 보호,
             # 이동-미재촬영은 이동 전이라 창이 넓어 ③ 회수) / half=에피소드 절반
             if os.environ.get("ABS_SPLIT", "seen") == "seen":
-                _sv = np.where(vis)[0]
+                # VIS_GT=0: "마지막 목격"을 GT 가 아니라 **시스템이 잡은 마지막 검출**로
+                _sv = np.where(vis)[0] if _VISGT else np.array(_vpass if _vpass else sorted(hits))
                 cut = ts[int(_sv[-1])] if len(_sv) else ts[len(ts) // 2]
             else:
                 cut = ts[len(ts) // 2]

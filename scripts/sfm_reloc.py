@@ -316,6 +316,23 @@ if len(_P3):
     _A = (S3 * (R3 @ (M @ _P3.T))).T + T3
     np.savez_compressed(os.path.join(work, "points_%s.npz" % hn), x=_A[:, 0].astype(np.float32), z=_A[:, 2].astype(np.float32), h=_A[:, 1].astype(np.float32))
     log("3D 점 %d (트랙≥3) → points_%s.npz · 높이 중앙 %.2fm" % (len(_A), hn, float(np.median(_A[:, 1]))))
+# live 프레임의 2D-3D 대응 (u, v, 메트릭 깊이) — 거리 보정용. GT 앵커 좌표·GT 카메라 위치를 대체한다.
+_lt, _lu, _lv, _ld = [], [], [], []
+for f in lives:
+    t = int(f[:-4]); nm = "live/" + f
+    im = next((i for i in ra.images.values() if i.name == nm and i.has_pose), None)
+    if im is None: continue
+    p2 = [q for q in im.points2D if q.has_point3D()]
+    if not p2: continue
+    X = np.array([ra.points3D[q.point3D_id].xyz for q in p2]); xy = np.array([q.xy for q in p2])
+    cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
+    z = (cfw * X)[:, 2] * S3
+    ok = z > 0.1
+    _lt.append(np.full(int(ok.sum()), t)); _lu.append(xy[ok, 0]); _lv.append(xy[ok, 1]); _ld.append(z[ok])
+if _lt:
+    np.savez_compressed(os.path.join(work, "live_points_%s.npz" % hn), t=np.concatenate(_lt).astype(np.int32),
+                        u=np.concatenate(_lu).astype(np.float32), v=np.concatenate(_lv).astype(np.float32), d=np.concatenate(_ld).astype(np.float32))
+    log("live 2D-3D 대응 %d점 (프레임 %d)" % (sum(len(x) for x in _lt), len(_lt)))
 out = a.out or os.path.join(work, "pose_%s.jsonl" % hn)
 with open(out, "w") as fo:
     for r in rows: fo.write(json.dumps(r) + "\n")

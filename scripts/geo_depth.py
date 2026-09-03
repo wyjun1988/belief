@@ -34,6 +34,7 @@ SC = os.environ.get("SCORES", "t1_scores_t7ac.jsonl")
 OUTJ = os.environ.get("OUT_JSONL", "geo_depth_t7.jsonl")
 MODEL = os.environ.get("DEPTH_MODEL", "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf")
 TILT = np.radians(float(os.environ.get("TILT", "10")))
+FRAME_W = float(os.environ.get("FRAME_W", "768"))   # 원본 프레임 폭 (SfM 픽셀 좌표 기준)
 BATCH = int(os.environ.get("BATCH", "8"))
 
 from transformers import AutoImageProcessor, AutoModelForDepthEstimation
@@ -122,7 +123,28 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         return float(np.median(Z[max(0, cy - h2):cy + h2, max(0, cx - h2):cx + h2]))
     # ── 앵커 쌍 수집: x = 1/z_pred, y = 1/z_기대 (지도 수평거리 → z 환산) ──
     pairs = []; fpairs = {}
+    _SP = os.environ.get("SFM_POINTS")            # SfM 2D-3D 대응으로 GT 앵커(좌표·카메라 위치)를 대체
+    if _SP:
+        _fp = os.path.join(os.path.expanduser(_SP), hn, "live_points_%s.npz" % hn)
+        if os.path.exists(_fp):
+            _z = np.load(_fp); _byt = {}
+            for _k in range(len(_z["t"])): _byt.setdefault(int(_z["t"][_k]), []).append(_k)
+            _n = 0
+            for i in zmap:
+                _idx = _byt.get(int(tsl[i]))
+                if not _idx: continue
+                Z = zmap[i]; H, W = Z.shape; c2 = max(2, (W // pw) // 4)
+                for _k in _idx[:400]:
+                    cx = int(_z["u"][_k] / FRAME_W * W); cy = int(_z["v"][_k] / FRAME_W * H)
+                    if not (0 <= cx < W and 0 <= cy < H): continue
+                    zp = zpatch(Z, cx, cy, c2); zexp = float(_z["d"][_k]) / kfac(cx, cy, W, H)
+                    if zp > 0.1 and zexp > 0.1:
+                        pairs.append((1.0 / zp, 1.0 / zexp)); fpairs.setdefault(i, []).append((1.0 / zp, 1.0 / zexp)); _n += 1
+            print("  %s SfM 대응 쌍 %d (프레임 %d)" % (hn, _n, len(fpairs)), flush=True)
+        else:
+            print("  %s live_points 없음 — GT 앵커로 후퇴" % hn, flush=True)
     for i in zmap:
+        if _SP and pairs: break                   # SfM 대응이 있으면 GT 앵커는 쓰지 않는다
         if AXS is None: break
         m = live.get(tsl[i], {}); ap = m.get("apos")
         if ap is None: continue
