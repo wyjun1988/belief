@@ -23,13 +23,14 @@ ap.add_argument("--work", default=None, help="DB·재구성 디렉터리 (기본
 ap.add_argument("--vocab", default=os.path.expanduser("~/khcache/colmap/vocab_tree_faiss_flickr100K_words32K.bin"))
 ap.add_argument("--threads", type=int, default=4)
 ap.add_argument("--topk", type=int, default=20, help="vocab-tree 검색 이미지 수")
-ap.add_argument("--features", type=int, default=4096)
+ap.add_argument("--features", type=int, default=2048, help="프레임당 SIFT 상한. 질감이 많은 장면(v3c: 상한 없이 5,400개)에서 매칭이 제곱으로 느려진다")
 ap.add_argument("--out", default=None)
 ap.add_argument("--redo", action="store_true")
 ap.add_argument("--vmax", type=float, default=2.5, help="속도 필터: ±3초 이웃 등록 프레임과의 중앙 거리(m)가 이보다 크면 기권(1fps 보행 ≤1.5m/s). 0=끔")
 ap.add_argument("--scale", default="gt", choices=["gt", "da"], help="척도 출처: gt=sim3 에서 GT 맵포즈로 · da=단안 메트릭 깊이(DA-V2)×데이터셋 상수(--da-k), 정렬은 회전·병진만 GT 맵포즈")
 ap.add_argument("--da-k", type=float, default=0.468, help="GT/DA 척도 상수 (HSSD 렌더 4채 중앙 0.468, 집별 ±5%%). 새 렌더러(OG)는 1채로 재보정")
 ap.add_argument("--da-n", type=int, default=40)
+ap.add_argument("--reject-outside", action="store_true", help="정렬 뒤 어느 방 폴리곤에도 들어가지 않는 live 프레임을 기권 처리 — 유령 복제(잘못 등록된 사본)를 GT 없이 거른다. 평면도는 사용자 입력")
 ap.add_argument("--align", default="gt", choices=["gt", "sites"], help="회전·병진 출처: gt=GT 맵포즈 sim3 · sites=등록 때 붙인 지점 라벨이 평면도 폴리곤 안에 들어가게(GT 좌표 불사용; 척도는 --scale da 필수)")
 ap.add_argument("--fast", action="store_true", help="전역 BA 를 덜 자주(1.1→1.3배)·반복 절반 — live 등록 시간 단축(정확도는 4채에서 대조할 것)")
 ap.add_argument("--strict", action="store_true", help="PnP 등록 문턱 강화(abs_pose_min_num_inliers 60·inlier_ratio 0.4) — 반복 구조 유령 등록 억제")
@@ -57,7 +58,8 @@ if a.redo:
 if not os.path.exists(mk_ext):
     if os.path.exists(db): os.remove(db)
     ro = pycolmap.ImageReaderOptions(); ro.camera_model = "PINHOLE"; ro.camera_params = "%g,%g,%g,%g" % (fx, fx, W / 2.0, H / 2.0)
-    eo = pycolmap.FeatureExtractionOptions(); eo.num_threads = a.threads; eo.use_gpu = a.gpu; eo.sift.max_num_features = a.features
+    eo = pycolmap.FeatureExtractionOptions(); eo.num_threads = a.threads; eo.use_gpu = a.gpu
+    _so = pycolmap.SiftExtractionOptions(); _so.max_num_features = a.features; eo.sift = _so   # ⚠️ eo.sift 는 복사본을 돌려준다 — 통째로 대입해야 상한이 먹는다
     pycolmap.extract_features(db, hd, image_names=names_map + names_live, camera_mode=pycolmap.CameraMode.SINGLE,
                               camera_model="PINHOLE", reader_options=ro, extraction_options=eo, device=DEV)
     open(mk_ext, "w").close(); log("SIFT 추출 map %d + live %d" % (len(maps), len(lives)))
@@ -284,6 +286,24 @@ for t in sorted(est):
     yerr.append(abs((yaw - m["yaw"] + 180) % 360 - 180))
     if polys and m.get("room") in polys:
         nhit += 1; hit += pip(apos, polys[m["room"]])
+    m["room_gt"] = m.get("room")
+if a.reject_outside and polys:
+    def _inany(pt):
+        for pl in polys.values():
+            if pip(pt, pl): return True
+        return False
+    keep = [i for i, r in enumerate(rows) if _inany(r["apos"])]
+    n0 = len(rows)
+    if len(keep) >= 0.2 * n0:                      # 전부 밖이면(정렬 실패) 필터를 적용하지 않는다
+        rows = [rows[i] for i in keep]; ate = [ate[i] for i in keep]; yerr = [yerr[i] for i in keep]
+        log("평면도 밖 기권: %d/%d (남은 %d)" % (n0 - len(keep), n0, len(rows)))
+    else:
+        log("평면도 밖 기권 생략 — 남는 프레임 %d/%d (정렬 실패 의심)" % (len(keep), n0))
+    hit = nhit = 0
+    for r in rows:
+        m = live[r["t"]]
+        if m.get("room_gt", m.get("room")) in polys:
+            nhit += 1; hit += pip(r["apos"], polys[m.get("room_gt", m.get("room"))])
 ate, yerr = np.array(ate), np.array(yerr)
 cov = len(rows) / len(lives)
 log("live 커버리지 %.2f · ATE 중앙 %.2fm 평균 %.2fm <0.5m %.2f <1m %.2f · yaw 중앙 %.1f° <10° %.2f · 카메라방 적중 %s" % (
@@ -341,5 +361,5 @@ if _mu:
 json.dump(dict(house=hn, map_reg=(rm.num_reg_images() if rm is not None else 0), n_map=len(maps), map_joint=(not map_ok), live_reg=len(rows), live_reg_raw=n_before, n_live=len(lives), cov=cov, vmax=a.vmax, strict=a.strict,
                ate_med=float(np.median(ate)) if len(ate) else None, ate_lt05=float((ate < 0.5).mean()) if len(ate) else None,
                yaw_med=float(np.median(yerr)) if len(yerr) else None, room_hit=(hit / nhit) if nhit else None, n_room=nhit,
-               sim3_rms=float(rms), sim3_inl=INL, scale=float(s), scale_src=a.scale, align_src=a.align, da_k=a.da_k, mirror=bool(mirror), sec=time.time() - T0), open(os.path.join(work, "summary_%s.json" % hn), "w"), indent=1, default=float)
+               reject_outside=bool(a.reject_outside), sim3_rms=float(rms), sim3_inl=INL, scale=float(s), scale_src=a.scale, align_src=a.align, da_k=a.da_k, mirror=bool(mirror), sec=time.time() - T0), open(os.path.join(work, "summary_%s.json" % hn), "w"), indent=1, default=float)
 log("→ %s (%d프레임)" % (out, len(rows)))
