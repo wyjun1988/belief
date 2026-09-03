@@ -414,6 +414,10 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                         if _rm and _rm != record: alt = _rm
                         if os.environ.get("C0_DIAG") == "1": _dg.update(tri_room=_rm, n_pts=len(_pts))
                     else:                           # 프레임별 투영 2장+ 합의 요구
+                        _msd = float(os.environ.get("C0_MAXD_SINGLE", "0"))
+                        if _msd > 0:                # 단일 투영(거리 사용)에만 거리 상한 — 삼각측량용 원거리 크롭은 살린다
+                            _pick = [i2 for i2 in _pick if (GDEP.get((hn, int(ts[i2]), oid)) if GDEP is not None else None) is None
+                                     or GDEP.get((hn, int(ts[i2]), oid)) <= _msd]
                         _rms = [x for x in (_geo_room_d(i2) for i2 in _pick) if x]
                         _cc = Counter(_rms).most_common(1)
                         if _cc and _cc[0][1] >= min(2, C0_MIN) and _cc[0][0] != record:
