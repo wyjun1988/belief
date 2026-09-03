@@ -1,0 +1,193 @@
+<title>khronos 주간 0903</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #F3F5F7; --ink: #14181D; --ink-2: #4A5561; --rule: #D5DAE0; --card: #FFFFFF;
+    --accent: #0F6E6E; --accent-ink: #0B5252; --accent-wash: #E3F1F0;
+    --good: #2E7D4F; --warn: #B7791F; --bad: #B03A2E; --good-wash: #E6F2EA; --warn-wash: #F7EEDD; --bad-wash: #F6E4E1;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0F1418; --ink: #E6EAEE; --ink-2: #A3ADB8; --rule: #2A333C; --card: #161C22;
+      --accent: #4FB3B3; --accent-ink: #7CCACA; --accent-wash: #12302F;
+      --good: #6FBF8B; --warn: #D9A44A; --bad: #E07A6E; --good-wash: #16291D; --warn-wash: #2E2412; --bad-wash: #2F1A17;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0F1418; --ink: #E6EAEE; --ink-2: #A3ADB8; --rule: #2A333C; --card: #161C22;
+    --accent: #4FB3B3; --accent-ink: #7CCACA; --accent-wash: #12302F;
+    --good: #6FBF8B; --warn: #D9A44A; --bad: #E07A6E; --good-wash: #16291D; --warn-wash: #2E2412; --bad-wash: #2F1A17;
+    color-scheme: dark;
+  }
+  body { background: var(--paper); color: var(--ink); margin: 0;
+         font-family: "IBM Plex Sans KR", -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+         font-size: 15.5px; line-height: 1.65; }
+  .wrap { max-width: 76ch; margin: 0 auto; padding: 40px 24px 72px; display: grid; gap: 36px; }
+  h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.01em; margin: 0; text-wrap: balance; line-height: 1.25; }
+  h2 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.005em; text-wrap: balance; }
+  h3 { font-size: 16px; font-weight: 600; margin: 0; }
+  p { margin: 0; max-width: 68ch; }
+  .eyebrow { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+  .lede { font-size: 17px; color: var(--ink-2); max-width: 64ch; }
+  header { display: grid; gap: 12px; padding-bottom: 28px; border-bottom: 1px solid var(--rule); }
+  .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .stat { background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; display: grid; gap: 4px; }
+  .stat .k { font-family: "IBM Plex Mono", monospace; font-size: 26px; font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .stat .l { font-size: 12.5px; color: var(--ink-2); }
+  .stat.good .k { color: var(--good); } .stat.warn .k { color: var(--warn); } .stat.bad .k { color: var(--bad); }
+  section { display: grid; gap: 14px; }
+  .day { display: grid; grid-template-columns: 88px 1fr; gap: 16px; align-items: start; }
+  .date { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--accent-ink); padding-top: 4px; white-space: nowrap; }
+  .body { display: grid; gap: 12px; min-width: 0; }
+  ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; max-width: 68ch; }
+  li strong { font-weight: 600; }
+  .tbl { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--card); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  th { font-weight: 500; color: var(--ink-2); font-size: 12.5px; letter-spacing: 0.02em; }
+  tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid transparent; }
+  .pill.good { background: var(--good-wash); color: var(--good); }
+  .pill.warn { background: var(--warn-wash); color: var(--warn); }
+  .pill.bad { background: var(--bad-wash); color: var(--bad); }
+  .pill.acc { background: var(--accent-wash); color: var(--accent-ink); }
+  .callout { border-left: 3px solid var(--accent); background: var(--accent-wash); padding: 12px 16px; border-radius: 0 6px 6px 0; display: grid; gap: 6px; }
+  .callout.bad { border-color: var(--bad); background: var(--bad-wash); }
+  code { font-family: "IBM Plex Mono", monospace; font-size: 13px; background: var(--card); border: 1px solid var(--rule); padding: 0 5px; border-radius: 4px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .box { background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; display: grid; gap: 8px; }
+  a { color: var(--accent-ink); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  footer { color: var(--ink-2); font-size: 13px; border-top: 1px solid var(--rule); padding-top: 16px; }
+  @media (max-width: 560px) { .day { grid-template-columns: 1fr; gap: 6px; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">khronos · 2026-08-29 (금) ~ 09-03 (수)</div>
+    <h1>THOR 캠페인을 닫고, HSSD 벤치를 세우고, 그 벤치의 거짓을 네 겹 벗겨냈다</h1>
+    <p class="lede">이번 주의 결론은 두 줄이다. 부품은 세 도메인에서 재현되는 수준으로 올라왔고, 제품 지표를 재던 자(데이터·평가법)가 틀려 있었다. 자를 고치니 처음으로 시스템이 상식 기준선을 넘었다.</p>
+    <div class="strip">
+      <div class="stat good"><div class="k">0.804</div><div class="l">HSSD bench-v2.2 전체 · 포즈 GT<br>사전확률만 0.712 첫 추월</div></div>
+      <div class="stat good"><div class="k">0.62</div><div class="l">③ 확인기회O 인계율 (n=8)<br>THOR 57%와 동급 · 무인계 준수 1.00</div></div>
+      <div class="stat good"><div class="k">1.8°</div><div class="l">투표 yaw 오차 중앙 (23° →)<br>커버리지 0.64 · 실물 포즈 개통</div></div>
+      <div class="stat warn"><div class="k">4 + 1</div><div class="l">찾아 고친 데이터 결함<br>+ 평가기 GT 분기 부재</div></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>한 주의 흐름</h2>
+    <div class="day">
+      <div class="date">8/29 – 8/31</div>
+      <div class="body">
+        <h3>THOR 캠페인 마감 — 국소화의 원리가 바뀌었다</h3>
+        <ul>
+          <li><strong>검증기 축 수렴.</strong> 해상도 768 확정. 실검 0.467 ≈ 최신 0.457, 오라클 0.588 → 병목은 검증이 아니라 <em>국소화</em>로 확정 (§101–104).</li>
+          <li><strong>"보이는 방 ≠ 있는 방".</strong> 프레임 앵커로 방을 추론하던 것을 기하 투영(방위+거리→지도→폴리곤)으로 교체. 오라클 0.588 → 0.975, 투표 yaw 10.6°, 실물 사슬(삼각측량+depth) 0.488 (§105–110).</li>
+          <li><strong>통합·부재.</strong> 상태기계 top-1 0.698, top-1+2 0.818. 부재 축은 알고리즘이 아니라 "증거의 존재"가 지배 변수 (§111–115).</li>
+          <li><strong>THOR 마감 수치.</strong> ① 0.976 · ② ~0.37 · ③-1 확인기회O 57% (n=7) · ③-2 준수 100%. 표본 제조 3차 실패로 부재 축 공식 마감 (§119).</li>
+        </ul>
+      </div>
+    </div>
+    <div class="day">
+      <div class="date">9/1</div>
+      <div class="body">
+        <h3>포토리얼 시뮬 심사와 Habitat 이식</h3>
+        <ul>
+          <li><strong>심사.</strong> ReplicaCAD 렌더 AUC 0.848(집 1채), HSSD 조건충족 20채·완화 49채, OmniGibson은 RTX 대기. 입장시험 눈금 THOR 0.778 / ReplicaCAD 0.848 / 실사 0.897.</li>
+          <li><strong>이식.</strong> 사슬 전체가 M1 Max 네이티브(habitat + mlx 4B)로 돈다. 좌표 규약은 "앵커 yaw 오차 0°" 한 줄로 닫힘. HSSD 검색 AUC 0.935 (§120–121).</li>
+          <li><strong>초기 씬그래프.</strong> "이 프레임이 방 A니까 방 A"라는 순진한 규칙 0.316 → 투영 0.583 → 인스턴스 분리 0.779 (§122).</li>
+        </ul>
+      </div>
+    </div>
+    <div class="day">
+      <div class="date">9/2</div>
+      <div class="body">
+        <h3>점검 — 두 달 정체의 원인은 알고리즘이 아니라 자였다</h3>
+        <div class="callout bad">
+          <strong>AUDIT_20260902.</strong> "무GT"라 부른 수치에 GT 포즈·거리·가시성이 들어 있었고, 평가 데이터가 열 번 바뀌어 대조 실험이 하나도 없었으며, n=20채(CI ±0.12) 안의 차이로 채택·기각을 결정했고, 정지 지도와 최신 강검출이 시스템을 이기고 있었다.
+        </div>
+        <ul>
+          <li><strong>조치.</strong> 재료 사다리 자동 표기, 벤치 동결 + 한 노브 규칙, 기준선 3행 + 집 단위 부트스트랩 CI, 검증기 비교 스크립트. → <a href="EVAL_PROTOCOL_V2.md">프로토콜 v2</a>: ②는 스칼라가 아니라 <em>증거 조건부 능력 곡선</em>.</li>
+          <li><strong>사슬로 찾은 데이터 결함 4종 (§125·§128).</strong></li>
+        </ul>
+        <div class="tbl"><table>
+          <tr><th>결함</th><th>증거</th><th>조치 · 효과</th></tr>
+          <tr><td>이동 물체가 가구 속에 박힘 (높이 유지)</td><td class="num">이동 후 검출 0/417</td><td>받침면 레이캐스트·시선 가시성·증인 렌더 → 9/9</td></tr>
+          <tr><td>매핑워크가 이동 <em>후</em>·원점 좌표</td><td class="num">맵 박스 적중 0.25</td><td><code>--remap</code> 이동 전·COM·bbox 투영 → 0.58</td></tr>
+          <tr><td>앵커 exemplar 384px 하드코딩</td><td class="num">패치 적중 0.01 · AUC 0.585</td><td>프레임 크기로 → 0.64 · 0.845</td></tr>
+          <tr><td>좌표 규약 누락 · AABB 방 라벨</td><td class="num">라벨 불일치 13–18%</td><td>필드별 포함률 검증 · 점-폴리곤</td></tr>
+        </table></div>
+      </div>
+    </div>
+    <div class="day">
+      <div class="date">9/3</div>
+      <div class="body">
+        <h3>고친 자로 다시 재니 — 첫 정상 측정</h3>
+        <ul>
+          <li><strong>평가기에 GT 포즈 분기가 없었다.</strong> "포즈:GT"로 표기된 HSSD 판 전부가 앵커 투표로 돌고 있었다. 표기는 env가 아니라 코드 경로를 검사해야 한다는 교훈. 분기를 구현하고 앵커 존재 게이트를 원점수에 걸자 아래 표가 나왔다 (§129–130).</li>
+        </ul>
+        <div class="tbl"><table>
+          <tr><th>bench-v2.2 (20채 · n=184)</th><th class="num">전체</th><th class="num">①</th><th class="num">②</th><th class="num">② c0 채택정답</th><th class="num">k≥6 정답</th></tr>
+          <tr><td>시스템 · 포즈 GT</td><td class="num"><strong>0.804</strong> [.76,.85]</td><td class="num">0.824</td><td class="num"><strong>0.571</strong></td><td class="num">0.75</td><td class="num">0.86</td></tr>
+          <tr><td>시스템 · 포즈 투표 (실물)</td><td class="num">0.685</td><td class="num">0.700</td><td class="num">0.357</td><td class="num">0.44</td><td class="num">0.57</td></tr>
+          <tr><td>초기맵만</td><td class="num">0.755</td><td class="num">0.806</td><td class="num">0.143</td><td class="num">—</td><td class="num">—</td></tr>
+          <tr><td>사전확률만 (LLM)</td><td class="num">0.712</td><td class="num">0.747</td><td class="num">0.286</td><td class="num">—</td><td class="num">—</td></tr>
+        </table></div>
+        <ul>
+          <li><strong>v3 (40채 · ③ 대본).</strong> ③이 처음으로 n=13. 기하 부재를 켜니 <strong>확인기회O 인계율 0.62</strong>, 무인계 준수 1.00 (§132). 단 ②가 5건 — 역할 배정 버그(채당 후보 1~3개인데 앞 3개를 ③으로) → 수정 후 <span class="pill acc">v3c 진행 중</span></li>
+          <li><strong>보행 사실성.</strong> 검수 영상 지적("같은 공간을 쉬지 않고 계속 돌고, 너무 빠르다")을 체류·완보·회전 상한으로 수치화(SPEC 4-4). HSSD 생성기 실측 정지 비율 0.52 · 0.26 m/f → <span class="pill acc">v4 예약</span></li>
+          <li><strong>OmniGibson 인수.</strong> RTX v3 본체 + v4 델타 적용. 유일한 수정은 yaw 규약(ψ = 90° − θ, 합성 검증 0°). case4 · 수납 self-check · 20채 전 보행 사실성 순서를 결정해 <a href="RTX_TASKS_20260903.md">지시서</a>로 푸시.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>지금 어디까지 왔나</h2>
+    <div class="grid2">
+      <div class="box"><h3>확정된 것</h3>
+        <ul>
+          <li>투영 국소화 원리 — 세 도메인 재현</li>
+          <li>HSSD 벤치 v2.2/v3 — 결함 제거 후 첫 정상 측정, 시스템 > 상식 기준선</li>
+          <li>③ 인계율 0.62 / 준수 1.00 — THOR와 동급</li>
+          <li>실물 포즈 사슬 개통 — 투표 yaw 1.8°</li>
+          <li>평가 프로토콜 v2 — 증거 조건부, 재료 표기, CI</li>
+        </ul>
+      </div>
+      <div class="box"><h3>아직 못 한 것</h3>
+        <ul>
+          <li>② 표본 — v3에서 5건, v3c에서 20건 안팎 기대</li>
+          <li>실물 포즈 손실 0.12 — c0 채택정답 0.44 vs 0.75</li>
+          <li>거리·가시성 GT — 사다리에 남은 두 칸</li>
+          <li>근거리 통과율 0.27 — argmax 박스 이탈·거친 라벨 (§131)</li>
+          <li>④ "집에 없음" 답변 어휘</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>OmniGibson으로 "제대로" 진행할 수 있는가</h2>
+    <div class="callout">
+      <strong>가능하다. 단 "제대로"의 조건 세 가지가 아직 남아 있다.</strong>
+      <p>파이프라인 쪽은 준비됐다. 생성기가 게이트를 통과하고(yaw 0.01°, navmesh 5/5, 텔레포트 제거), 우리 스키마·규약으로 내보내며(yaw 변환 검증 0°), 평가 체인은 이식 가능하다(bench_v2_chain, CALIB로 9B 채점기 재캘리브). 남은 것은 (1) 보행 사실성을 넣은 판이 게이트를 통과하는지, (2) 20채 생성(~10h)과 RTX 내 평가 체인, (3) 소품 주입을 벤치 설계로 명시하는 것. 이 셋이 끝나면 HSSD와 나란한 두 번째 벤치가 생기고, 문·서랍 수납이라는 OmniGibson 고유 장치로 ③이 자연스럽게 제조된다.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>다음 주</h2>
+    <div class="tbl"><table>
+      <tr><th>항목</th><th>어디서</th><th>판정 기준</th></tr>
+      <tr><td>v3c · v4 결과 — ② 표본 20+에서 노브 2종(광선 채택·이동 방향 yaw) 판정</td><td>M1 Max (자동)</td><td>k≥6 정답과 c0 채택정답, CI 밖 차이만 채택</td></tr>
+      <tr><td>경로 노드 그래프 재국소화 — 카메라방·위치 GT를 뗀다</td><td>M1 Max</td><td>방 0.9↑ · 위치 1.5m↓</td></tr>
+      <tr><td>근거리 손실 — 타입당 top-k 박스 · 세부 라벨(wnsynsetkey)</td><td>M1 Max</td><td>&lt;2m 통과율 0.27 → 0.5↑</td></tr>
+      <tr><td>OmniGibson 보행 사실성 → 짧은 판 → 20채 → 평가 체인</td><td>RTX PRO 6000</td><td>RTX_TASKS_20260903 5줄 보고</td></tr>
+    </table></div>
+  </section>
+
+  <footer>근거 문서: RESULTS_OWL_20260819.md §101–§133 · AUDIT_20260902 · STATUS_20260902 · EVAL_PROTOCOL_V2 · BENCH_V1 · OMNIGIBSON_EPISODE_SPEC 4-2/4-3/4-4 · OG_HANDOVER §11–12. 모든 수치는 재료 사다리와 함께 읽을 것.</footer>
+</div>
