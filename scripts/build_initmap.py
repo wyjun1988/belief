@@ -107,7 +107,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 b = yaw + pbx(cx)
                 d_ = dmap[o_near]
                 pt = [ap[0] + d_ * np.sin(np.radians(b)), ap[1] + d_ * np.cos(np.radians(b))]
-                pts_.setdefault(v, []).append((pt, float(s[c])))
+                pts_.setdefault(v, []).append((pt, float(s[c]), (float(ap[0]), float(ap[1]))))
                 rr = room_pt(pt)
                 # ⚠️ 거리 감쇠·관측수 가중은 **역효과**였다 (0.583→0.551, 2026-09-01):
                 # 둘 다 "가까이·자주 보인 것" 을 우대해 **관측자 방 편향을 되살린다** —
@@ -127,19 +127,26 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     CLU = float(os.environ.get("INITMAP_CLUSTER", "2.0"))
     MAXI = int(os.environ.get("INITMAP_MAXINST", "3"))
     inst_out = []
+    MINV = int(os.environ.get("INITMAP_MINVIEWS", "1"))   # 서로 ≥1m 떨어진 촬영 지점 몇 곳에서 같은 자리로 투영돼야 등록하나
     for t, ps in pts_.items():
-        cl = []                       # [(중심, 점수합, 개수)]
-        for pt, w in sorted(ps, key=lambda x: -x[1]):
+        cl = []                       # [(중심, 점수합, 개수, 시점들)]
+        for pt, w, apv in sorted(ps, key=lambda x: -x[1]):
             hit = None
-            for k2, (c0, w0, n0) in enumerate(cl):
+            for k2, (c0, w0, n0, vs) in enumerate(cl):
                 if float(np.hypot(pt[0]-c0[0], pt[1]-c0[1])) <= CLU: hit = k2; break
             if hit is None:
-                cl.append([np.array(pt, float), w, 1])
+                cl.append([np.array(pt, float), w, 1, [apv]])
             else:
-                c0, w0, n0 = cl[hit]
-                cl[hit] = [(c0*w0 + np.array(pt, float)*w) / (w0+w), w0+w, n0+1]
+                c0, w0, n0, vs = cl[hit]
+                cl[hit] = [(c0*w0 + np.array(pt, float)*w) / (w0+w), w0+w, n0+1, vs + [apv]]
+        def _nviews(vs):
+            u = []
+            for a_ in vs:
+                if all(np.hypot(a_[0]-b_[0], a_[1]-b_[1]) >= 1.0 for b_ in u): u.append(a_)
+            return len(u)
+        cl = [c_ for c_ in cl if _nviews(c_[3]) >= MINV]     # 다시점 일치: 한 지점의 오검출은 다른 지점에서 같은 자리에 안 온다
         cl.sort(key=lambda x: -x[1])
-        for c0, w0, n0 in cl[:MAXI]:
+        for c0, w0, n0, _vs in cl[:MAXI]:
             inst_out.append(dict(type=t, room=room_pt(c0), w=round(float(w0), 3),
                                  pos=[round(float(c0[0]), 2), round(float(c0[1]), 2)],
                                  n=int(n0)))

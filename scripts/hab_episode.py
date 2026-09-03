@@ -41,6 +41,10 @@ ap.add_argument("--evidence", default=None,
                 help="K:D — ② 역할 이동 후 궤적이 물체에서 거리 D(m) 인 지점을 K 번 들른다 "
                      "(물체를 향해 1.5m 직진 구간으로 진입 → 그 방향을 보며 걷는다). 증거량을 "
                      "시나리오 우연이 아닌 통제 변수로 (EVAL_PROTOCOL_V2)")
+ap.add_argument("--map-sites", type=int, default=1,
+                help="매핑워크: 방당 촬영 지점 수 (최원점 샘플링으로 흩뿌림). 초기 등록은 일회성이라 무겁게 가도 "
+                     "된다 — 지점 1개·6방향(36장/채)은 겹침이 없어 다시점 일치가 불가능했다 (2026-09-03)")
+ap.add_argument("--map-step", type=int, default=60, help="매핑워크 방향 간격(°). 45 면 8방향")
 ap.add_argument("--remap", action="store_true",
                 help="매핑워크만 다시 돌려 기존 --out 의 map/ 과 gt.json[map] 을 교체 (live 는 그대로). "
                      "종전 매핑워크는 live 루프 뒤(이동 후 장면)에서 돌았고 좌표가 인스턴스 원점이라 "
@@ -404,9 +408,20 @@ os.makedirs(_mapdir, exist_ok=True)
 mi = 0
 for r, pl in polys.items():
     c = np.array(pl).mean(0)
-    mp_pt = sim.pathfinder.get_random_navigable_point_near(np.array([c[0], 0.1, c[1]]), 3.0)
-    if not np.isfinite(mp_pt).all(): continue
-    for yy in (0, 60, 120, 180, 240, 300):
+    # 방당 --map-sites 지점: 방 폴리곤 안 보행점 후보 40개에서 최원점 샘플링 (서로 떨어진 시점)
+    _cands = []
+    for _ in range(40):
+        q = sim.pathfinder.get_random_navigable_point_near(np.array([c[0], 0.1, c[1]]), 4.0)
+        if np.isfinite(q).all() and _pip((float(q[0]), float(q[2])), pl): _cands.append(np.array(q, float))
+    if not _cands:
+        q = sim.pathfinder.get_random_navigable_point_near(np.array([c[0], 0.1, c[1]]), 3.0)
+        if not np.isfinite(q).all(): continue
+        _cands = [np.array(q, float)]
+    sites = [_cands[0]]
+    while len(sites) < min(args.map_sites, len(_cands)):
+        sites.append(max(_cands, key=lambda q: min(np.hypot(q[0]-s_[0], q[2]-s_[2]) for s_ in sites)))
+    for mp_pt in sites:
+      for yy in range(0, 360, args.map_step):
         st = habitat_sim.AgentState(); st.position = mp_pt
         ry = np.radians(yy)
         st.rotation = np.quaternion(np.cos(ry / 2), 0, np.sin(ry / 2), 0)
