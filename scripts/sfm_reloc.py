@@ -3,7 +3,7 @@
 등록(relocalization)한다. 프레임 사이 겹침이 필요 없으므로 1fps·급회전에서도 사슬이 끊기지 않는다(§139 의 실패는
 live 스트림 자체를 추적하려던 것).
 
-    python scripts/sfm_reloc.py data/hssd20S2/house_0000 --vocab ~/khcache/colmap/vocab_tree_flickr100K_words32K.bin \
+    python scripts/sfm_reloc.py data/hssd20S2/house_0000 --vocab ~/khcache/colmap/vocab_tree_faiss_flickr100K_words32K.bin \
         --out ~/khcache/sfm/pose_house_0000.jsonl
 
 단계: SIFT(CPU) → vocab-tree 검색 매칭(+순차 매칭) → map 만 증분 매핑 → map 고정(fix_existing_frames) 상태로
@@ -20,12 +20,13 @@ import pycolmap  # noqa: E402
 ap = argparse.ArgumentParser()
 ap.add_argument("house")
 ap.add_argument("--work", default=None, help="DB·재구성 디렉터리 (기본 ~/khcache/sfm/<house>)")
-ap.add_argument("--vocab", default=os.path.expanduser("~/khcache/colmap/vocab_tree_flickr100K_words32K.bin"))
+ap.add_argument("--vocab", default=os.path.expanduser("~/khcache/colmap/vocab_tree_faiss_flickr100K_words32K.bin"))
 ap.add_argument("--threads", type=int, default=4)
 ap.add_argument("--topk", type=int, default=20, help="vocab-tree 검색 이미지 수")
 ap.add_argument("--features", type=int, default=4096)
 ap.add_argument("--out", default=None)
 ap.add_argument("--redo", action="store_true")
+ap.add_argument("--matcher", default="vocab", choices=["vocab", "exhaustive"], help="vocab: 순차+vocab-tree 검색(faiss 판 트리 필요) · exhaustive: 전수")
 ap.add_argument("--gpu", action="store_true", help="CUDA 박스(RTX)에서 SIFT·매칭을 GPU 로")
 a = ap.parse_args()
 
@@ -41,20 +42,29 @@ db = os.path.join(work, "db.db"); T0 = time.time()
 DEV = pycolmap.Device.cuda if a.gpu else pycolmap.Device.cpu
 def log(*x): print("[%5.0fs] " % (time.time() - T0) + " ".join(str(v) for v in x), flush=True)
 
-if a.redo and os.path.exists(db): os.remove(db)
-if not os.path.exists(db):
+ap_matcher = a.matcher
+mk_ext, mk_mat = os.path.join(work, ".extracted"), os.path.join(work, ".matched_" + ap_matcher)
+if a.redo:
+    for f in (db, mk_ext, mk_mat):
+        if os.path.exists(f): os.remove(f)
+if not os.path.exists(mk_ext):
+    if os.path.exists(db): os.remove(db)
     ro = pycolmap.ImageReaderOptions(); ro.camera_model = "PINHOLE"; ro.camera_params = "%g,%g,%g,%g" % (fx, fx, W / 2.0, H / 2.0)
     eo = pycolmap.FeatureExtractionOptions(); eo.num_threads = a.threads; eo.use_gpu = a.gpu; eo.sift.max_num_features = a.features
     pycolmap.extract_features(db, hd, image_names=names_map + names_live, camera_mode=pycolmap.CameraMode.SINGLE,
                               camera_model="PINHOLE", reader_options=ro, extraction_options=eo, device=DEV)
-    log("SIFT 추출 map %d + live %d" % (len(maps), len(lives)))
+    open(mk_ext, "w").close(); log("SIFT 추출 map %d + live %d" % (len(maps), len(lives)))
+if not os.path.exists(mk_mat):
     mo = pycolmap.FeatureMatchingOptions(); mo.num_threads = a.threads; mo.use_gpu = a.gpu
-    so = pycolmap.SequentialPairingOptions(); so.overlap = 8; so.loop_detection = False
-    pycolmap.match_sequential(db, matching_options=mo, pairing_options=so, device=DEV)
-    log("순차 매칭(overlap 8)")
-    vo = pycolmap.VocabTreePairingOptions(); vo.vocab_tree_path = a.vocab; vo.num_images = a.topk; vo.num_threads = a.threads
-    pycolmap.match_vocabtree(db, matching_options=mo, pairing_options=vo, device=DEV)
-    log("vocab-tree 매칭(top%d)" % a.topk)
+    if ap_matcher == "vocab":
+        so = pycolmap.SequentialPairingOptions(); so.overlap = 8; so.loop_detection = False
+        pycolmap.match_sequential(db, matching_options=mo, pairing_options=so, device=DEV); log("순차 매칭(overlap 8)")
+        vo = pycolmap.VocabTreePairingOptions(); vo.vocab_tree_path = a.vocab; vo.num_images = a.topk; vo.num_threads = a.threads
+        pycolmap.match_vocabtree(db, matching_options=mo, pairing_options=vo, device=DEV); log("vocab-tree 매칭(top%d)" % a.topk)
+    else:                                   # 검색 없이 전수 — 1.3k 장이면 CPU 로 십수 분, 살아있는 vocab tree 가 없을 때
+        xo = pycolmap.ExhaustivePairingOptions(); xo.block_size = 100
+        pycolmap.match_exhaustive(db, matching_options=mo, pairing_options=xo, device=DEV); log("전수 매칭")
+    open(mk_mat, "w").close()
 
 def mapper_opts(names, fix):
     o = pycolmap.IncrementalPipelineOptions(); o.num_threads = a.threads; o.image_names = names
@@ -66,7 +76,7 @@ def best_rec(recs):
 
 rec_map_dir = os.path.join(work, "rec_map"); rec_all_dir = os.path.join(work, "rec_all")
 rm = None
-if not a.redo and os.path.isdir(rec_map_dir) and os.listdir(rec_map_dir):
+if not a.redo and os.path.isdir(rec_map_dir) and any(os.path.isdir(os.path.join(rec_map_dir, d)) for d in os.listdir(rec_map_dir)):
     rm = pycolmap.Reconstruction(os.path.join(rec_map_dir, sorted(os.listdir(rec_map_dir))[0]))
 else:
     os.makedirs(rec_map_dir, exist_ok=True)
