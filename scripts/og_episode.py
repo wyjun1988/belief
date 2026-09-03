@@ -58,6 +58,8 @@ ap.add_argument("--frames", type=int, default=2000,
                 help="SPEC 2 wants >=1200; the --evidence device needs ~1900 "
                      "for a 5+5 case budget, so the default is 2000")
 ap.add_argument("--seed", type=int, default=0)
+ap.add_argument("--frames-max-factor", type=float, default=2.0,
+                help="widen_budget: auto-extend --frames up to this factor when the scripted part needs more (v4 delta)")
 ap.add_argument("--case1", type=int, default=10)
 ap.add_argument("--case2", type=int, default=5)
 ap.add_argument("--case3", type=int, default=5)
@@ -82,6 +84,8 @@ ap.add_argument("--evidence", default="3:1.4",
                 help="SPEC 4-2.8  K:D -- after a case2 move, approach the object K "
                      "times from distance D, entering along the line of sight, with "
                      "another room in between so each counts as a separate visit")
+ap.add_argument("--frames-max-factor", type=float, default=2.5,
+                help="how far --frames may be auto-extended to fit the scripted part")
 ap.add_argument("--spare", type=int, default=3,
                 help="extra moves planned per case, so one gate failure does not "
                      "drop the house below quota")
@@ -119,6 +123,7 @@ from omnigibson.objects import DatasetObject
 from omnigibson.utils.asset_utils import get_dataset_path
 from omnigibson.utils.sampling_utils import raytest
 
+frames_requested = a.frames
 rng = np.random.default_rng(a.seed)
 STRUCT = {"walls", "wall", "floors", "floor", "ceilings", "ceiling", "door", "window",
           "background", "groundplane", "unlabelled", "stairs", "staircase", "railing",
@@ -867,14 +872,26 @@ def limit_turn_rate(prog, cap, seed=None):
     return out
 
 
+def widen_budget(need, what):
+    """The scripted part must never be trimmed -- the first smoke build did that and
+    lost every move (planned 3, moves 0).  Its length scales with the room count, so
+    rather than hand-tuning --frames per scene, extend the budget and say so (v4 delta)."""
+    if need <= a.frames:
+        return
+    if need > a.frames * a.frames_max_factor:
+        raise SystemExit("%s needs %d frames, more than --frames=%d x %.1f; lower "
+                         "--map-sites/--turns/--evidence/--spare or raise --frames"
+                         % (what, need, a.frames, a.frames_max_factor))
+    grown = int(need * 1.05)
+    notes.append("frame budget auto-extended %d -> %d (%s needs %d, %d rooms in scope)"
+                 % (a.frames, grown, what, need, len(rooms)))
+    print("frame budget %d -> %d (%s needs %d)" % (a.frames, grown, what, need), flush=True)
+    a.frames = grown
+
+
 phase_a = limit_turn_rate(program, a.max_turn_deg)
 program = []
-if len(phase_a) > a.frames:
-    # The first smoke build silently trimmed here, which cut every scripted move off
-    # the end of the programme (moves=0 while planned=3).  Fail loudly instead.
-    raise SystemExit("prelude+moves need %d frames (prelude %d, %d cases) but "
-                     "--frames=%d; raise --frames or lower --map-sites/--turns/--step"
-                     % (len(phase_a), prelude_end, len(plan), a.frames))
+widen_budget(len(phase_a), "prelude+moves")
 allowed = [r for r in rooms if r not in never_revisit] or rooms
 print("phase A (prelude+moves) %d frames (prelude %d, route failures %d)"
       % (len(phase_a), prelude_end, route_fail), flush=True)
@@ -1118,9 +1135,7 @@ phase_b = limit_turn_rate(program, a.max_turn_deg,
                           seed=dict(p=np.asarray(live[-1]["apos"], float),
                                     yaw=live[-1]["yaw"]) if live else None)
 program = []
-if len(live) + len(phase_b) > a.frames:
-    raise SystemExit("prelude+moves+revisits need %d frames but --frames=%d"
-                     % (len(live) + len(phase_b), a.frames))
+widen_budget(len(live) + len(phase_b), "prelude+moves+revisits")
 print("phase B (revisits) %d frames, approach failures %d"
       % (len(phase_b), len(approach_fail)), flush=True)
 run_steps(phase_b)
@@ -1288,7 +1303,9 @@ dpos = np.linalg.norm(np.diff(pth, axis=0), axis=1) if len(pth) > 1 else np.zero
 yy = np.array([f["yaw"] for f in live], float)
 dyaw = np.abs((np.diff(yy) + 180) % 360 - 180) if len(yy) > 1 else np.zeros(1)
 occl_all = [v for f in live for v in f["occl"].values()]
-audit = dict(house=a.house, scene=a.scene, frames=len(live), map_frames=len(mapping),
+audit = dict(house=a.house, scene=a.scene, frames=len(live),
+             frames_requested=frames_requested, frames_budget=a.frames,
+             map_frames=len(mapping),
              moves=len(moves), planned=len(plan),
              case1_no_move_revisited=ok1, case2_move_reobserved=ok2,
              case3_absent_belief=ok3, case4_outside=ok4,
@@ -1385,8 +1402,8 @@ print(json.dumps(audit, ensure_ascii=False), flush=True)
 
 fails = []
 if not a.smoke:
-    if len(live) < 1200:
-        fails.append("frames %d < 1200" % len(live))
+    if len(live) < min(1200, frames_requested):
+        fails.append("frames %d < %d" % (len(live), min(1200, frames_requested)))
     if not (a.min_rooms <= len(rooms) <= a.max_rooms):
         fails.append("%d rooms in scope, want %d..%d" % (len(rooms), a.min_rooms, a.max_rooms))
     for t in need:

@@ -58,7 +58,9 @@ for hd in sys.argv[1:]:
     # 게이트 = **기하**: 모든 이동이 받침 위(supported)이고 2m 시선(witness)이 있는가.
     # 검출률은 벤치 속성으로 보고만 한다 — 흰 접시가 흰 침대 위, 검은 휴지통이 어두운 옷장 앞
     # 같은 것은 정당한 난이도이지 배치 버그가 아니다 (2026-09-02 육안 확인).
-    geo_ok = all(m.get("supported") and m.get("witness_file") and m.get("witness_ctr") for m in g["moves"])
+    # 수납 이동(hidden_verified=True)은 정의상 2m 시선이 없다 — 받침 + 숨김 검증이면 통과 (OG 인수인계 결정)
+    geo_ok = all(m.get("supported") and ((m.get("witness_file") and m.get("witness_ctr")) or m.get("hidden_verified"))
+                 for m in g["moves"])
     wit_ok = 0; wit_n = 0
     for m in g["moves"]:
         if not m.get("witness_file") or not m.get("witness_ctr"): continue
