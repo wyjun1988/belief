@@ -75,7 +75,8 @@ _ANCH_EX = float(os.environ.get("ANCH_EX", "0.80")); _ANCH_TY = float(os.environ
 LADDER = "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s · c0창:%s%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
     "GT" if SG_INIT == "gt" else "검출",
     "SfM" if POSE is not None else "GT(apos)",
-    ("SfM" if POSE is not None and os.environ.get("LOC_YAW_GT") != "1" else "GT" if os.environ.get("LOC_YAW_GT") == "1" else "투표") if _LG else "융합(비기하)",
+    # POSE_JSONL 이 있으면 live 의 apos·yaw 가 SfM 값으로 덮인다 → LOC_YAW_GT=1 경로가 읽는 m["yaw"] 는 SfM yaw 다
+    (("SfM" if os.environ.get("LOC_YAW_GT") == "1" else "투표") if POSE is not None else ("GT" if os.environ.get("LOC_YAW_GT") == "1" else "투표")) if _LG else "융합(비기하)",
     ("DA" if os.environ.get("GEO_DEPTH") else "GT") if _LG else "—",
     "실측" if VSC is not None else "모의(GT vis)",
     os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), "(광선만)" if os.environ.get("C0_RAYPICK") == "1" else "",

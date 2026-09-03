@@ -26,6 +26,8 @@ ap.add_argument("--topk", type=int, default=20, help="vocab-tree 검색 이미�
 ap.add_argument("--features", type=int, default=4096)
 ap.add_argument("--out", default=None)
 ap.add_argument("--redo", action="store_true")
+ap.add_argument("--vmax", type=float, default=2.5, help="속도 필터: ±3초 이웃 등록 프레임과의 중앙 거리(m)가 이보다 크면 기권(1fps 보행 ≤1.5m/s). 0=끔")
+ap.add_argument("--strict", action="store_true", help="PnP 등록 문턱 강화(abs_pose_min_num_inliers 60·inlier_ratio 0.4) — 반복 구조 유령 등록 억제")
 ap.add_argument("--matcher", default="vocab", choices=["vocab", "exhaustive"], help="vocab: 순차+vocab-tree 검색(faiss 판 트리 필요) · exhaustive: 전수")
 ap.add_argument("--gpu", action="store_true", help="CUDA 박스(RTX)에서 SIFT·매칭을 GPU 로")
 a = ap.parse_args()
@@ -70,6 +72,8 @@ def mapper_opts(names, fix):
     o = pycolmap.IncrementalPipelineOptions(); o.num_threads = a.threads; o.image_names = names
     o.ba_refine_focal_length = False; o.ba_refine_principal_point = False; o.ba_refine_extra_params = False
     o.multiple_models = False; o.fix_existing_frames = fix
+    if a.strict:
+        o.mapper.abs_pose_min_num_inliers = 60; o.mapper.abs_pose_min_inlier_ratio = 0.4
     return o
 def best_rec(recs):
     return max(recs.values(), key=lambda r: r.num_reg_images()) if recs else None
@@ -87,7 +91,11 @@ log("map 재구성: 등록 %d/%d · 점 %d · 재투영 %.2fpx" % (rm.num_reg_im
 sub = [d for d in sorted(os.listdir(rec_map_dir)) if os.path.isdir(os.path.join(rec_map_dir, d))]
 in_path = os.path.join(rec_map_dir, sub[0]) if sub else rec_map_dir
 os.makedirs(rec_all_dir, exist_ok=True)
-ra = best_rec(pycolmap.incremental_mapping(db, hd, rec_all_dir, mapper_opts([], True), input_path=in_path))
+_subs = [d for d in sorted(os.listdir(rec_all_dir)) if os.path.isdir(os.path.join(rec_all_dir, d))]
+if not a.redo and _subs:                     # live 등록 결과 캐시 (10~17분짜리) — 가장 큰 모델
+    ra = best_rec({d: pycolmap.Reconstruction(os.path.join(rec_all_dir, d)) for d in _subs}); log("live 등록 캐시 사용 (%d모델)" % len(_subs))
+else:
+    ra = best_rec(pycolmap.incremental_mapping(db, hd, rec_all_dir, mapper_opts([], True), input_path=in_path))
 if ra is None: sys.exit("live 등록 실패")
 n_live_reg = sum(1 for im in ra.images.values() if im.name.startswith("live/") and im.has_pose)
 log("live 등록: %d/%d" % (n_live_reg, len(lives)))
@@ -105,22 +113,35 @@ src, dst = [], []
 for nm, m in zip(names_map, gm):
     if nm in P: src.append(P[nm][0]); dst.append([m["apos"][0], 1.5, m["apos"][1]])
 src, dst = np.array(src), np.array(dst)
+def fit(X, Y):
+    s_, R_, t_ = umeyama(X, Y); return s_, R_, t_, np.linalg.norm((s_ * (R_ @ X.T)).T + t_ - Y, axis=1)
+def ransac_sim3(X, Y, th=0.5, iters=300, seed=0):
+    """map 프레임 일부가 잘못 등록(드리프트·오병합)돼도 다수가 맞는 sim3 — 3점 표본 → 인라이어 → 재적합"""
+    rng = np.random.default_rng(seed); n = len(X); best_in = None
+    for _ in range(iters):
+        idx = rng.choice(n, 3, replace=False)
+        try: s_, R_, t_, e = fit(X[idx], Y[idx])
+        except Exception: continue
+        e = np.linalg.norm((s_ * (R_ @ X.T)).T + t_ - Y, axis=1); inl = e < th
+        if best_in is None or inl.sum() > best_in.sum(): best_in = inl
+    if best_in is None or best_in.sum() < 4: best_in = np.ones(n, bool)
+    s_, R_, t_, e = fit(X[best_in], Y[best_in])
+    return s_, R_, t_, float(np.sqrt((e ** 2).mean())), float(best_in.mean())
 best = None
 for mirror in (False, True):
     M = np.diag([-1.0, 1.0, 1.0]) if mirror else np.eye(3)
-    s, R, t = umeyama(src @ M.T, dst)
-    al = (s * (R @ (src @ M.T).T)).T + t; rms = float(np.sqrt(((al - dst) ** 2).sum(1).mean()))
-    if best is None or rms < best[0]: best = (rms, mirror, M, s, R, t)
-rms, mirror, M, s, R, t = best
-log("sim3 정렬(map %d프레임): rms %.3fm · 스케일 %.3f · 미러 %s" % (len(src), rms, s, mirror))
+    s, R, t, rms, inl = ransac_sim3(src @ M.T, dst)
+    if best is None or (inl, -rms) > (best[6], -best[0]): best = (rms, mirror, M, s, R, t, inl)
+rms, mirror, M, S3, R3, T3, INL = best; s = S3
+log("sim3 정렬(map %d프레임, RANSAC 0.5m): 인라이어 %.2f · 인라이어 rms %.3fm · 스케일 %.3f · 미러 %s" % (len(src), INL, rms, s, mirror))
 
 def to_ours(c, v):
-    c2 = s * (R @ (M @ c)) + t; v2 = R @ (M @ v)
+    c2 = S3 * (R3 @ (M @ c)) + T3; v2 = R3 @ (M @ v)
     return [round(float(c2[0]), 3), round(float(c2[2]), 3)], round(float(np.degrees(np.arctan2(v2[0], v2[2])) % 360), 1)
 
 # ── 평가: live ATE·yaw·카메라방 적중 ──
 live = {m["t"]: m for m in g["live"]}
-rooms = g.get("rooms") or {}
+rooms = (g.get("scene_meta") or {}).get("polys") or g.get("rooms") or {}   # HSSD: scene_meta.polys {room: [[x,z],...]}
 def poly_of(r):
     if isinstance(r, list) and len(r) >= 3 and isinstance(r[0], (list, tuple)): return r
     if isinstance(r, dict):
@@ -133,12 +154,26 @@ def pip(pt, poly):
         x1, z1 = poly[i][0], poly[i][-1]; x2, z2 = poly[(i + 1) % n][0], poly[(i + 1) % n][-1]
         if (z1 > z) != (z2 > z) and x < (x2 - x1) * (z - z1) / (z2 - z1 + 1e-12) + x1: ins = not ins
     return ins
-polys = {rid: poly_of(r) for rid, r in rooms.items()}; polys = {k: v for k, v in polys.items() if v}
-rows, ate, yerr, hit, nhit = [], [], [], 0, 0
+try:
+    polys = {rid: poly_of(r) for rid, r in (rooms.items() if isinstance(rooms, dict) else enumerate(rooms))}
+    polys = {k: v for k, v in polys.items() if v}
+except Exception as e:
+    print("rooms 폴리곤 해석 실패(%s) — 카메라방 적중 생략" % e); polys = {}
+est = {}
 for f in lives:
-    t = int(f[:-4]); nm = "live/" + f; m = live.get(t)
-    if nm not in P or m is None: continue
-    apos, yaw = to_ours(*P[nm]); rows.append(dict(house=hn, t=t, apos=apos, yaw=yaw))
+    t = int(f[:-4]); nm = "live/" + f
+    if nm in P and t in live: est[t] = to_ours(*P[nm])
+n_before = len(est)
+if a.vmax > 0:                                   # GT 없이 되는 일관성 검사: 유령 등록(반복 구조)은 이웃과 수 m 튄다
+    drop = set()
+    for t, (ap_, _) in est.items():
+        nb = [np.hypot(ap_[0] - est[u][0][0], ap_[1] - est[u][0][1]) for u in range(t - 3, t + 4) if u != t and u in est]
+        if nb and np.median(nb) > a.vmax: drop.add(t)
+    for t in drop: est.pop(t)
+    log("속도 필터(vmax %.1fm): 기권 %d/%d" % (a.vmax, len(drop), n_before))
+rows, ate, yerr, hit, nhit = [], [], [], 0, 0
+for t in sorted(est):
+    m = live[t]; apos, yaw = est[t]; rows.append(dict(house=hn, t=t, apos=apos, yaw=yaw))
     ate.append(np.hypot(apos[0] - m["apos"][0], apos[1] - m["apos"][1]))
     yerr.append(abs((yaw - m["yaw"] + 180) % 360 - 180))
     if polys and m.get("room") in polys:
@@ -156,8 +191,8 @@ with open(os.path.join(work, "map_pose_%s.jsonl" % hn), "w") as fo:
     for nm, m in zip(names_map, gm):
         if nm in P:
             apos, yaw = to_ours(*P[nm]); fo.write(json.dumps(dict(house=hn, name=nm, apos=apos, yaw=yaw, apos_gt=m["apos"], yaw_gt=m["yaw"])) + "\n")
-json.dump(dict(house=hn, map_reg=rm.num_reg_images(), n_map=len(maps), live_reg=len(rows), n_live=len(lives), cov=cov,
+json.dump(dict(house=hn, map_reg=rm.num_reg_images(), n_map=len(maps), live_reg=len(rows), live_reg_raw=n_before, n_live=len(lives), cov=cov, vmax=a.vmax, strict=a.strict,
                ate_med=float(np.median(ate)) if len(ate) else None, ate_lt05=float((ate < 0.5).mean()) if len(ate) else None,
                yaw_med=float(np.median(yerr)) if len(yerr) else None, room_hit=(hit / nhit) if nhit else None, n_room=nhit,
-               sim3_rms=rms, scale=s, mirror=mirror, sec=time.time() - T0), open(os.path.join(work, "summary_%s.json" % hn), "w"), indent=1)
+               sim3_rms=float(rms), sim3_inl=INL, scale=float(s), mirror=bool(mirror), sec=time.time() - T0), open(os.path.join(work, "summary_%s.json" % hn), "w"), indent=1, default=float)
 log("→ %s (%d프레임)" % (out, len(rows)))
