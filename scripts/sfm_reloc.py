@@ -27,6 +27,7 @@ ap.add_argument("--features", type=int, default=4096)
 ap.add_argument("--out", default=None)
 ap.add_argument("--redo", action="store_true")
 ap.add_argument("--vmax", type=float, default=2.5, help="속도 필터: ±3초 이웃 등록 프레임과의 중앙 거리(m)가 이보다 크면 기권(1fps 보행 ≤1.5m/s). 0=끔")
+ap.add_argument("--fast", action="store_true", help="전역 BA 를 덜 자주(1.1→1.3배)·반복 절반 — live 등록 시간 단축(정확도는 4채에서 대조할 것)")
 ap.add_argument("--strict", action="store_true", help="PnP 등록 문턱 강화(abs_pose_min_num_inliers 60·inlier_ratio 0.4) — 반복 구조 유령 등록 억제")
 ap.add_argument("--matcher", default="vocab", choices=["vocab", "exhaustive"], help="vocab: 순차+vocab-tree 검색(faiss 판 트리 필요) · exhaustive: 전수")
 ap.add_argument("--gpu", action="store_true", help="CUDA 박스(RTX)에서 SIFT·매칭을 GPU 로")
@@ -74,6 +75,9 @@ def mapper_opts(names, fix):
     o.multiple_models = False; o.fix_existing_frames = fix
     if a.strict:
         o.mapper.abs_pose_min_num_inliers = 60; o.mapper.abs_pose_min_inlier_ratio = 0.4
+    if a.fast:
+        o.ba_global_frames_ratio = 1.3; o.ba_global_points_ratio = 1.3
+        o.ba_global_max_num_iterations = 30; o.ba_local_max_num_iterations = 15
     return o
 def best_rec(recs):
     return max(recs.values(), key=lambda r: r.num_reg_images()) if recs else None
