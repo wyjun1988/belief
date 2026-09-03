@@ -663,6 +663,8 @@ for _d in (gt0, state):
 for _r in polys: polys[_r] = [[-x, z] for x, z in polys[_r]]
 for _m in moves:                         # 이동 후 좌표도 같은 규약으로 (2026-09-02: 빠져 있었다)
     if _m.get("pos"): _m["pos"] = _mx(_m["pos"])
+for _v in static.values():               # 정적 앵커 좌표도 (2026-09-03: v3c 에서 빠져 거리 정합·yaw 투표 오염)
+    if _v.get("pos"): _v["pos"] = _mx(_v["pos"])
 
 # ── 초기 맵(매핑 워크 대용): 앞 MAPN 프레임을 map 으로도 기록 + 물체 bbox
 # (exp_imgq 의 exemplar 는 map 프레임의 box 에서 크롭을 뽑는다. 우리 시스템이
@@ -684,7 +686,7 @@ static = {oid: dict(type=v["type"], room=obj_room[oid],
           for oid, v in objs.items() if oid not in {m["oid"] for m in moves}}
 json.dump(dict(house=0, rooms=[dict(id=r, type=rt[r]) for r in polys], room_types=rt,
                gt0=gt0, moves=moves, live=live, map=mp, fps=1.0, T=len(live),
-               scene_meta=dict(polys=polys, static=static, doors=[])),
+               scene_meta=dict(polys=polys, static=static, doors=[]), _mirror_fixed=True),
           open(os.path.join(args.out, "gt.json"), "w"))
 print("프레임 %d · 이동 %d · 방 %d → %s" % (len(live), len(moves), len(polys), args.out))
 
