@@ -181,9 +181,21 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         d_raw = zp * k_
         inv = (A_ * (1.0 / zp) + B_) * fr_.get(i, 1.0)
         d = (1.0 / inv) * k_ if inv > 1e-6 else d_raw
+        mode = "affine"
+        if os.environ.get("DEPTH_REL", "0") == "1" and fpairs.get(i):
+            # **상대 깊이**: 같은 프레임 앵커(지도 거리 = 진짜)의 예측/진짜 비율을 물체에 적용 (사용자 제안 2026-09-03).
+            # 채 단위 전역 아핀이 못 잡는 근거리 비선형을 같은 프레임·비슷한 깊이의 앵커가 국소적으로 잡는다.
+            # 앵커 2개 이상이면 log 깊이에서 두 최근접 앵커의 비율을 선형 보간.
+            _an = sorted(((1.0 / x_, (1.0 / y_) / (1.0 / x_)) for x_, y_ in fpairs[i]), key=lambda t_: t_[0])   # (zp_anchor, ratio)
+            lz = np.log(max(zp, 1e-3)); zs = np.array([np.log(max(z_, 1e-3)) for z_, _ in _an]); rs = np.array([r_ for _, r_ in _an])
+            if len(_an) == 1 or lz <= zs[0]: ratio = rs[0]
+            elif lz >= zs[-1]: ratio = rs[-1]
+            else:
+                j = int(np.searchsorted(zs, lz)); w = (lz - zs[j-1]) / max(zs[j] - zs[j-1], 1e-6); ratio = rs[j-1] * (1 - w) + rs[j] * w
+            d = zp * float(np.clip(ratio, 0.2, 5.0)) * k_; mode = "rel%d" % len(_an)
         gt = (live.get(tsl[i], {}).get("dist") or {}).get(oid)
         out.write(json.dumps(dict(house=hn, t=tsl[i], oid=oid, d=round(float(d), 2),
-                                  d_raw=round(float(d_raw), 2),
+                                  d_raw=round(float(d_raw), 2), mode=mode,
                                   gt=gt)) + "\n")
         if gt: errs.append((gt, abs(d - gt) / gt, d_raw / gt))
     out.flush()
