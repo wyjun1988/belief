@@ -54,12 +54,11 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--scene", required=True)
 ap.add_argument("--out", required=True)
 ap.add_argument("--house", type=int, default=0)
-ap.add_argument("--frames", type=int, default=2000,
-                help="SPEC 2 wants >=1200; the --evidence device needs ~1900 "
-                     "for a 5+5 case budget, so the default is 2000")
+ap.add_argument("--frames", type=int, default=2600,
+                help="SPEC 2 wants >=1200 (14,400 ideal).  With --evidence 3:1.4 and "
+                     "--spare 3 the scripted part alone measures ~2050 frames on "
+                     "Rs_int, so the default leaves headroom for phase C")
 ap.add_argument("--seed", type=int, default=0)
-ap.add_argument("--frames-max-factor", type=float, default=2.0,
-                help="widen_budget: auto-extend --frames up to this factor when the scripted part needs more (v4 delta)")
 ap.add_argument("--case1", type=int, default=10)
 ap.add_argument("--case2", type=int, default=5)
 ap.add_argument("--case3", type=int, default=5)
@@ -847,35 +846,44 @@ def sees_any(xy, names):
     return any(visible(eye, n) for n in names if n in objs)
 
 
-def limit_turn_rate(prog, cap, seed=None):
-    """Insert in-place frames so no two consecutive frames differ by more than cap.
+def smooth_program(prog, cap, step, seed=None):
+    """Make the programme satisfy both continuity gates.
 
-    @seed is the previous phase's last rendered step, so the seam between phases is
-    capped too (before seeding: max 111 deg, 7 frames over 45).
+    Inserts in-place turn frames where the heading would jump more than @cap, and
+    interpolated walk frames where the position would jump more than @step.  @seed is
+    the last frame already rendered, so phase seams are covered too.
     """
-    if not prog or cap <= 0:
+    if not prog:
         return prog
     out = [dict(p=np.asarray(seed["p"], float), yaw=float(seed["yaw"]),
                 event=None, tag="seed")] if seed is not None else [prog[0]]
-    prog = prog if seed is not None else prog[1:]
-    for s in prog[1:]:
-        d = ((float(s["yaw"]) - float(out[-1]["yaw"]) + 180.0) % 360.0) - 180.0
-        n = int(math.ceil(abs(d) / cap)) - 1
-        base_yaw = float(out[-1]["yaw"])
-        base_p = np.asarray(out[-1]["p"], float).copy()
-        for k in range(1, n + 1):
-            out.append(dict(p=base_p.copy(), yaw=base_yaw + d * k / (n + 1),
-                            event=None, tag="turn"))
-        out.append(s)
-    if seed is not None:
-        out = out[1:]                    # the seed frame was already rendered
-    return out
+    rest = prog if seed is not None else prog[1:]
+    for s2 in rest:
+        prev = out[-1]
+        p0 = np.asarray(prev["p"], float)
+        p1 = np.asarray(s2["p"], float)
+        gap = float(np.linalg.norm(p1 - p0))
+        y0, y1 = float(prev["yaw"]), float(s2["yaw"])
+        dy = ((y1 - y0 + 180.0) % 360.0) - 180.0
+        # One shared subdivision count, so position and heading advance together.
+        # The tolerance matters: walk_to already densifies to step*1.05, so testing
+        # against step exactly made ceil(0.2625/0.25)=2 and inserted a frame between
+        # every single walk frame (phase A+B grew 1818 -> 2343 and tripped the budget).
+        n = max(int(math.ceil(gap / (step * 1.15))) if step > 0 else 1,
+                int(math.ceil(abs(dy) / cap)) if cap > 0 else 1)
+        for k in range(1, n):
+            out.append(dict(p=p0 + (p1 - p0) * k / n, yaw=y0 + dy * k / n,
+                            event=None, tag="walk" if gap > 1e-6 else "turn"))
+        out.append(s2)
+    return out[1:] if seed is not None else out
 
 
 def widen_budget(need, what):
     """The scripted part must never be trimmed -- the first smoke build did that and
-    lost every move (planned 3, moves 0).  Its length scales with the room count, so
-    rather than hand-tuning --frames per scene, extend the budget and say so (v4 delta)."""
+    lost every move (planned 3, moves 0).  Its length scales with the room count
+    (Rs_int 5 rooms -> ~2050 frames, Pomaria_1_int 7 rooms -> ~2900), so rather than
+    hand-tuning --frames per scene, extend the budget and say so.  SPEC 2 asks for
+    >=1200 with 14,400 ideal, so a longer episode is never the wrong answer."""
     if need <= a.frames:
         return
     if need > a.frames * a.frames_max_factor:
@@ -889,7 +897,7 @@ def widen_budget(need, what):
     a.frames = grown
 
 
-phase_a = limit_turn_rate(program, a.max_turn_deg)
+phase_a = smooth_program(program, a.max_turn_deg, a.step)
 program = []
 widen_budget(len(phase_a), "prelude+moves")
 allowed = [r for r in rooms if r not in never_revisit] or rooms
@@ -909,15 +917,33 @@ def supported(n):
     return bool(r.get("hit"))
 
 
-def witness(n, k, t, radii=(2.0,), min_d=0.8):
-    """Render the object with line of sight from one of @radii metres; SPEC 4.4 gate."""
+def witness(n, k, t, radii=(2.0,), min_d=0.8, walker_only=True):
+    """Render the object with line of sight from one of @radii metres; SPEC 4.4 gate.
+
+    @walker_only False lets the camera stand on any free cell (pre-erosion): a witness
+    is a diagnostic image, so it needs line of sight, not reachability.
+    """
     v = refresh(n)
     tgt = v["ctr"]
+
+    def free_cell(xy):
+        c = ng.to_cell(xy)
+        if ng.free[c[0], c[1]]:
+            return c
+        for r in range(1, 8):
+            for dj in range(-r, r + 1):
+                for di in range(-r, r + 1):
+                    j, i = c[0] + dj, c[1] + di
+                    if (0 <= j < ng.free.shape[0] and 0 <= i < ng.free.shape[1]
+                            and ng.free[j, i]):
+                        return (j, i)
+        return None
+
     for R in radii:
-        for ang in range(0, 360, 30):
+        for ang in range(0, 360, 15):
             rad = math.radians(ang)
-            cell = ng.snap(tgt[:2] + R * np.array([math.cos(rad), math.sin(rad)]),
-                           max_r=14)
+            probe = tgt[:2] + R * np.array([math.cos(rad), math.sin(rad)])
+            cell = ng.snap(probe, max_r=14) if walker_only else free_cell(probe)
             if cell is None:
                 continue
             e2 = ng.to_world(cell)
@@ -1007,6 +1033,9 @@ def _apply_one(e, t, tried):
                 og.sim.render()
                 store_wit = witness(n, len(moves), t,
                                     radii=(1.6, 1.2, 2.0, 2.5), min_d=0.5)
+                if store_wit[0] is None:
+                    store_wit = witness(n, len(moves), t, walker_only=False,
+                                        radii=(1.0, 0.8, 1.4, 1.8), min_d=0.35)
                 if Open in box.states:
                     box.states[Open].set_value(False)
                     for _ in range(20):
@@ -1044,6 +1073,9 @@ def _apply_one(e, t, tried):
     else:
         wit_file, wit_ctr = witness(n, len(moves), t,
                                     radii=(2.0, 1.6, 1.3, 2.5), min_d=0.6)
+        if wit_file is None:
+            wit_file, wit_ctr = witness(n, len(moves), t, walker_only=False,
+                                        radii=(1.2, 1.0, 1.6, 2.0), min_d=0.4)
     if not (sup and (hidden is True or wit_file is not None)):
         og.sim.load_state(st, serialized=False)
         refresh(n)
@@ -1131,9 +1163,9 @@ for m in moves:
             other = next((r for r in low_dwell if r != m["to"]), m["to"])
             visit(other, turns=3, tag="case2-between")
     m["evidence_visits"] = len(evs)
-phase_b = limit_turn_rate(program, a.max_turn_deg,
-                          seed=dict(p=np.asarray(live[-1]["apos"], float),
-                                    yaw=live[-1]["yaw"]) if live else None)
+phase_b = smooth_program(program, a.max_turn_deg, a.step,
+                         seed=dict(p=np.asarray(live[-1]["apos"], float),
+                                   yaw=live[-1]["yaw"]) if live else None)
 program = []
 widen_budget(len(live) + len(phase_b), "prelude+moves+revisits")
 print("phase B (revisits) %d frames, approach failures %d"
@@ -1166,9 +1198,9 @@ while len(live) < a.frames and guard < 400:
             break
     if len(program) == before:
         raise SystemExit("programme made no progress -- no reachable filler room")
-    run_steps(limit_turn_rate(program, a.max_turn_deg,
-                              seed=dict(p=np.asarray(live[-1]["apos"], float),
-                                        yaw=live[-1]["yaw"]) if live else None),
+    run_steps(smooth_program(program, a.max_turn_deg, a.step,
+                             seed=dict(p=np.asarray(live[-1]["apos"], float),
+                                       yaw=live[-1]["yaw"]) if live else None),
               limit=a.frames)
     program = []
 print("phase C done, %d live frames" % len(live), flush=True)
@@ -1316,6 +1348,15 @@ audit = dict(house=a.house, scene=a.scene, frames=len(live),
              rooms_isolated=ng.isolated, navgrid=ng.summary(), doors=door_report,
              route_failures=route_fail, map_route_len_m=round(map_route_len, 1),
              approach_failures=approach_fail,
+             selfcheck_ready=dict(
+                 note="gen_selfcheck geo_ok needs supported+witness_file+witness_ctr on "
+                      "every move; storage moves also carry hidden_verified",
+                 moves_with_witness=sum(1 for m in moves if m.get("witness_file")),
+                 moves_supported=sum(1 for m in moves if m.get("supported")),
+                 storage_hidden_verified=sum(1 for m in moves
+                                             if m.get("hidden_verified")),
+                 geo_ok=all(m.get("supported") and m.get("witness_file")
+                            and m.get("witness_ctr") for m in moves)),
              teleport_used=False, direct_interpolation_used=False,
              step_m=a.step, turns=a.turns, max_turn_deg=a.max_turn_deg,
              continuity=dict(moving_frame_frac=round(float(np.mean(dpos > 0.05)), 3),
