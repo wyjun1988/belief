@@ -27,6 +27,9 @@ ap.add_argument("--features", type=int, default=4096)
 ap.add_argument("--out", default=None)
 ap.add_argument("--redo", action="store_true")
 ap.add_argument("--vmax", type=float, default=2.5, help="속도 필터: ±3초 이웃 등록 프레임과의 중앙 거리(m)가 이보다 크면 기권(1fps 보행 ≤1.5m/s). 0=끔")
+ap.add_argument("--scale", default="gt", choices=["gt", "da"], help="척도 출처: gt=sim3 에서 GT 맵포즈로 · da=단안 메트릭 깊이(DA-V2)×데이터셋 상수(--da-k), 정렬은 회전·병진만 GT 맵포즈")
+ap.add_argument("--da-k", type=float, default=0.468, help="GT/DA 척도 상수 (HSSD 렌더 4채 중앙 0.468, 집별 ±5%%). 새 렌더러(OG)는 1채로 재보정")
+ap.add_argument("--da-n", type=int, default=40)
 ap.add_argument("--fast", action="store_true", help="전역 BA 를 덜 자주(1.1→1.3배)·반복 절반 — live 등록 시간 단축(정확도는 4채에서 대조할 것)")
 ap.add_argument("--strict", action="store_true", help="PnP 등록 문턱 강화(abs_pose_min_num_inliers 60·inlier_ratio 0.4) — 반복 구조 유령 등록 억제")
 ap.add_argument("--matcher", default="vocab", choices=["vocab", "exhaustive"], help="vocab: 순차+vocab-tree 검색(faiss 판 트리 필요) · exhaustive: 전수")
@@ -121,8 +124,42 @@ src, dst = [], []
 for nm, m in zip(names_map, gm):
     if nm in P: src.append(P[nm][0]); dst.append([m["apos"][0], 1.5, m["apos"][1]])
 src, dst = np.array(src), np.array(dst)
+def da_scale(rec, n):
+    """단안 메트릭 깊이(DA-V2)로 SfM 척도: 프레임의 3D 점 SfM 깊이 z 와 같은 픽셀 DA 깊이 비율 중앙값 (GT 불필요)"""
+    import torch
+    from transformers import AutoImageProcessor, AutoModelForDepthEstimation
+    from PIL import Image as _Im
+    mname = "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf"
+    dev = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+    pr = AutoImageProcessor.from_pretrained(mname); md = AutoModelForDepthEstimation.from_pretrained(mname).to(dev).eval()
+    ims = sorted((im for im in rec.images.values() if im.has_pose and im.name.startswith("live/")), key=lambda im: im.name)
+    ims = ims[::max(1, len(ims) // n)][:n]; fr = []
+    for im in ims:
+        p2 = [q for q in im.points2D if q.has_point3D()]
+        if len(p2) < 8: continue
+        X = np.array([rec.points3D[q.point3D_id].xyz for q in p2]); xy = np.array([q.xy for q in p2])
+        cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world; z = (cfw * X)[:, 2]
+        img = _Im.open(os.path.join(hd, im.name)).convert("RGB"); inp = pr(images=img, return_tensors="pt").to(dev)
+        with torch.no_grad(): D = md(**inp).predicted_depth
+        D = torch.nn.functional.interpolate(D[None], size=img.size[::-1], mode="bicubic", align_corners=False)[0, 0].float().cpu().numpy()
+        u = np.clip(xy[:, 0].round().astype(int), 0, D.shape[1] - 1); v = np.clip(xy[:, 1].round().astype(int), 0, D.shape[0] - 1)
+        ok = (z > 0.3) & (D[v, u] > 0.3)
+        if ok.sum() >= 8: fr.append(float(np.median(D[v, u][ok] / z[ok])))
+    return float(np.median(fr)) if fr else float("nan"), len(fr)
+S_FIX = None
+if a.scale == "da":
+    _sda, _nf = da_scale(ra, a.da_n); S_FIX = _sda * a.da_k
+    log("DA 척도: SfM→m 비율 %.3f (프레임 %d) × 상수 %.3f = %.3f — 정렬은 회전·병진만" % (_sda, _nf, a.da_k, S_FIX))
+def rigid(X, Y):
+    cx, cy = X.mean(0), Y.mean(0); H = (X - cx).T @ (Y - cy); U, _, Vt = np.linalg.svd(H)
+    Dg = np.diag([1, 1, np.sign(np.linalg.det(Vt.T @ U.T))]); R_ = Vt.T @ Dg @ U.T
+    return R_, cy - R_ @ cx
 def fit(X, Y):
-    s_, R_, t_ = umeyama(X, Y); return s_, R_, t_, np.linalg.norm((s_ * (R_ @ X.T)).T + t_ - Y, axis=1)
+    if S_FIX is not None:
+        R_, t_ = rigid(X * S_FIX, Y); s_ = S_FIX
+    else:
+        s_, R_, t_ = umeyama(X, Y)
+    return s_, R_, t_, np.linalg.norm((s_ * (R_ @ X.T)).T + t_ - Y, axis=1)
 def ransac_sim3(X, Y, th=0.5, iters=300, seed=0):
     """map 프레임 일부가 잘못 등록(드리프트·오병합)돼도 다수가 맞는 sim3 — 3점 표본 → 인라이어 → 재적합"""
     rng = np.random.default_rng(seed); n = len(X); best_in = None
@@ -141,7 +178,7 @@ for mirror in (False, True):
     s, R, t, rms, inl = ransac_sim3(src @ M.T, dst)
     if best is None or (inl, -rms) > (best[6], -best[0]): best = (rms, mirror, M, s, R, t, inl)
 rms, mirror, M, S3, R3, T3, INL = best; s = S3
-log("sim3 정렬(map %d프레임, RANSAC 0.5m): 인라이어 %.2f · 인라이어 rms %.3fm · 스케일 %.3f · 미러 %s" % (len(src), INL, rms, s, mirror))
+log("%s 정렬(map %d프레임, RANSAC 0.5m): 인라이어 %.2f · 인라이어 rms %.3fm · 스케일 %.3f · 미러 %s" % ("rigid(척도 DA)" if S_FIX else "sim3", len(src), INL, rms, s, mirror))
 
 def to_ours(c, v):
     c2 = S3 * (R3 @ (M @ c)) + T3; v2 = R3 @ (M @ v)
@@ -202,5 +239,5 @@ with open(os.path.join(work, "map_pose_%s.jsonl" % hn), "w") as fo:
 json.dump(dict(house=hn, map_reg=(rm.num_reg_images() if rm is not None else 0), n_map=len(maps), map_joint=(not map_ok), live_reg=len(rows), live_reg_raw=n_before, n_live=len(lives), cov=cov, vmax=a.vmax, strict=a.strict,
                ate_med=float(np.median(ate)) if len(ate) else None, ate_lt05=float((ate < 0.5).mean()) if len(ate) else None,
                yaw_med=float(np.median(yerr)) if len(yerr) else None, room_hit=(hit / nhit) if nhit else None, n_room=nhit,
-               sim3_rms=float(rms), sim3_inl=INL, scale=float(s), mirror=bool(mirror), sec=time.time() - T0), open(os.path.join(work, "summary_%s.json" % hn), "w"), indent=1, default=float)
+               sim3_rms=float(rms), sim3_inl=INL, scale=float(s), scale_src=a.scale, da_k=a.da_k, mirror=bool(mirror), sec=time.time() - T0), open(os.path.join(work, "summary_%s.json" % hn), "w"), indent=1, default=float)
 log("→ %s (%d프레임)" % (out, len(rows)))
