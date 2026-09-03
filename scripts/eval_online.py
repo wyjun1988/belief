@@ -14,6 +14,8 @@ import json, glob, os
 import numpy as np
 import re as _re
 _rtn = lambda x: _re.sub(r"\.\d+$", "", x or "")   # 방유형 정규화 (HSSD region)
+def _prior(tp, rtype):   # 방 그룹("kitchen+living room")은 부분 유형 중 최대
+    return max(PR.get(tp, {}).get(_rtn(part), .25) for part in (rtype or "").split("+"))
 from collections import Counter
 
 ROOT = os.environ.get("THOR_ROOT", "data/thor4")
@@ -72,13 +74,14 @@ if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
 # ── 재료 사다리 (AUDIT_20260902 조치1): 어떤 GT 가 들어갔는지 사람이 아니라 코드가 찍는다 ──
 _LG = os.environ.get("LOC_GEO", "0") == "1"
 _ANCH_EX = float(os.environ.get("ANCH_EX", "0.80")); _ANCH_TY = float(os.environ.get("ANCH_TY", "0.10")); _ANCH_DP = int(os.environ.get("ANCH_DP", "2"))
-LADDER = "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT · 사전확률:%s · c0창:%s%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
+LADDER = "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스턴스선택·부재기하) · 카메라방:GT%s · 사전확률:%s · c0창:%s%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
     "GT" if SG_INIT == "gt" else "검출",
     "SfM" if POSE is not None else "GT(apos)",
     # POSE_JSONL 이 있으면 live 의 apos·yaw 가 SfM 값으로 덮인다 → LOC_YAW_GT=1 경로가 읽는 m["yaw"] 는 SfM yaw 다
     (("SfM" if os.environ.get("LOC_YAW_GT") == "1" else "투표") if POSE is not None else ("GT" if os.environ.get("LOC_YAW_GT") == "1" else "투표")) if _LG else "융합(비기하)",
     ("DA" if os.environ.get("GEO_DEPTH") else "GT") if _LG else "—",
     "실측" if VSC is not None else "모의(GT vis)",
+    "(열린공간 병합)" if os.environ.get("ROOM_GROUPS") == "1" else "",
     os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), "(광선만)" if os.environ.get("C0_RAYPICK") == "1" else "",
     ("(≤%sm)" % os.environ.get("C0_MAXD")) if os.environ.get("C0_MAXD") else "", "(방위다양)" if os.environ.get("C0_DIVERSE") == "1" else "", _ANCH_EX, _ANCH_TY, _ANCH_DP,
     (" · yaw:이동방향우선(정지시 투표)" if os.environ.get("YAW_ORDER") == "motion_first" else " · yaw대체:이동방향" if os.environ.get("YAW_FALLBACK") == "motion" else ""),
@@ -109,6 +112,25 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             if _pv: _m["apos"], _m["yaw"] = _pv[0], _pv[1]; _nrep += 1
             else: _m["apos"] = None                   # 포즈 없는 프레임은 기하에서 기권
         print("  %s SfM 포즈 대체 %d/%d" % (hn, _nrep, len(live)), flush=True)
+    _rgf = os.path.join(os.path.realpath(hd), "room_groups.json")
+    _gm = json.load(open(_rgf))["groups"] if (os.environ.get("ROOM_GROUPS") == "1" and os.path.exists(_rgf)) else {}
+    _grp = lambda r: _gm.get(r, r) if r else r
+    if _gm:   # 열린 공간은 한 방 (사용자 결정 2026-09-04): 답·GT·사전확률·평면도를 전부 그룹 단위로
+        _rt2 = {}
+        for r, tp in g["room_types"].items(): _rt2.setdefault(_grp(r), set()).add(tp)
+        g["room_types"] = {gr: "+".join(sorted(tps)) for gr, tps in _rt2.items()}
+        for v in sm["static"].values(): v["room"] = _grp(v.get("room"))
+        for v in g["gt0"].values(): v["room"] = _grp(v.get("room"))
+        for mv_ in g["moves"]:
+            for k_ in ("to", "from"):
+                if k_ in mv_: mv_[k_] = _grp(mv_[k_])
+        for m_ in live.values(): m_["room"] = _grp(m_.get("room"))
+        sm["doors"] = [[_grp(a_), _grp(b_)] for a_, b_ in sm.get("doors", []) if _grp(a_) != _grp(b_)]
+        if sm.get("polys"):
+            _pg = {}
+            for r, pl in sm["polys"].items(): _pg.setdefault(_grp(r), []).append(pl)
+            sm["polys"] = _pg                                   # 그룹: [폴리곤, ...] (다각형 여러 개)
+        print("  %s 방 그룹: %d → %d" % (hn, len(_gm), len(set(_gm.values()))), flush=True)
     rt = g["room_types"]; rids = sorted(rt)
     nrt = Counter(rt[r] for r in rids)
     rtypes = {}
@@ -143,6 +165,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     if os.path.exists(imf):
         best = {}
         for i2 in json.load(open(imf)):
+            i2["room"] = _grp(i2.get("room"))
             if i2["w"] > best.get(i2["type"], (0,))[0]:
                 best[i2["type"]] = (i2["w"], i2["room"])
             if i2.get("pos"):        # 인스턴스판: 타입당 여러 (방, 좌표)
@@ -211,15 +234,17 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         # ── 투영 국소화 (§107 투표 yaw · §110 삼각측량+depth 후퇴) ──
         def _room_pt(pt):
             polys = _geo[0]
+            def _pls(pl): return pl if (pl and isinstance(pl[0][0], (list, tuple))) else [pl]
             for r in polys:
-                pl = polys[r]; x, z = pt; n2 = len(pl); c2 = False
-                for j2 in range(n2):
-                    x1, z1 = pl[j2]; x2, z2 = pl[(j2 + 1) % n2]
-                    if (z1 > z) != (z2 > z) and x < (x2-x1)*(z-z1)/(z2-z1+1e-12)+x1:
-                        c2 = not c2
-                if c2: return r
+                for pl in _pls(polys[r]):
+                    x, z = pt; n2 = len(pl); c2 = False
+                    for j2 in range(n2):
+                        x1, z1 = pl[j2]; x2, z2 = pl[(j2 + 1) % n2]
+                        if (z1 > z) != (z2 > z) and x < (x2-x1)*(z-z1)/(z2-z1+1e-12)+x1:
+                            c2 = not c2
+                    if c2: return r
             return min(polys, key=lambda r: min((pt[0]-v[0])**2 + (pt[1]-v[1])**2
-                                                for v in polys[r]))
+                                                for pl in _pls(polys[r]) for v in pl))
         def _geo_ray(i):
             polys, stp, byt = _geo
             m = live[ts[i]]; ap = m.get("apos")
@@ -335,7 +360,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         _top = np.where(TS >= np.quantile(TS, 0.90))[0]
         base_new = arm[int(max(_top, key=lambda i2: ts[i2]))] if len(_top) else None
         # 기준선 '사전확률만': 그 타입이 있을 법한 방 (c2 와 같은 식, 기록 제외 없음)
-        base_pri = max(((PR.get(v0["type"], {}).get(_rtn(rt[r]), .25)/max(nrt[rt[r]],1), r)
+        base_pri = max(((_prior(v0["type"], rt[r])/max(nrt[rt[r]],1), r)
                         for r in rids))[1]
         # 질의용: 최신 검증 3장의 방 질량
         alt = None
@@ -427,7 +452,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 if os.environ.get("C0_DIAG") == "1" and "_dg" in dir():
                     _dg.update(alt=alt, geo=_geo is not None); print("C0_DIAG " + json.dumps(_dg, ensure_ascii=False), flush=True)
         if record is None:
-            record = max(((PR.get(v0["type"], {}).get(_rtn(rt[r]), .25)/max(nrt[rt[r]],1), r)
+            record = max(((_prior(v0["type"], rt[r])/max(nrt[rt[r]],1), r)
                           for r in rids))[1]
         # 질의: 기록 방 부재 게이팅 (온라인 앞/뒤 1/3 + 앵커 게이팅)
         inr = np.where(arm == record)[0]
@@ -497,13 +522,13 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             ans = alt
             res["case"]["c0"] += 1
         elif fired:
-            ans = max(((PR.get(v0["type"], {}).get(_rtn(rt[r]), .25)/max(nrt[rt[r]],1), r)
+            ans = max(((_prior(v0["type"], rt[r])/max(nrt[rt[r]],1), r)
                        for r in rids if r != record))[1]
             res["case"]["c2"] += 1
         else:
             ans = record
             res["case"]["rec"] += 1
-        _bel2 = max(((PR.get(v0["type"], {}).get(_rtn(rt[r]), .25)/max(nrt[rt[r]],1), r)
+        _bel2 = max(((_prior(v0["type"], rt[r])/max(nrt[rt[r]],1), r)
                      for r in rids if r != (alt if alt else record)))[1]
         _ans2 = (record if alt is not None else record if fired else _bel2)
         res.setdefault("sys2", []).append(tgt in (ans, _ans2))
