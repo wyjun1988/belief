@@ -72,7 +72,7 @@ LADDER = "초기맵:%s · 포즈:%s · 거리:%s · 검증:%s · vis:GT(인스�
     "실측" if VSC is not None else "모의(GT vis)",
     os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), "(광선만)" if os.environ.get("C0_RAYPICK") == "1" else "",
     ("(≤%sm)" % os.environ.get("C0_MAXD")) if os.environ.get("C0_MAXD") else "", _ANCH_EX, _ANCH_TY, _ANCH_DP,
-    " · yaw대체:이동방향" if os.environ.get("YAW_FALLBACK") == "motion" else "",
+    (" · yaw:이동방향우선(정지시 투표)" if os.environ.get("YAW_ORDER") == "motion_first" else " · yaw대체:이동방향" if os.environ.get("YAW_FALLBACK") == "motion" else ""),
     ("기하(%s)" % os.environ.get("ABS_MODE", "spot")) if ABS_GEO else "점수마진")
 _NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT"))
 print("재료 사다리 → " + LADDER, flush=True)
@@ -215,6 +215,14 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 # 사다리 ①: 포즈 = 시뮬 제공물. ⚠️ 이 분기는 2026-09-02 밤까지 **없었다** — "포즈:GT" 로
                 # 표기된 HSSD 판 전부가 실제로는 앵커 투표(구 게이트)로 돌았다 (§129 정정).
                 return ap, float(m["yaw"]) + pb(pxof(P[i, ti]))
+            if os.environ.get("YAW_ORDER") == "motion_first":
+                # 이동 중이면 진행 방향을 yaw 로 먼저 쓴다 (v2.2 실측: 오차 중앙 0.8°·<10° 0.86 — 투표 3.4°·0.67 보다
+                # 낫다). 정지·회전 중(이동량 <0.2m)에는 앵커 투표로. 배포에선 VO 의 상대 포즈가 이 역할.
+                _t = ts[i]; _a, _b2 = live.get(int(_t) - 1), live.get(int(_t) + 1)
+                if _a and _b2 and _a.get("apos") and _b2.get("apos"):
+                    _dx, _dz = _b2["apos"][0] - _a["apos"][0], _b2["apos"][1] - _a["apos"][1]
+                    if np.hypot(_dx, _dz) >= 0.2:
+                        return ap, br(_dx, _dz) + pb(pxof(P[i, ti]))
             hyp = []
             # 앵커 **존재 게이트** (2026-09-02): exemplar 점수만으로는 보이지 않는 앵커도 통과해
             # 쓰레기 투표가 된다(오차 23~54°). exemplar ≥ ANCH_EX 이고 그 타입의 OWL 검출이
