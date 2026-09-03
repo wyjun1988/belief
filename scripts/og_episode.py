@@ -91,7 +91,13 @@ ap.add_argument("--depth-tol", type=float, default=0.6, help="SPEC 4.2 occlusion
 ap.add_argument("--min-rooms", type=int, default=4)
 ap.add_argument("--max-rooms", type=int, default=8)
 ap.add_argument("--need-types", default="kitchen,bathroom")
-ap.add_argument("--map-sites", type=int, default=2)
+ap.add_argument("--map-sites", type=int, default=3,
+                help="SPEC 3 density: sites per room, farthest-point sampled and at "
+                     "least --map-site-sep apart (>=3)")
+ap.add_argument("--map-step", type=int, default=45,
+                help="SPEC 3 density: heading interval in the mapping walk (45 => 8)")
+ap.add_argument("--map-site-sep", type=float, default=1.5,
+                help="SPEC 3 density: minimum separation between mapping sites (m)")
 ap.add_argument("--turns", type=int, default=8,
                 help="headings per live dwell station (the map walk always uses 6)")
 ap.add_argument("--diag-max", type=float, default=1.0, help="max AABB diagonal of a movable")
@@ -352,6 +358,15 @@ def top_is_flat(n):
         return False
     nrm = r.get("normal")
     return True if nrm is None else float(arr(nrm)[2]) > 0.7
+
+
+def closable(n):
+    """Does this container have an Open state we can actually set back to False?"""
+    o = objs[n]["obj"]
+    try:
+        return bool(Open in o.states and getattr(o, "n_joints", 0))
+    except Exception:
+        return False
 
 
 def build_surfaces():
@@ -620,11 +635,44 @@ def capture(xy, yaw, kind, idx):
 mapping, seen, mi = [], set(), 0
 map_route_len = 0.0
 cursor = ng.to_world(ng.room_point(rooms[0], rng))
+
+
+def map_sites(room):
+    """SPEC 3 density: --map-sites viewpoints per room, farthest-point sampled from 40
+    candidates and kept >= --map-site-sep apart.
+
+    A single site per room gives no overlap between views, and the initial map then has
+    nothing to cross-check a detection against -- that was where most of the case1
+    errors came from (small objects missed, false positives projected in).  The initial
+    registration is one-off, so it can afford to be heavy.
+    """
+    cands = []
+    for _ in range(40):
+        c = ng.room_point(room, rng, centrality=0.0)
+        if c is not None and c not in cands:
+            cands.append(c)
+    if not cands:
+        return []
+    mid = ng.room_point(room, rng, centrality=0.9)
+    picked = [mid if mid is not None else cands[0]]
+    while len(picked) < min(max(1, a.map_sites), len(cands)):
+        best, bd = None, -1.0
+        for c in cands:
+            if c in picked:
+                continue
+            d = min(float(np.linalg.norm(ng.to_world(c) - ng.to_world(q))) for q in picked)
+            if d > bd:
+                best, bd = c, d
+        if best is None:
+            break
+        if bd < a.map_site_sep and len(picked) >= 1 and bd < 1e-6:
+            break                       # room too small to separate any further
+        picked.append(best)
+    return picked
+
+
 for r in rooms:
-    for _ in range(max(1, a.map_sites)):
-        cell = ng.room_point(r, rng)
-        if cell is None:
-            continue
+    for cell in map_sites(r):
         p = ng.to_world(cell)
         leg = ng.route(cursor, p, step=a.step)
         if leg is None:
@@ -633,7 +681,7 @@ for r in rooms:
         if len(leg) > 1:
             map_route_len += float(np.sum(np.linalg.norm(np.diff(leg, axis=0), axis=1)))
         cursor = p
-        for yaw in range(0, 360, 60):      # SPEC 3: six headings, exactly
+        for yaw in range(0, 360, max(5, a.map_step)):   # SPEC 3: 45 deg => 8 headings
             rec = capture(p, yaw, "map", mi)
             mapping.append(dict(room=r, yaw=rec["yaw"], apos=rec["apos"], box=rec["box"],
                                 ctr=rec["ctr"], dist=rec["dist"]))
@@ -699,10 +747,13 @@ for _ in range(a.case3 + a.spare if a.case3 else 0):
     cand = [(r, c) for r in rooms if r != src for c in containers.get(r, [])
             if np.all((objs[c]["hi"] - objs[c]["lo"]) > ext + 0.06)]
     rng.shuffle(cand)
+    # A container that cannot be shut leaves the object visible and the move is then
+    # rejected by hidden_everywhere, so try the closable ones first.
+    cand.sort(key=lambda rc: 0 if closable(rc[1]) else 1)
     if cand:
         plan.append(dict(case="case3", kind="storage", oid=n, frm=src, dest=cand[0][0],
                          into=cand[0][1],
-                         alts=[dict(dest=r, into=c) for r, c in cand[:8]]))
+                         alts=[dict(dest=r, into=c) for r, c in cand[:14]]))
     else:
         r = far_room(src)
         if r:
@@ -720,7 +771,7 @@ for _ in range(a.case2 + a.spare if a.case2 else 0):
     if not cand:
         continue
     plan.append(dict(case="case2", kind="ontop", oid=n, frm=src, dest=cand[0][0],
-                     onto=cand[0][1], alts=[dict(dest=r, onto=o) for r, o in cand[:8]]))
+                     onto=cand[0][1], alts=[dict(dest=r, onto=o) for r, o in cand[:14]]))
 for _ in range(a.case4):
     n = take()
     if n is None:
@@ -1034,7 +1085,7 @@ def hidden_everywhere(n):
 def apply_move(e, t):
     """Try each alternate target until one passes sampling and the geometry gate."""
     tried = []
-    for alt in (e.get("alts") or [{}]):
+    for alt in (e.get("alts") or [{}])[:14]:
         cand = dict(e)
         cand.update(alt)
         if "onto" in alt:
@@ -1042,7 +1093,7 @@ def apply_move(e, t):
         if _apply_one(cand, t, tried):
             return True
     event_status.append(dict(t=t, oid=e["oid"], case=e["case"], kind=e["kind"],
-                             applied=False, attempts=tried[:8]))
+                             applied=False, attempts=tried[:14]))
     return False
 
 
@@ -1407,6 +1458,14 @@ audit = dict(house=a.house, scene=a.scene, frames=len(live),
              case3_absent_belief=ok3, case4_outside=ok4,
              case3_storage=sum(1 for m in by_case["case3"] if m["kind"] == "storage"),
              mapped_objects=len(seen), statics=len(statics), movable_funnel=funnel,
+             map_density=dict(
+                 sites_per_room={r: sum(1 for m in mapping if m["room"] == r)
+                                 // max(1, 360 // max(5, a.map_step)) for r in rooms},
+                 headings=360 // max(5, a.map_step), map_step_deg=a.map_step,
+                 frames_per_room={r: sum(1 for m in mapping if m["room"] == r)
+                                  for r in rooms},
+                 min_frames_per_room=min([sum(1 for m in mapping if m["room"] == r)
+                                          for r in rooms] or [0])),
              props=prop_report, nan_dropped=sorted(set(nan_dropped)),
              rooms_in_scope=rooms, rooms_reachable=reach,
              case4_in_scope=False, outdoor_rooms_dropped=dropped_outdoor,
@@ -1537,6 +1596,10 @@ if not a.smoke:
         fails.append("case3 %d < %d" % (ok3, a.case3))
     if ok4 < a.case4:
         fails.append("case4 %d < %d" % (ok4, a.case4))
+    _mpr = [sum(1 for m in mapping if m["room"] == r) for r in rooms]
+    if _mpr and min(_mpr) < 24:
+        fails.append("mapping walk density: %d frames in the thinnest room "
+                     "(SPEC 3 wants >=24 = 3 sites x 8 headings)" % min(_mpr))
     if yaw_audit["median_abs_error_deg"] is None or yaw_audit["median_abs_error_deg"] > 0.5:
         fails.append("yaw median abs error %s deg" % yaw_audit["median_abs_error_deg"])
     if route_fail:
