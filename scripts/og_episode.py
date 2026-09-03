@@ -67,9 +67,25 @@ ap.add_argument("--case4", type=int, default=0,
 ap.add_argument("--props", type=int, default=24, help="movable props to inject")
 ap.add_argument("--eye", type=float, default=1.5)
 ap.add_argument("--pitch", type=float, default=0.0)
-ap.add_argument("--step", type=float, default=0.25, help="metres walked per live frame")
-ap.add_argument("--max-turn-deg", type=float, default=45.0,
-                help="cap on heading change between consecutive live frames")
+ap.add_argument("--step", "--pace", dest="step", type=float, default=0.25,
+                help="SPEC 4-4: metres per frame while walking (1 fps => m/s)")
+ap.add_argument("--max-turn-deg", "--max-turn", dest="max_turn_deg", type=float,
+                default=25.0, help="SPEC 4-4: cap on heading change per frame")
+ap.add_argument("--turn", type=float, default=0.35,
+                help="SPEC 4-4: heading smoothing -- fraction of the remaining angle "
+                     "covered each frame (0.3-0.4)")
+ap.add_argument("--dwell", type=float, default=30.0,
+                help="SPEC 4-4: mean frames spent standing at a destination "
+                     "(exponential, scaled by the room's dwell weight)")
+ap.add_argument("--filler-dwell-mult", type=float, default=2.2,
+                help="filler stays are longer than scripted ones: fewer, longer "
+                     "destinations keeps SPEC 4-4.3 room switches down")
+ap.add_argument("--scan", type=float, default=35.0,
+                help="SPEC 4-4: head-scan amplitude while dwelling (deg)")
+ap.add_argument("--max-switch-per-1200", type=float, default=30.0,
+                help="SPEC 4-4.3: dwell-destination changes allowed per 1200 frames. "
+                     "Do NOT hit this by lowering --evidence (that shrinks what case2 "
+                     "measures) -- use --filler-dwell-mult")
 ap.add_argument("--vis-range", type=float, default=20.0)
 ap.add_argument("--depth-tol", type=float, default=0.6, help="SPEC 4.2 occlusion tolerance")
 ap.add_argument("--min-rooms", type=int, default=4)
@@ -136,6 +152,13 @@ CONTAINER_HINTS = ("cabinet", "drawer", "dresser", "wardrobe", "cupboard", "clos
 # defaults to 0 and the audit records why.
 EXCLUDE_ROOM_TYPES = ("garage", "garden", "porch", "yard", "lawn", "balcony", "patio",
                       "outdoor", "driveway", "deck", "terrace")
+# SPEC 4-4: dwell is proportional to how much a person actually stays in that kind of
+# room.  Corridors and entryways are transit, not destinations.
+DWELL_W = {"living room": 1.0, "bedroom": 0.9, "kitchen": 0.7, "dining room": 0.7,
+           "childs room": 0.8, "private office": 0.8, "home office": 0.8,
+           "bathroom": 0.35, "utility room": 0.3, "storage room": 0.25,
+           "pantry room": 0.25, "closet": 0.2, "corridor": 0.12, "entryway": 0.15,
+           "staircase": 0.1, "sauna": 0.4, "empty room": 0.3}
 NOT_A_SURFACE = ("switch", "socket", "outlet", "picture", "mirror", "painting", "poster",
                  "clock", "curtain", "towel", "vent", "radiator", "sconce", "railing",
                  "faucet", "showerhead", "handle", "knob", "thermostat")
@@ -306,11 +329,17 @@ if not objs:
 def refresh(n):
     v = objs[n]
     box = aabb_of(v["obj"])
-    if box is not None:
+    if box is not None and np.isfinite(box[0]).all() and np.isfinite(box[1]).all():
         v["lo"], v["hi"] = box
         v["ctr"] = (box[0] + box[1]) / 2
         v["room"] = room_at(v["ctr"])
     return v
+
+
+def pose_finite(n):
+    v = objs[n]
+    return bool(np.isfinite(v["ctr"]).all() and np.isfinite(v["lo"]).all()
+                and np.isfinite(v["hi"]).all())
 
 
 def top_is_flat(n):
@@ -448,6 +477,32 @@ if a.props and rooms_with_surface:
             for _ in range(20):
                 og.sim.step_physics()
             index(o, injected=True)
+            before = objs[str(o.name)]["ctr"].copy()
+            for _ in range(60):            # settle: interpenetration shows up here
+                og.sim.step_physics()
+            refresh(str(o.name))
+            drift = float(np.linalg.norm(objs[str(o.name)]["ctr"] - before))
+            if not pose_finite(str(o.name)) or drift > 0.25:
+                prop_report.setdefault("resettled", 0)
+                prop_report["resettled"] += 1
+                ok2 = False
+                for tname in targets[:5]:
+                    try:
+                        if o.states[OnTop].set_value(objs[tname]["obj"], True,
+                                                     use_trav_map=False):
+                            ok2 = True
+                            break
+                    except Exception:
+                        continue
+                for _ in range(60):
+                    og.sim.step_physics()
+                refresh(str(o.name))
+                if not ok2 or not pose_finite(str(o.name)):
+                    prop_report["failed"].append(
+                        dict(category=str(o.category), stage="unstable",
+                             drift=round(drift, 3)))
+                    objs.pop(str(o.name), None)
+                    continue
             prop_report["placed"] += 1
         elif prop_pose_ok(o):
             # Left where it was staged, resting on the floor.  That is a legitimate,
@@ -499,6 +554,9 @@ def visible(eye, name):
 
 
 # ---------------------------------------------------------------- capture
+nan_dropped = []
+
+
 def capture(xy, yaw, kind, idx):
     eye = np.array([float(xy[0]), float(xy[1]), a.eye])
     cam.set_position_orientation(position=[float(v) for v in eye],
@@ -511,8 +569,13 @@ def capture(xy, yaw, kind, idx):
     fwd, right, up = cam_axes(yaw, a.pitch)
 
     vis, ctr, dist, box, occl = [], {}, {}, {}, {}
-    for n in live_objs:
+    for n in list(live_objs):
         v = objs[n]
+        if not (np.isfinite(v["ctr"]).all() and np.isfinite(v["lo"]).all()
+                and np.isfinite(v["hi"]).all()):
+            live_objs.remove(n)                 # physics blew this one up; drop it
+            nan_dropped.append(n)
+            continue
         d3 = v["ctr"] - eye
         zc = float(d3 @ fwd)
         if zc < 0.25 or zc > a.vis_range:
@@ -713,50 +776,50 @@ def walk_to(target_xy):
     for k in range(len(leg)):
         nxt = leg[min(k + 1, len(leg) - 1)]
         d = nxt - leg[k]
-        yaw = (math.degrees(math.atan2(d[1], d[0])) if float(np.linalg.norm(d)) > 1e-6
-               else (program[-1]["yaw"] if program else 0.0))
-        program.append(dict(p=np.asarray(leg[k], float), yaw=yaw, event=None, tag="walk"))
+        ty = (math.degrees(math.atan2(d[1], d[0])) if float(np.linalg.norm(d)) > 1e-6
+              else (program[-1]["tyaw"] if program else 0.0))
+        program.append(dict(p=np.asarray(leg[k], float), tyaw=ty, event=None, tag="walk"))
     cursor_xy = np.asarray(leg[-1], float)
     return True
 
 
-def scan_here(turns=None, event=None, look_at=None, tag="scan", sweep=None):
-    """Sweep @sweep degrees around the arrival heading in @turns steps."""
-    turns = a.turns if turns is None else turns
-    sweep = a.scan_deg if sweep is None else sweep
-    start = float(program[-1]["yaw"]) if program else 0.0
+def dwell_here(event=None, look_at=None, tag="dwell", frames=None, room=None,
+               mult=1.0):
+    """SPEC 4-4.1: stand still for an exponentially distributed number of frames scaled
+    by the room's dwell weight, sweeping the head +-scan degrees.  Frames carry a
+    *target* heading; follow_yaw turns it into a smoothed trajectory."""
+    w = DWELL_W.get(rtype.get(room, ""), 0.4) if room else 0.4
+    n = (frames if frames is not None
+         else max(4, int(rng.exponential(a.dwell * mult * (0.3 + w)))))
+    base = float(program[-1]["tyaw"]) if program else 0.0
     if look_at is not None:
         d = np.asarray(look_at, float)[:2] - cursor_xy
-        start = math.degrees(math.atan2(d[1], d[0]))
-    n = max(1, int(round(turns * sweep / 360.0)))
-    if n == 1:
-        sweep = 0.0                      # a single-frame station just holds the heading
-    step = 0.0 if n == 1 else sweep / n
-    sign = 1.0 if float(rng.random()) < 0.5 else -1.0
+        base = math.degrees(math.atan2(d[1], d[0]))
     for k in range(n):
-        program.append(dict(p=cursor_xy.copy(), yaw=start + sign * step * k,
+        program.append(dict(p=cursor_xy.copy(),
+                            tyaw=base + a.scan * math.sin(2 * math.pi * k / max(n, 1)),
                             event=event if k == 0 else None, tag=tag))
+    return n
 
 
 def visit(room, turns=None, event=None, look_at=None, tag="visit", detour=True,
-          sweep=None):
+          sweep=None, frames=None):
     cell = ng.room_point(room, rng)
     if cell is None:
         return False
     if detour and a.detour > 0 and float(rng.random()) < a.detour:
-        # An extra waypoint inside the target room lengthens the walk without adding
-        # another stationary dwell, which is what pushes the moving-frame share up.
         via = ng.room_point(room, rng, centrality=0.0)
         if via is not None:
             walk_to(ng.to_world(via))
     if not walk_to(ng.to_world(cell)):
         return False
-    scan_here(turns=turns, event=event, look_at=look_at, tag=tag, sweep=sweep)
+    dwell_here(event=event, look_at=look_at, tag=tag, frames=frames, room=room)
     return True
 
 
-def approach(target_xy, target_z=None, hold=5, tag="approach", radii=(1.3, 1.6, 1.9)):
-    """Stand 1.3-1.9 m from @target_xy with line of sight and face it for @hold frames."""
+def approach(target_xy, target_z=None, hold=8, tag="approach", radii=(1.3, 1.6, 1.9)):
+    """Stand 1.3-1.9 m from @target_xy with line of sight and face it for @hold frames.
+    Fallback for a case2 object with no usable --evidence viewpoints."""
     tgt = np.asarray(target_xy, float)[:2]
     aim = np.array([tgt[0], tgt[1], float(target_z) if target_z is not None
                     else float(ng.z0) + 0.8])
@@ -770,41 +833,33 @@ def approach(target_xy, target_z=None, hold=5, tag="approach", radii=(1.3, 1.6, 
                 continue
             spot = ng.to_world(cell)
             d2 = float(np.linalg.norm(spot - tgt))
-            if not (0.7 <= d2 <= 2.0):
+            if not (0.7 <= d2 <= 1.8):
                 continue
             eye = np.array([spot[0], spot[1], a.eye])
             if not ray_sees(eye, aim, "__none__") and float(np.linalg.norm(aim - eye)) > 0.3:
-                # ray_sees with a bogus name reports False whenever something blocks
-                # the line, which is exactly the test we want here.
                 continue
             if not walk_to(spot):
                 continue
-            d = aim - eye
-            base = math.degrees(math.atan2(d[1], d[0]))
-            for k in range(max(1, hold)):
-                program.append(dict(p=cursor_xy.copy(),
-                                    yaw=base + (k - (hold - 1) / 2.0) * 8.0,
-                                    event=None, tag=tag))
+            dwell_here(look_at=aim, tag=tag, frames=max(4, hold))
             return True
     return False
 
 
-
 for r in rooms:
-    if not visit(r, turns=6, tag="prelude"):
+    if not visit(r, tag="prelude"):
         raise SystemExit("prelude route to %s failed -- navmesh scope is wrong" % r)
 prelude_end = len(program)
 
 never_revisit = set()
 for e in plan:
     if e["case"] == "case2":
-        visit(e["dest"], turns=1, event=e, tag="case2-move")
+        visit(e["dest"], event=e, tag="case2-move", frames=6)
     elif e["case"] == "case3":
-        visit(e["frm"], event=e, tag="case3-move")
+        visit(e["frm"], event=e, tag="case3-move", frames=8)
         if e["kind"] == "far_room":
             never_revisit.add(e["dest"])
     else:
-        visit(e["frm"], event=e, tag="case4-move")
+        visit(e["frm"], event=e, tag="case4-move", frames=8)
         never_revisit.add(e["dest"])
 
 
@@ -846,36 +901,19 @@ def sees_any(xy, names):
     return any(visible(eye, n) for n in names if n in objs)
 
 
-def smooth_program(prog, cap, step, seed=None):
-    """Make the programme satisfy both continuity gates.
-
-    Inserts in-place turn frames where the heading would jump more than @cap, and
-    interpolated walk frames where the position would jump more than @step.  @seed is
-    the last frame already rendered, so phase seams are covered too.
+def follow_yaw(prog, seed_yaw=None):
+    """SPEC 4-4.2: heading is a smoothed follower of the per-frame target, not an
+    absolute value -- each frame closes --turn of the remaining angle, capped at
+    --max-turn-deg.  That caps the turn rate by construction (no post-hoc insertion)
+    and keeps phase seams continuous through @seed_yaw.
     """
-    if not prog:
-        return prog
-    out = [dict(p=np.asarray(seed["p"], float), yaw=float(seed["yaw"]),
-                event=None, tag="seed")] if seed is not None else [prog[0]]
-    rest = prog if seed is not None else prog[1:]
-    for s2 in rest:
-        prev = out[-1]
-        p0 = np.asarray(prev["p"], float)
-        p1 = np.asarray(s2["p"], float)
-        gap = float(np.linalg.norm(p1 - p0))
-        y0, y1 = float(prev["yaw"]), float(s2["yaw"])
-        dy = ((y1 - y0 + 180.0) % 360.0) - 180.0
-        # One shared subdivision count, so position and heading advance together.
-        # The tolerance matters: walk_to already densifies to step*1.05, so testing
-        # against step exactly made ceil(0.2625/0.25)=2 and inserted a frame between
-        # every single walk frame (phase A+B grew 1818 -> 2343 and tripped the budget).
-        n = max(int(math.ceil(gap / (step * 1.15))) if step > 0 else 1,
-                int(math.ceil(abs(dy) / cap)) if cap > 0 else 1)
-        for k in range(1, n):
-            out.append(dict(p=p0 + (p1 - p0) * k / n, yaw=y0 + dy * k / n,
-                            event=None, tag="walk" if gap > 1e-6 else "turn"))
-        out.append(s2)
-    return out[1:] if seed is not None else out
+    yaw = float(seed_yaw) if seed_yaw is not None else (
+        float(prog[0]["tyaw"]) if prog else 0.0)
+    for f in prog:
+        dy = ((float(f["tyaw"]) - yaw + 180.0) % 360.0) - 180.0
+        yaw += float(np.clip(dy * a.turn, -a.max_turn_deg, a.max_turn_deg))
+        f["yaw"] = yaw
+    return prog
 
 
 def widen_budget(need, what):
@@ -897,7 +935,7 @@ def widen_budget(need, what):
     a.frames = grown
 
 
-phase_a = smooth_program(program, a.max_turn_deg, a.step)
+phase_a = follow_yaw(program)
 program = []
 widen_budget(len(phase_a), "prelude+moves")
 allowed = [r for r in rooms if r not in never_revisit] or rooms
@@ -1065,6 +1103,13 @@ def _apply_one(e, t, tried):
         tried.append(dict(target=target, reason=err or "predicate sampling failed"))
         return False
     v = refresh(n)
+    if not pose_finite(n):
+        # SPEC 4-4.5: physics diverged on the moved object -- roll back and do not
+        # record it, rather than leaving a move whose target has no valid pose.
+        og.sim.load_state(st, serialized=False)
+        refresh(n)
+        tried.append(dict(target=target, reason="non-finite pose after placement"))
+        return False
     actual = v["room"]
     sup = True if e["kind"] == "storage" else supported(n)
     wit_file, wit_ctr, hidden = None, None, None
@@ -1137,12 +1182,12 @@ hidden_oids = [m["oid"] for m in moves if m["case"] in ("case3", "case4")]
 low_dwell = sorted(rooms, key=lambda r: len(ng.room_cells(r)))
 for m in moves:
     if m["case"] != "case2":
-        visit(m["frm"], turns=4, tag="case3-revisit")
+        visit(m["frm"], tag="case3-revisit")
         continue
     evs = evidence_goals(m["oid"], EV_K, EV_D) if EV_K else []
     if not evs:
         # fall back to a plain room visit plus the closest viewpoint we can find
-        visit(m["to"], turns=4, tag="case2-revisit")
+        visit(m["to"], tag="case2-revisit")
         v = refresh(m["oid"])
         if not approach(v["ctr"][:2], target_z=float(v["ctr"][2]), hold=8,
                         tag="case2-approach"):
@@ -1153,19 +1198,13 @@ for m in moves:
     for j, (far, near, tgt) in enumerate(evs):
         walk_to(far)
         walk_to(near)                     # travel direction == line of sight
-        d = tgt - np.array([cursor_xy[0], cursor_xy[1], a.eye])
-        base = math.degrees(math.atan2(d[1], d[0]))
-        for k in range(4):
-            program.append(dict(p=cursor_xy.copy(), yaw=base + (k - 1.5) * 8.0,
-                                event=None, tag="case2-evidence"))
+        dwell_here(look_at=tgt, tag="case2-evidence", frames=10)
         if j < len(evs) - 1:
             # another room in between, so the next one counts as a separate visit
             other = next((r for r in low_dwell if r != m["to"]), m["to"])
-            visit(other, turns=3, tag="case2-between")
+            visit(other, tag="case2-between")
     m["evidence_visits"] = len(evs)
-phase_b = smooth_program(program, a.max_turn_deg, a.step,
-                         seed=dict(p=np.asarray(live[-1]["apos"], float),
-                                   yaw=live[-1]["yaw"]) if live else None)
+phase_b = follow_yaw(program, seed_yaw=live[-1]["yaw"] if live else None)
 program = []
 widen_budget(len(live) + len(phase_b), "prelude+moves+revisits")
 print("phase B (revisits) %d frames, approach failures %d"
@@ -1175,10 +1214,14 @@ run_steps(phase_b)
 # Phase C: fill the remaining budget with ordinary room-to-room walking, skipping any
 # room a case3/case4 object was moved into.
 guard = 0
+last_filler_room = None
 while len(live) < a.frames and guard < 400:
     guard += 1
     before = len(program)
     for r in allowed:
+        if r == last_filler_room:
+            continue                     # SPEC 4-4.3: no consecutive re-visit
+        last_filler_room = r
         # SPEC 4-2.8: re-draw a filler viewpoint that would leak line of sight to an
         # object case3 says is out of sight, instead of quietly invalidating the case.
         placed = False
@@ -1189,18 +1232,16 @@ while len(live) < a.frames and guard < 400:
             if hidden_oids and sees_any(ng.to_world(cell), hidden_oids):
                 continue
             if walk_to(ng.to_world(cell)):
-                scan_here(turns=4, tag="filler")
+                dwell_here(tag="filler", room=r, mult=a.filler_dwell_mult)
                 placed = True
             break
         if not placed:
-            visit(r, turns=4, tag="filler")
+            visit(r, tag="filler")
         if len(live) + len(program) >= a.frames:
             break
     if len(program) == before:
         raise SystemExit("programme made no progress -- no reachable filler room")
-    run_steps(smooth_program(program, a.max_turn_deg, a.step,
-                             seed=dict(p=np.asarray(live[-1]["apos"], float),
-                                       yaw=live[-1]["yaw"]) if live else None),
+    run_steps(follow_yaw(program, seed_yaw=live[-1]["yaw"] if live else None),
               limit=a.frames)
     program = []
 print("phase C done, %d live frames" % len(live), flush=True)
@@ -1285,8 +1326,12 @@ def containment(pairs):
     return round(float(np.mean([in_poly(q, room_polys[r]) for q, r in pairs])), 3)
 
 
+# SPEC 4-4.5: a NaN object is out of live_objs, so it must leave gt0 too -- otherwise
+# it stays a case1 target that was never observed and inflates the denominator.
 gt0 = {n: dict(type=objs[n]["cat"], room=objs[n]["room"], pos=pos_std(objs[n]["ctr"]),
-               injected=bool(objs[n].get("injected"))) for n in live_objs}
+               injected=bool(objs[n].get("injected")))
+       for n in live_objs if n not in set(nan_dropped)}
+statics = [n for n in statics if n in gt0]
 for m in moves:                          # gt0 is the pre-move world
     gt0[m["oid"]]["room"] = m["frm"]
     gt0[m["oid"]]["pos"] = m["from_pos"]
@@ -1334,6 +1379,25 @@ pth = np.array([f["apos"] for f in live], float)
 dpos = np.linalg.norm(np.diff(pth, axis=0), axis=1) if len(pth) > 1 else np.zeros(1)
 yy = np.array([f["yaw"] for f in live], float)
 dyaw = np.abs((np.diff(yy) + 180) % 360 - 180) if len(yy) > 1 else np.zeros(1)
+# SPEC 4-4: dwell / transition statistics
+dwell_tags = ("dwell", "prelude", "filler", "visit", "case2-revisit", "case3-revisit",
+              "case2-between", "case2-move", "case3-move", "case4-move",
+              "case2-evidence", "case2-approach", "approach")
+room_seq = [f["room"] for f in live]
+room_switches_raw = sum(1 for i in range(1, len(room_seq))
+                        if room_seq[i] != room_seq[i - 1])
+_dw_seq = [f["room"] for f in live if f["tag"] in dwell_tags]
+room_switches = sum(1 for i in range(1, len(_dw_seq)) if _dw_seq[i] != _dw_seq[i - 1])
+dwell_frac = float(np.mean([f["tag"] in dwell_tags for f in live])) if live else 0.0
+_runs, _cur = [], 0
+for f in live:
+    if f["tag"] in dwell_tags:
+        _cur += 1
+    elif _cur:
+        _runs.append(_cur); _cur = 0
+if _cur:
+    _runs.append(_cur)
+mean_dwell = float(np.mean(_runs)) if _runs else 0.0
 occl_all = [v for f in live for v in f["occl"].values()]
 audit = dict(house=a.house, scene=a.scene, frames=len(live),
              frames_requested=frames_requested, frames_budget=a.frames,
@@ -1343,7 +1407,8 @@ audit = dict(house=a.house, scene=a.scene, frames=len(live),
              case3_absent_belief=ok3, case4_outside=ok4,
              case3_storage=sum(1 for m in by_case["case3"] if m["kind"] == "storage"),
              mapped_objects=len(seen), statics=len(statics), movable_funnel=funnel,
-             props=prop_report, rooms_in_scope=rooms, rooms_reachable=reach,
+             props=prop_report, nan_dropped=sorted(set(nan_dropped)),
+             rooms_in_scope=rooms, rooms_reachable=reach,
              case4_in_scope=False, outdoor_rooms_dropped=dropped_outdoor,
              rooms_isolated=ng.isolated, navgrid=ng.summary(), doors=door_report,
              route_failures=route_fail, map_route_len_m=round(map_route_len, 1),
@@ -1355,11 +1420,25 @@ audit = dict(house=a.house, scene=a.scene, frames=len(live),
                  moves_supported=sum(1 for m in moves if m.get("supported")),
                  storage_hidden_verified=sum(1 for m in moves
                                              if m.get("hidden_verified")),
-                 geo_ok=all(m.get("supported") and m.get("witness_file")
-                            and m.get("witness_ctr") for m in moves)),
+                 geo_ok=all(m.get("supported")
+                            and ((m.get("witness_file") and m.get("witness_ctr"))
+                                 or m.get("hidden_verified"))
+                            for m in moves)),
              teleport_used=False, direct_interpolation_used=False,
              step_m=a.step, turns=a.turns, max_turn_deg=a.max_turn_deg,
+             pace=dict(step_m=a.step, turn=a.turn, dwell_mean=a.dwell, scan=a.scan,
+                       max_turn_deg=a.max_turn_deg),
              continuity=dict(moving_frame_frac=round(float(np.mean(dpos > 0.05)), 3),
+                             room_switches=room_switches,
+                             room_switches_raw=room_switches_raw,
+                             room_switches_note="room_switches counts changes of dwell "
+                                                "destination (SPEC 4-4.3); _raw counts "
+                                                "every per-frame label change, which "
+                                                "also counts rooms merely walked through",
+                             room_switches_per_1200=round(
+                                 room_switches * 1200.0 / max(len(live), 1), 1),
+                             mean_dwell_frames=round(mean_dwell, 1),
+                             dwell_frame_frac=round(dwell_frac, 3),
                              walked_m=round(float(dpos.sum()), 1),
                              pos_step_median_m=round(float(np.median(dpos)), 3),
                              pos_step_max_m=round(float(dpos.max()), 3),
@@ -1462,14 +1541,23 @@ if not a.smoke:
         fails.append("yaw median abs error %s deg" % yaw_audit["median_abs_error_deg"])
     if route_fail:
         fails.append("%d routes failed" % route_fail)
+    _bad = sorted(set(nan_dropped) & {m["oid"] for m in moves})
+    if _bad:
+        fails.append("moved objects went non-finite: %s (SPEC 4-4.5)" % _bad)
     if int((dpos > 0.5).sum()):
         fails.append("%d position jumps over 0.5 m" % int((dpos > 0.5).sum()))
-    if int((dyaw > a.max_turn_deg + 1.0).sum()):
+    if int((dyaw > a.max_turn_deg + 0.5).sum()):
         fails.append("%d frames turn more than %.0f deg (cap breached at a phase seam)"
                      % (int((dyaw > a.max_turn_deg + 1.0).sum()), a.max_turn_deg))
-    if float(np.mean(dpos > 0.05)) < 0.55:
-        fails.append("only %.0f%% of frames are walking (want >=55%%)"
+    # SPEC 4-4: the walk used to be judged the other way round (walking had to
+    # dominate).  The review video showed that reads as restless pacing; real life is
+    # mostly standing still, so the requirement is now an upper bound.
+    if float(np.mean(dpos > 0.05)) > 0.5:
+        fails.append("%.0f%% of frames are moving (SPEC 4-4 wants <=50%%)"
                      % (100 * float(np.mean(dpos > 0.05))))
+    if room_switches > a.max_switch_per_1200 * len(live) / 1200.0:
+        fails.append("%d room switches (SPEC 4-4 allows %.0f for %d frames)"
+                     % (room_switches, a.max_switch_per_1200 * len(live) / 1200.0, len(live)))
 if fails:
     raise SystemExit("GATE FAILED: " + "; ".join(fails))
 print("EPISODE_OK house=%d frames=%d" % (a.house, len(live)), flush=True)

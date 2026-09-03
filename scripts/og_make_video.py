@@ -52,8 +52,11 @@ def draw(frame, src, idx):
         d.rectangle([b[0], max(0, b[1] - 14), b[0] + 8 * len(lab), max(0, b[1] - 14) + 14],
                     fill=(0, 0, 0))
         d.text((b[0] + 2, max(0, b[1] - 13)), lab, fill=col)
-    hdr = "t=%d  %s  yaw=%.0f  vis=%d  [%s]" % (
-        frame["t"], frame["room"], frame["yaw"], len(frame["vis"]), frame.get("tag", ""))
+    # SPEC 4-4.4: the source is 1 fps, so playback speed is a multiplier -- say so on
+    # every frame, otherwise the walk reads as far faster than it is.
+    hdr = "t=%d  %s  yaw=%.0f  vis=%d  [%s]   |  1fps source @ %dfps = %dx speed" % (
+        frame["t"], frame["room"], frame["yaw"], len(frame["vis"]), frame.get("tag", ""),
+        a.fps, a.fps)
     d.rectangle([0, 0, 8 * len(hdr) + 12, 22], fill=(0, 0, 0))
     d.text((6, 5), hdr, fill=(255, 255, 0))
     m = moves.get(frame["t"])
