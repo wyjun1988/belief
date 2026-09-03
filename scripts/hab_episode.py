@@ -45,6 +45,12 @@ ap.add_argument("--remap", action="store_true",
                 help="매핑워크만 다시 돌려 기존 --out 의 map/ 과 gt.json[map] 을 교체 (live 는 그대로). "
                      "종전 매핑워크는 live 루프 뒤(이동 후 장면)에서 돌았고 좌표가 인스턴스 원점이라 "
                      "이동 물체 exemplar 가 빈자리 크롭이었다 (2026-09-02)")
+ap.add_argument("--pace", type=float, default=0.25, help="프레임당 보행 거리(m). 1fps 이면 m/s")
+ap.add_argument("--turn", type=float, default=0.5, help="회전 평활 계수(프레임당 목표각 접근 비율). 0.5→급, 0.3→완")
+ap.add_argument("--dwell", type=float, default=0.0,
+                help="목적지 도착 후 평균 체류 프레임(방 체류 가중에 비례, 지수분포). 0=종전(쉬지 않고 배회). "
+                     "사용자 지적(2026-09-03): '같은 공간을 쉬지 않고 계속 돌고 너무 빠르다'")
+ap.add_argument("--scan", type=float, default=35.0, help="체류 중 고개 스캔 진폭(°)")
 ap.add_argument("--far", type=float, default=0.5,
                 help="이동 중 '가장 먼 방'으로 보내는 비율 — 경우③ 표본 확보용")
 ap.add_argument("--w", type=int, default=768)
@@ -459,8 +465,18 @@ if args.remap:
 ri, t = 0, 0
 yaw = 0.0
 _retry = 0
+_dwell_left, _dwell_base, _just_dwelled, _dwelling = 0, 0.0, False, False
 while t < args.frames:
-    if ri + 1 >= len(route):
+    if ri + 1 >= len(route) and args.dwell > 0 and not _just_dwelled:
+        # 도착 → 체류: 방 체류 가중에 비례한 길이만큼 제자리에서 고개 스캔. 실제 생활은 대부분
+        # 머무름이다 — 쉬지 않는 배회는 재방문 패턴도 속도감도 비현실적 (2026-09-03 지적)
+        _rm = room_at(float(cur[0]), float(cur[2]))
+        _w = (MOVE or {}).get("dwell", {}).get(_rtype(_rm), 0.3) if MOVE else 0.5
+        _dwell_left = max(3, int(rng.exponential(args.dwell * (0.3 + _w))))
+        _dwell_base, _just_dwelled = yaw, True
+        route, ri = [np.array(cur, float), np.array(cur, float)], 0
+    elif ri + 1 >= len(route):
+        _just_dwelled = False
         if forced_goals or (MOVE and MOVE.get("dwell")):
             # 대본 목적지가 있으면 그 방, 아니면 방 체류 가중(③ 제외 방은 뺀다)
             r_pick = None; goal = None
@@ -506,12 +522,16 @@ while t < args.frames:
         route, ri = list(path.points), 0
     a, b = np.array(route[ri]), np.array(route[ri + 1])
     seg = np.linalg.norm(b - a)
-    steps = max(1, int(seg / 0.25))
+    _dwelling = bool(seg < 1e-6 and _dwell_left > 0)
+    steps = max(1, _dwell_left) if _dwelling else max(1, int(seg / args.pace))
     for k in range(steps):
         if t >= args.frames: break
         p = a + (b - a) * (k / steps)
-        tgt_yaw = float(np.degrees(np.arctan2(-(b[0] - a[0]), -(b[2] - a[2]))))
-        yaw += ((tgt_yaw - yaw + 180) % 360 - 180) * 0.5      # 부드러운 회전
+        if _dwelling:      # 제자리 고개 스캔 (좌→우→좌 사인)
+            tgt_yaw = _dwell_base + args.scan * float(np.sin(2 * np.pi * k / max(steps, 1)))
+        else:
+            tgt_yaw = float(np.degrees(np.arctan2(-(b[0] - a[0]), -(b[2] - a[2]))))
+        yaw += ((tgt_yaw - yaw + 180) % 360 - 180) * args.turn      # 부드러운 회전
         st = habitat_sim.AgentState(); st.position = p
         ry = np.radians(yaw)
         st.rotation = np.quaternion(np.cos(ry / 2), 0, np.sin(ry / 2), 0)
@@ -607,6 +627,7 @@ while t < args.frames:
                          yaw=round((yaw + 180.0) % 360, 1), pitch=0.0))
         t += 1
     cur = b; ri += 1
+    if _dwelling: _dwell_left = 0
 
 
 # ⚠️ 좌표 규약 정합: habitat 은 화면 오른쪽이 방위각 **감소** 방향(왼손 회전),
