@@ -94,6 +94,11 @@ ap.add_argument("--need-types", default="kitchen,bathroom")
 ap.add_argument("--map-sites", type=int, default=3,
                 help="SPEC 3 density: sites per room, farthest-point sampled and at "
                      "least --map-site-sep apart (>=3)")
+ap.add_argument("--map-travel", type=float, default=0.35,
+                help="mapping walk: capture a frame every N m while WALKING between sites, yaw = heading "
+                     "(0 = off). Rotate-in-place frames have zero parallax, so SfM/feed-forward "
+                     "reconstruction cannot triangulate them (HSSD: 4-7 of 128 map frames registered). "
+                     "SPEC 3-b. Expect 250-500 map frames per house with 0.35 m.")
 ap.add_argument("--map-step", type=int, default=45,
                 help="SPEC 3 density: heading interval in the mapping walk (45 => 8)")
 ap.add_argument("--map-site-sep", type=float, default=1.5,
@@ -671,6 +676,8 @@ def map_sites(room):
     return picked
 
 
+map_travel_frames = 0
+prev_room = None
 for r in rooms:
     for cell in map_sites(r):
         p = ng.to_world(cell)
@@ -680,7 +687,30 @@ for r in rooms:
             continue
         if len(leg) > 1:
             map_route_len += float(np.sum(np.linalg.norm(np.diff(leg, axis=0), axis=1)))
+        # SPEC 3-b: travel frames along the leg (parallax!). Heading yaw = atan2(dy, dx), the same
+        # convention the live walk uses (see the live loop). Room label: first half of the leg keeps
+        # the previous site's room, second half takes the destination room.
+        if a.map_travel > 0 and len(leg) > 1 and prev_room is not None:
+            pts = np.asarray(leg, float)[:, :2]
+            seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+            cum = np.concatenate([[0.0], np.cumsum(seg)])
+            total = float(cum[-1])
+            d = a.map_travel
+            while d < total - 0.05:
+                k = int(np.searchsorted(cum, d) - 1); k = max(0, min(k, len(seg) - 1))
+                if seg[k] > 1e-6:
+                    q = pts[k] + (pts[k + 1] - pts[k]) * ((d - cum[k]) / seg[k])
+                    dv = pts[k + 1] - pts[k]
+                    hy = math.degrees(math.atan2(float(dv[1]), float(dv[0])))
+                    rec = capture(q, hy, "map", mi)
+                    mapping.append(dict(room=(prev_room if d < 0.5 * total else r), yaw=rec["yaw"],
+                                        apos=rec["apos"], box=rec["box"], ctr=rec["ctr"],
+                                        dist=rec["dist"], travel=True))
+                    seen.update(rec["vis"])
+                    mi += 1; map_travel_frames += 1
+                d += a.map_travel
         cursor = p
+        prev_room = r
         for yaw in range(0, 360, max(5, a.map_step)):   # SPEC 3: 45 deg => 8 headings
             rec = capture(p, yaw, "map", mi)
             mapping.append(dict(room=r, yaw=rec["yaw"], apos=rec["apos"], box=rec["box"],
@@ -688,6 +718,8 @@ for r in rooms:
             seen.update(rec["vis"])
             mi += 1
     print("mapping %s done (%d frames, %d objects seen)" % (r, mi, len(seen)), flush=True)
+print("mapping walk: %d frames total, %d travel frames (every %.2f m), route %.1f m"
+      % (len(mapping), map_travel_frames, a.map_travel, map_route_len), flush=True)
 if not mapping:
     raise SystemExit("mapping walk produced no frames")
 
