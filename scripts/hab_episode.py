@@ -388,9 +388,10 @@ def reachable(q):
     return bool(sim.pathfinder.find_path(_p)) and len(_p.points) >= 2
 
 oid_for_check = None
-def check_goals(pos, K, D):
+def check_goals(pos, K, D, avoid_visible=True):
     # ③ 대본: 옛 자리를 **보러 가는** 방문. evidence_goals 와 같은 [멀리→가까이] 구조이되 LOS 는 자리(점) 기준.
     # 평가기의 '확인 기회' = 옛 자리 4m 이내·시야 ±35°·2프레임 이상 — 가까운 목적지를 D=2m 로 두면 자연히 만족한다.
+    # 1차: 새 자리의 물체가 안 보이는 방향만 → 없으면 2차: 그 조건 없이 (물체가 보이면 ②로 넘어가는 것은 평가기가 가른다)
     out = []; start = float(rng.uniform(0, 360))
     for ang in np.linspace(start, start + 360, 16, endpoint=False):
         a = np.radians(ang); dirv = np.array([np.sin(a), 0, np.cos(a)])
@@ -401,10 +402,11 @@ def check_goals(pos, K, D):
         if not (0.6 * D <= dn <= 1.4 * D): continue
         if not los_point(np.array(near, float) + np.array([0, 1.5, 0]), pos): continue
         if not (reachable(near) and reachable(far)): continue          # 섬 위 지점 제외 (house_0000·0003 확인 방문 미실행 원인)
-        if oid_for_check is not None and (line_of_sight(np.array(near, float) + np.array([0, 1.5, 0]), oid_for_check) or
-                                          line_of_sight(np.array(far, float) + np.array([0, 1.5, 0]), oid_for_check)): continue   # 새 자리 물체가 보이는 방향 제외
+        if avoid_visible and oid_for_check is not None and (line_of_sight(np.array(near, float) + np.array([0, 1.5, 0]), oid_for_check) or
+                                                            line_of_sight(np.array(far, float) + np.array([0, 1.5, 0]), oid_for_check)): continue
         out.append((("pt", np.array(far, float)), ("pt", np.array(near, float))))
         if len(out) >= K: break
+    if not out and avoid_visible: return check_goals(pos, K, D, avoid_visible=False)
     return out
 
 def witness(oid, pos, t, k):
