@@ -373,6 +373,30 @@ def evidence_goals(oid, pos, K, D):
         if len(out) >= K: break
     return out
 
+def los_point(cam, pt):
+    # 카메라→**빈 자리(점)** 광선이 그 점에 닿기 전에 막히지 않는가 (③: 물체는 이미 옮겨졌으므로 물체 LOS 가 아니라 자리 LOS)
+    tg = np.array([pt[0], pt[1] + 0.3, pt[2]], float); d = tg - np.asarray(cam, float); L = float(np.linalg.norm(d))
+    if L < 1e-3: return True
+    ray = habitat_sim.geo.Ray(mn.Vector3(*[float(v) for v in cam]), mn.Vector3(*[float(v) for v in d / L]))
+    res = sim.cast_ray(ray, max_distance=L - 0.15)
+    return not res.has_hits()
+
+def check_goals(pos, K, D):
+    # ③ 대본: 옛 자리를 **보러 가는** 방문. evidence_goals 와 같은 [멀리→가까이] 구조이되 LOS 는 자리(점) 기준.
+    # 평가기의 '확인 기회' = 옛 자리 4m 이내·시야 ±35°·2프레임 이상 — 가까운 목적지를 D=2m 로 두면 자연히 만족한다.
+    out = []; start = float(rng.uniform(0, 360))
+    for ang in np.linspace(start, start + 360, 16, endpoint=False):
+        a = np.radians(ang); dirv = np.array([np.sin(a), 0, np.cos(a)])
+        near = sim.pathfinder.snap_point(np.array([pos[0], pos[1], pos[2]]) + D * dirv)
+        far = sim.pathfinder.snap_point(np.array([pos[0], pos[1], pos[2]]) + (D + 1.5) * dirv)
+        if not (np.isfinite(near).all() and np.isfinite(far).all()): continue
+        dn = float(np.hypot(near[0] - pos[0], near[2] - pos[2]))
+        if not (0.6 * D <= dn <= 1.4 * D): continue
+        if not los_point(np.array(near, float) + np.array([0, 1.5, 0]), pos): continue
+        out.append((("pt", np.array(far, float)), ("pt", np.array(near, float))))
+        if len(out) >= K: break
+    return out
+
 def witness(oid, pos, t, k):
     # 새 자리 주위 8방향 중 보행 가능한 2m 지점에서 물체를 향해 렌더 — 시선이 닿으면 저장
     os.makedirs(os.path.join(args.out, "witness"), exist_ok=True)
@@ -622,6 +646,7 @@ while t < args.frames:
                 if real == obj_room[oid]:
                     sup = False                           # 같은 방 = 이동이 아니다 → 취소
                 if sup and wit is not None:
+                    _oldp = np.array(state[oid]["pos"], float)   # ③ 확인 방문용 옛 자리
                     state[oid]["pos"] = newp              # GT = 실제 배치 좌표
                     wit_file = "witness/%02d_t%d_%s.jpg" % (len(moves), t, objs[oid]["type"].replace(" ", "_"))
                     moves.append(dict(t=t, oid=oid, frm=obj_room[oid], to=real, intended=dest,
@@ -629,8 +654,17 @@ while t < args.frames:
                                       witness_file=wit_file, witness_ctr=wit))
                     moves[-1]["role"] = role
                     if role == "c3":
-                        excluded_rooms.add(real); forced_goals.append(moves[-1]["frm"])
-                        hidden_oids.append(oid)
+                        excluded_rooms.add(real); hidden_oids.append(oid)
+                        # 종전: 원래 방 재방문만 → 옛 자리를 안 봐서 27건 중 24건이 '확인기회X/재방문없음'(§157).
+                        # 옛 자리 2m 시선 지점을 2회 방문(사이에 저체류 방 경유)해 '확인 기회'를 대본이 보장한다.
+                        _cvs = check_goals(_oldp, 2, 2.0)
+                        _low = sorted(polys, key=lambda r: (MOVE or {}).get("dwell", {}).get(_rtype(r), 0.1))
+                        _low = [r for r in _low if r not in excluded_rooms]
+                        for _j, (_gf, _gn) in enumerate(_cvs):
+                            forced_goals += [_gf, _gn]
+                            if _j < len(_cvs) - 1 and _low: forced_goals.append(_low[0])
+                        if not _cvs: forced_goals.append(moves[-1]["frm"])
+                        moves[-1]["check_visits"] = len(_cvs)
                     else:
                         if args.evidence:
                             _K, _D = args.evidence.split(":"); _K, _D = int(_K), float(_D)
