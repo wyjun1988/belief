@@ -8,7 +8,7 @@ set -u
 OUT=${OUT:?데이터셋 디렉터리}; SCENES=${SCENES:?장면 목록}; SEED0=${SEED0:-700}
 B=${BENCH_DIR:?벤치 디렉터리}; SFM=${SFM:-$HOME/khcache/sfm-nogt}
 HAB=${HAB:-$HOME/miniforge3/envs/hab/bin/python}; PY=${PY:-$HOME/kx-venv/bin/python}
-MLX=${MLX:-$HOME/kx-venv/bin/python}
+MLX=${MLX:-$HOME/mlx-venv/bin/python}
 HSSD_DATASET=${HSSD_DATASET:-$HOME/hssd-hab/hssd-hab-uncluttered.scene_dataset_config.json}
 TRAVEL=${TRAVEL:-0.35}; PAR=${PAR:-3}; THREADS=${THREADS:-3}; STEP=${STEP:-1}
 export KMP_DUPLICATE_LIB_OK=TRUE
