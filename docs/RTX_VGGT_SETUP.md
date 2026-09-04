@@ -243,3 +243,11 @@ python scripts/sfm_reloc.py <house_0000> --from-poses raw_vggt.jsonl --scale da 
 ```
 보내 줄 것: 두 실행의 `정렬(` 줄(인라이어·rms)과 `live 커버리지 …` 줄. **GT sim3 인라이어 ≥0.8 이면** VGGT 채택(그 뒤 라벨 정렬만
 손보면 된다), **<0.5 이면 VGGT 종료 → CUT3R**(`docs/RTX_CUT3R_SETUP.md`). 중간이면 두 줄 다 보내 달라.
+
+## 16. 정정 (2026-09-04) — 15절 진단 전에 `git pull` (척도 상수 수정)
+§159 의 "재구성 왜곡"은 오진이었다. 어댑터가 DA 척도에 렌더 보정 상수를 안 곱해 지도가 2배 컸다. 고쳤다(`--da-k`, HSSD 0.468).
+HSSD house_0000 에서 질의 프레임 33장: GT 없는 라벨 정렬로 ATE 0.46 m·카메라방 0.82. **OG 는 상수를 1채로 재보정**해야 한다:
+```bash
+python scripts/sfm_scale_da.py <og house> <house>        # GT/DA 값을 --da-k 로
+```
+그 뒤 15절 두 줄(진단·실제)을 그대로. 기대치: GT sim3 인라이어 ≥0.4, 질의 프레임 카메라방 ≥0.8 이면 정상.
