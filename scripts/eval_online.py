@@ -382,17 +382,32 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     _first = next((i2 for i2 in range(len(ts)) if vis[i2]), None)
                     _p0 = _proj(_first) if _first is not None else None
                     if _p0: record = min(_cands, key=lambda c3: (c3[0][0]-_p0[0])**2 + (c3[0][1]-_p0[1])**2)[1]
-                elif os.environ.get("INST_SEL", "priorvote") == "prior":
+                elif os.environ.get("INST_SEL", "bearing") == "bearing":
+                    # 거리 값은 사실상 무의미하고(무작위 거리와 결과 동일, §154) **방위**만 정보다 →
+                    # 후보를 "검출 방위와 각도차가 작은가" 로 고른다. 거리 추정 잡음에 구조적으로 면역.
+                    _bv = Counter()
+                    for i2 in (_vpass if _vpass else sorted(hits)[:8])[:12]:
+                        _ry = _geo_ray(i2)
+                        if not _ry: continue
+                        _ap, _b = _ry
+                        _best, _bd = None, 1e9
+                        for c3 in _cands:
+                            _bc = np.degrees(np.arctan2(c3[0][0] - _ap[0], c3[0][1] - _ap[1]))
+                            _dd = abs((_bc - _b + 180) % 360 - 180)
+                            if _dd < _bd: _bd, _best = _dd, c3[1]
+                        if _best is not None and _bd < float(os.environ.get("INST_ANG", "25")): _bv[_best] += 1
+                    record = max(_cands, key=lambda c3: (1 + _bv.get(c3[1], 0)) * _prior(v0["type"], rt.get(c3[1], c3[1])) * (c3[2] ** 0.5))[1]
+                elif os.environ.get("INST_SEL", "bearing") == "prior":
                     # 후보 인스턴스를 **방 사전확률 × 검출 가중**으로 — 투영(거리 잡음)에 의존하지 않는 GT-free 선택
                     record = max(_cands, key=lambda c3: _prior(v0["type"], rt.get(c3[1], c3[1])) * (c3[2] ** 0.5))[1]
-                elif os.environ.get("INST_SEL", "priorvote") == "priorvote":
+                elif os.environ.get("INST_SEL", "bearing") == "priorvote":
                     _src = _vpass if _vpass else (sorted(hits)[:8] if len(hits) else [])
                     _votes = Counter()
                     for i2 in _src[:12]:
                         _p0 = _proj(i2)
                         if _p0: _votes[min(_cands, key=lambda c3: (c3[0][0]-_p0[0])**2 + (c3[0][1]-_p0[1])**2)[1]] += 1
                     record = max(_cands, key=lambda c3: (1 + _votes.get(c3[1], 0)) * _prior(v0["type"], rt.get(c3[1], c3[1])) * (c3[2] ** 0.5))[1]
-                elif os.environ.get("INST_SEL", "priorvote") == "vote":
+                elif os.environ.get("INST_SEL", "bearing") == "vote":
                     # 시스템 신호만: 검증 통과 프레임 **전부**의 투영을 모아 다수결(단일 프레임은 거리 잡음에 흔들린다)
                     _src = _vpass if _vpass else (sorted(hits)[:8] if len(hits) else [])
                     _votes = Counter()

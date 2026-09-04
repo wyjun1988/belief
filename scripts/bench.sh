@@ -22,7 +22,7 @@ export VERIFY_TH=${VERIFY_TH:-2.069}
 export VERIFY_TH2=${VERIFY_TH2:-0.887}
 export C0_MIN=${C0_MIN:-1}
 export C0_DIVERSE=${C0_DIVERSE:-1}
-export INST_SEL=${INST_SEL:-priorvote}     # 초기맵 인스턴스 선택: 사전확률 × 투영투표 × 검출가중 (§152b)
+export INST_SEL=${INST_SEL:-bearing}        # 후보 인스턴스: 방위 각도차 투표 × 사전확률 × 검출가중 (§154 — 거리 불필요)
 export VIS_GT=${VIS_GT:-0}                # GT 가시성 제거(§152): 인스턴스 선택=검증통과 프레임 투영 다수결 · 부재 분할점=ABS_SPLIT
 export ABS_SPLIT=${ABS_SPLIT:-half}       # "마지막 목격"(GT)에 의존하지 않는 분할
 export ROOM_GROUPS=${ROOM_GROUPS:-1}      # 열린 공간은 한 방(사용자 결정 2026-09-04, §149): <house>/room_groups.json 있으면 그룹 단위 채점      # 방위차 최대 쌍 삼각측량 우선 (v3c ② 0.542→0.583·거짓인계 0.25→0.12, v2.2 무해 — 2026-09-03 챔피언 편입)
