@@ -28,7 +28,7 @@ ap.add_argument("--chunk", type=int, default=8, help="한 번에 푸는 live 프
 ap.add_argument("--live-step", type=int, default=1, help="live N장마다 1장 (긴 에피소드)")
 ap.add_argument("--res", type=int, default=518, help="VGGT 입력 해상도(기본 518)")
 ap.add_argument("--model", default="facebook/VGGT-1B")
-ap.add_argument("--rms-max", type=float, default=0.35, help="앵커 정렬 rms(상대) 상한 — 넘으면 그 묶음 기권")
+ap.add_argument("--rms-max", type=float, default=0.5, help="앵커 정렬 rms(상대) 상한 — 넘으면 그 묶음 기권")
 ap.add_argument("--da-model", default="depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf")
 ap.add_argument("--da-n", type=int, default=24, help="척도 추정에 쓸 프레임 수")
 a = ap.parse_args()
@@ -51,9 +51,21 @@ n_live0 = len(lives)
 if a.live_step > 1: lives = lives[::a.live_step]
 log("매핑 %d · live %d(원본 %d)" % (len(maps), len(lives), n_live0))
 
+_ORDER_SAFE = os.environ.get("VGGT_ORDER_SAFE", "1") == "1"
+def _load(paths):
+    """⚠️ vggt 의 load_and_preprocess_images 는 버전에 따라 경로를 **내부 정렬**한다. 그러면 [앵커…, live…]
+    순서가 뒤섞여 앵커 행이 엉뚱한 프레임이 되고 정렬이 전부 실패한다(2026-09-04 RTX 158/158 기권).
+    → 한 장씩 전처리해 쌓아 순서를 보장한다."""
+    if not _ORDER_SAFE: return load_and_preprocess_images(paths)
+    ts_ = [load_and_preprocess_images([p]) for p in paths]
+    sh = {tuple(t.shape[-2:]) for t in ts_}
+    if len(sh) > 1:                       # 크기가 제각각이면 최소 크기로 자른다
+        h = min(t.shape[-2] for t in ts_); w = min(t.shape[-1] for t in ts_)
+        ts_ = [t[..., :h, :w] for t in ts_]
+    return torch.cat(ts_, 0)
 def run(paths):
     """VGGT 한 번 → (중심 (N,3), 전방 (N,3), 깊이 (N,H,W) 또는 None)"""
-    im = load_and_preprocess_images(paths).to(DEV)
+    im = _load(paths).to(DEV)
     with torch.no_grad():
         with torch.autocast(device_type=("cuda" if DEV == "cuda" else "cpu"), dtype=DT, enabled=(DEV == "cuda")):
             pred = model(im)
@@ -100,20 +112,30 @@ Dm_desc = np.stack([desc(p) for p in mpaths])
 
 # ── 4. live: [앵커 K + 묶음 C] 를 함께 풀고 앵커로 sim3 이동 ──
 def umeyama_rigid(X, Y):
-    cx, cy = X.mean(0), Y.mean(0); H = (X - cx).T @ (Y - cy)
+    """Umeyama sim3. ⚠️ 척도는 **분산**(제곱합/n)으로 나눈다 — 제곱합으로 나누면 앵커 수만큼 작아져
+    잔차가 폭발하고 모든 묶음이 기권한다(2026-09-04 RTX 첫 실행에서 158/158 기권한 원인)."""
+    n = len(X); cx, cy = X.mean(0), Y.mean(0)
+    H = (X - cx).T @ (Y - cy) / n
     U, S, Vt = np.linalg.svd(H); d = np.sign(np.linalg.det(Vt.T @ U.T))
     R = Vt.T @ np.diag([1, 1, d]) @ U.T
-    s = (S[:2].sum() + d * S[2]) / max((np.linalg.norm(X - cx) ** 2), 1e-9)
+    var = float(((X - cx) ** 2).sum() / n)
+    s = float((S[:2].sum() + d * S[2]) / max(var, 1e-9))
     return s, R, cy - s * (R @ cx)
 rows = [dict(name="map/" + maps[i], c=[round(float(v), 4) for v in Cm[k]], f=[round(float(v), 4) for v in Fm[k]])
         for k, i in enumerate(midx)]
-nchunk = int(np.ceil(len(lives) / a.chunk)); nok = 0
+nchunk = int(np.ceil(len(lives) / a.chunk)); nok = 0; _rmss = []; last_c = None
 for ci in range(nchunk):
     grp = lives[ci * a.chunk:(ci + 1) * a.chunk]
     if not grp: continue
     gp = [os.path.join(hd, "live", f) for f in grp]
     q = np.stack([desc(p) for p in gp]).mean(0)
-    order = np.argsort(-(Dm_desc @ q))[:a.anchors]
+    _by_desc = np.argsort(-(Dm_desc @ q))
+    if last_c is not None:                       # 직전 묶음 위치 근처가 훨씬 믿을 만하다(1fps 라도 사람은 순간이동하지 않는다)
+        _by_pos = np.argsort(np.linalg.norm(Cm - last_c, axis=1))
+        order = list(dict.fromkeys(list(_by_pos[:a.anchors // 2]) + list(_by_desc[:a.anchors])))[:a.anchors]
+    else:
+        order = list(_by_desc[:a.anchors])
+    order = np.array(order)
     paths = [mpaths[i] for i in order] + gp
     try:
         C, F, _ = run(paths)
@@ -123,13 +145,22 @@ for ci in range(nchunk):
     s_, R_, t_ = umeyama_rigid(C[:na], Cm[order])
     res = np.linalg.norm((s_ * (R_ @ C[:na].T)).T + t_ - Cm[order], axis=1)
     rms = float(np.sqrt((res ** 2).mean())) / (float(np.std(Cm[order])) + 1e-9)
+    _rmss.append(rms)
+    if ci == 0:
+        log("첫 묶음 진단: 앵커 %d · 척도 %.3f · 잔차(m) %s · 정규화 rms %.3f · 지도중심 산포 %.2f" % (
+            na, s_, np.round(res, 2).tolist(), rms, float(np.std(Cm[order]))))
     if rms > a.rms_max: continue                      # 앵커가 안 맞는 묶음은 기권
     nok += 1
     for k, f in enumerate(grp):
         c = s_ * (R_ @ C[na + k]) + t_; fv = R_ @ F[na + k]
         rows.append(dict(name="live/" + f, c=[round(float(v), 4) for v in c], f=[round(float(v), 4) for v in fv]))
+        last_c = c
     if ci % 20 == 0: log("묶음 %d/%d · 채택 %d" % (ci + 1, nchunk, nok))
 out = a.out or os.path.join(os.path.dirname(hd), "raw_%s.jsonl" % hn)
 with open(out, "w") as fo:
     for r in rows: fo.write(json.dumps(r) + "\n")
+if _rmss:
+    _q = np.percentile(_rmss, [10, 50, 90])
+    log("앵커 정렬 rms 분위 10/50/90 = %.3f / %.3f / %.3f (상한 %.2f)" % (_q[0], _q[1], _q[2], a.rms_max))
+    if nok == 0: log("⚠️ 전부 기권 — rms 중앙값이 상한보다 크면 --rms-max 를 그 값 이상으로. 중앙값이 1 이상이면 정렬 자체가 실패(앵커 검색 불량).")
 log("→ %s · 지도 %d · live %d/%d (묶음 채택 %d/%d)" % (out, len(midx), len(rows) - len(midx), n_live0, nok, nchunk))
