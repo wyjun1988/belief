@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""VGGT 재국소화 어댑터 — 지도 1회 + live 프레임별 등록. COLMAP(sfm_reloc.py) 과 **같은 표**로 재려고 만든 것.
+
+구조(우리 과제에 맞춘 이유): 1fps live 는 프레임 간 겹침이 없어 추적이 불가능하다. 그래서
+  (1) 매핑워크 프레임을 **한 번의 전방 통과**로 재구성해 지도 포즈를 얻고,
+  (2) live 는 [지도 앵커 K장 + live 묶음 C장] 을 함께 넣어 묶음마다 독립으로 풀고, 앵커의 기지 포즈로 좌표를 옮긴다.
+증분 등록이 아니므로 드리프트도, COLMAP 을 무너뜨린 **지도 접힘**도 구조적으로 덜하다(§153).
+
+    python scripts/vggt_reloc.py data/og20/house_0000 --out raw_house_0000.jsonl
+    # 그 뒤 정렬·평가·요약은 COLMAP 판과 동일한 코드로:
+    python scripts/sfm_reloc.py data/og20/house_0000 --from-poses raw_house_0000.jsonl \
+        --scale da --align sites --out ~/khcache/vggt/pose_house_0000.jsonl
+
+출력 raw jsonl: {"name": "map/0000.jpg" | "live/000000.jpg", "c": [x,y,z], "f": [x,y,z]}  (미터, y-up 월드)
+  c = 카메라 중심, f = 광축 전방 벡터. sfm_reloc --from-poses 가 이 형식을 읽는다.
+척도: VGGT 는 up-to-scale → **DA-V2 metric 깊이와의 비율 중앙값**으로 미터화(§146 과 같은 원리, GT 불필요).
+"""
+import argparse, json, os, sys, time
+import numpy as np, torch
+from PIL import Image
+
+ap = argparse.ArgumentParser()
+ap.add_argument("house")
+ap.add_argument("--out", default=None)
+ap.add_argument("--map-max", type=int, default=96, help="지도 재구성에 넣을 매핑 프레임 상한(메모리). 초과하면 균등 표본")
+ap.add_argument("--anchors", type=int, default=8, help="live 묶음마다 함께 넣는 지도 앵커 수")
+ap.add_argument("--chunk", type=int, default=8, help="한 번에 푸는 live 프레임 수")
+ap.add_argument("--live-step", type=int, default=1, help="live N장마다 1장 (긴 에피소드)")
+ap.add_argument("--res", type=int, default=518, help="VGGT 입력 해상도(기본 518)")
+ap.add_argument("--model", default="facebook/VGGT-1B")
+ap.add_argument("--rms-max", type=float, default=0.35, help="앵커 정렬 rms(상대) 상한 — 넘으면 그 묶음 기권")
+ap.add_argument("--da-model", default="depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf")
+ap.add_argument("--da-n", type=int, default=24, help="척도 추정에 쓸 프레임 수")
+a = ap.parse_args()
+
+hd = a.house.rstrip("/"); hn = os.path.basename(hd)
+T0 = time.time()
+def log(*x): print("[%6.0fs] " % (time.time() - T0) + " ".join(str(v) for v in x), flush=True)
+DEV = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+DT = torch.bfloat16 if (DEV == "cuda" and torch.cuda.get_device_capability()[0] >= 8) else torch.float32
+
+from vggt.models.vggt import VGGT
+from vggt.utils.load_fn import load_and_preprocess_images
+from vggt.utils.pose_enc import pose_encoding_to_extri_intri
+model = VGGT.from_pretrained(a.model).to(DEV).eval()
+log("VGGT 적재 · %s · %s" % (DEV, DT))
+
+maps = sorted(f for f in os.listdir(os.path.join(hd, "map")) if f.endswith(".jpg"))
+lives = sorted(f for f in os.listdir(os.path.join(hd, "live")) if f.endswith(".jpg"))
+n_live0 = len(lives)
+if a.live_step > 1: lives = lives[::a.live_step]
+log("매핑 %d · live %d(원본 %d)" % (len(maps), len(lives), n_live0))
+
+def run(paths):
+    """VGGT 한 번 → (중심 (N,3), 전방 (N,3), 깊이 (N,H,W) 또는 None)"""
+    im = load_and_preprocess_images(paths).to(DEV)
+    with torch.no_grad():
+        with torch.autocast(device_type=("cuda" if DEV == "cuda" else "cpu"), dtype=DT, enabled=(DEV == "cuda")):
+            pred = model(im)
+    extri, intri = pose_encoding_to_extri_intri(pred["pose_enc"], im.shape[-2:])
+    E = extri[0].float().cpu().numpy()          # (N,3,4) world→cam
+    R = E[:, :3, :3]; t = E[:, :3, 3]
+    C = np.einsum("nij,nj->ni", np.transpose(R, (0, 2, 1)), -t)     # 카메라 중심
+    F = np.transpose(R, (0, 2, 1))[:, :, 2]                         # 광축(카메라 +z) → 월드
+    D = pred["depth"][0].float().cpu().numpy()[..., 0] if "depth" in pred else None
+    return C, F, D
+
+# ── 1. 지도: 한 번의 전방 통과 ──
+midx = list(range(len(maps)))
+if len(midx) > a.map_max: midx = midx[:: int(np.ceil(len(midx) / a.map_max))][:a.map_max]
+mpaths = [os.path.join(hd, "map", maps[i]) for i in midx]
+Cm, Fm, Dm = run(mpaths)
+log("지도 재구성 %d프레임 · 중심 산포 %.2f" % (len(mpaths), float(np.std(Cm))))
+
+# ── 2. 척도: DA 메트릭 깊이 / VGGT 깊이 비율 중앙값 (GT 불필요) ──
+scale = 1.0
+if Dm is not None:
+    from transformers import AutoImageProcessor, AutoModelForDepthEstimation
+    dp = AutoImageProcessor.from_pretrained(a.da_model)
+    dm = AutoModelForDepthEstimation.from_pretrained(a.da_model).to(DEV).eval()
+    rat = []
+    for k in range(0, len(mpaths), max(1, len(mpaths) // a.da_n)):
+        img = Image.open(mpaths[k]).convert("RGB")
+        with torch.no_grad(): dd = dm(**dp(images=img, return_tensors="pt").to(DEV)).predicted_depth
+        H, W = Dm[k].shape
+        dd = torch.nn.functional.interpolate(dd[None], size=(H, W), mode="bicubic", align_corners=False)[0, 0].float().cpu().numpy()
+        v = Dm[k]; ok = (v > 0.05) & (dd > 0.05)
+        if ok.sum() > 500: rat.append(float(np.median(dd[ok] / v[ok])))
+    if rat: scale = float(np.median(rat))
+    log("척도(DA/VGGT) %.3f · 프레임 %d · 산포 %.2f" % (scale, len(rat), float(np.std(rat) / (np.median(rat) + 1e-9))))
+    del dm
+Cm = Cm * scale
+
+# ── 3. 검색용 전역 기술자 (의존성 0: 32x32 회색조 정규화 코사인) ──
+def desc(path):
+    g = np.asarray(Image.open(path).convert("L").resize((32, 32)), np.float32).ravel()
+    g -= g.mean(); n = np.linalg.norm(g) + 1e-9
+    return g / n
+Dm_desc = np.stack([desc(p) for p in mpaths])
+
+# ── 4. live: [앵커 K + 묶음 C] 를 함께 풀고 앵커로 sim3 이동 ──
+def umeyama_rigid(X, Y):
+    cx, cy = X.mean(0), Y.mean(0); H = (X - cx).T @ (Y - cy)
+    U, S, Vt = np.linalg.svd(H); d = np.sign(np.linalg.det(Vt.T @ U.T))
+    R = Vt.T @ np.diag([1, 1, d]) @ U.T
+    s = (S[:2].sum() + d * S[2]) / max((np.linalg.norm(X - cx) ** 2), 1e-9)
+    return s, R, cy - s * (R @ cx)
+rows = [dict(name="map/" + maps[i], c=[round(float(v), 4) for v in Cm[k]], f=[round(float(v), 4) for v in Fm[k]])
+        for k, i in enumerate(midx)]
+nchunk = int(np.ceil(len(lives) / a.chunk)); nok = 0
+for ci in range(nchunk):
+    grp = lives[ci * a.chunk:(ci + 1) * a.chunk]
+    if not grp: continue
+    gp = [os.path.join(hd, "live", f) for f in grp]
+    q = np.stack([desc(p) for p in gp]).mean(0)
+    order = np.argsort(-(Dm_desc @ q))[:a.anchors]
+    paths = [mpaths[i] for i in order] + gp
+    try:
+        C, F, _ = run(paths)
+    except Exception as e:
+        log("묶음 %d 실패: %s" % (ci, str(e)[:80])); continue
+    na = len(order)
+    s_, R_, t_ = umeyama_rigid(C[:na], Cm[order])
+    res = np.linalg.norm((s_ * (R_ @ C[:na].T)).T + t_ - Cm[order], axis=1)
+    rms = float(np.sqrt((res ** 2).mean())) / (float(np.std(Cm[order])) + 1e-9)
+    if rms > a.rms_max: continue                      # 앵커가 안 맞는 묶음은 기권
+    nok += 1
+    for k, f in enumerate(grp):
+        c = s_ * (R_ @ C[na + k]) + t_; fv = R_ @ F[na + k]
+        rows.append(dict(name="live/" + f, c=[round(float(v), 4) for v in c], f=[round(float(v), 4) for v in fv]))
+    if ci % 20 == 0: log("묶음 %d/%d · 채택 %d" % (ci + 1, nchunk, nok))
+out = a.out or os.path.join(os.path.dirname(hd), "raw_%s.jsonl" % hn)
+with open(out, "w") as fo:
+    for r in rows: fo.write(json.dumps(r) + "\n")
+log("→ %s · 지도 %d · live %d/%d (묶음 채택 %d/%d)" % (out, len(midx), len(rows) - len(midx), n_live0, nok, nchunk))

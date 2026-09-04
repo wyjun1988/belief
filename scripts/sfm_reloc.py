@@ -22,6 +22,7 @@ ap.add_argument("house")
 ap.add_argument("--work", default=None, help="DB·재구성 디렉터리 (기본 ~/khcache/sfm/<house>)")
 ap.add_argument("--vocab", default=os.path.expanduser("~/khcache/colmap/vocab_tree_faiss_flickr100K_words32K.bin"))
 ap.add_argument("--threads", type=int, default=4)
+ap.add_argument("--from-poses", default=None, help="COLMAP 을 건너뛰고 외부 포즈(jsonl: {name, c:[x,y,z], f:[x,y,z]}, **메트릭**)로 정렬·평가만 — VGGT 등 다른 재구성기 결과를 같은 표로 재려고")
 ap.add_argument("--live-step", type=int, default=1, help="live 프레임 N장마다 1장만 SfM 에 넣는다(긴 에피소드용). 등록 안 된 프레임은 평가에서 기하 기권")
 ap.add_argument("--topk", type=int, default=20, help="vocab-tree 검색 이미지 수")
 ap.add_argument("--features", type=int, default=2048, help="프레임당 SIFT 상한. 질감이 많은 장면(v3c: 상한 없이 5,400개)에서 매칭이 제곱으로 느려진다")
@@ -55,12 +56,18 @@ db = os.path.join(work, "db.db"); T0 = time.time()
 DEV = pycolmap.Device.cuda if a.gpu else pycolmap.Device.cpu
 def log(*x): print("[%5.0fs] " % (time.time() - T0) + " ".join(str(v) for v in x), flush=True)
 
+if a.from_poses:
+    P = {}
+    for _l in open(a.from_poses):
+        _d = json.loads(_l); P[_d["name"]] = (np.asarray(_d["c"], float), np.asarray(_d["f"], float))
+    ra = rm = None; S_FIX = 1.0                      # 외부 포즈는 이미 메트릭
+    log("외부 포즈 %d (map %d · live %d)" % (len(P), sum(1 for k in P if k.startswith("map/")), sum(1 for k in P if k.startswith("live/"))))
 ap_matcher = a.matcher
 mk_ext, mk_mat = os.path.join(work, ".extracted"), os.path.join(work, ".matched_" + ap_matcher)
-if a.redo:
+if a.redo and not a.from_poses:
     for f in (db, mk_ext, mk_mat):
         if os.path.exists(f): os.remove(f)
-if not os.path.exists(mk_ext):
+if not a.from_poses and not os.path.exists(mk_ext):
     if os.path.exists(db): os.remove(db)
     ro = pycolmap.ImageReaderOptions(); ro.camera_model = "PINHOLE"; ro.camera_params = "%g,%g,%g,%g" % (fx, fx, W / 2.0, H / 2.0)
     eo = pycolmap.FeatureExtractionOptions(); eo.num_threads = a.threads; eo.use_gpu = a.gpu
@@ -68,7 +75,7 @@ if not os.path.exists(mk_ext):
     pycolmap.extract_features(db, hd, image_names=names_map + names_live, camera_mode=pycolmap.CameraMode.SINGLE,
                               camera_model="PINHOLE", reader_options=ro, extraction_options=eo, device=DEV)
     open(mk_ext, "w").close(); log("SIFT 추출 map %d + live %d%s" % (len(maps), len(lives), (" (원본 %d 에서 %d장마다)" % (_nlive0, a.live_step)) if a.live_step > 1 else ""))
-if not os.path.exists(mk_mat):
+if not a.from_poses and not os.path.exists(mk_mat):
     mo = pycolmap.FeatureMatchingOptions(); mo.num_threads = a.threads; mo.use_gpu = a.gpu
     if ap_matcher == "vocab":
         so = pycolmap.SequentialPairingOptions(); so.overlap = 8; so.loop_detection = False
@@ -94,70 +101,71 @@ def mapper_opts(names, fix):
 def best_rec(recs):
     return max(recs.values(), key=lambda r: r.num_reg_images()) if recs else None
 
-rec_map_dir = os.path.join(work, "rec_map"); rec_all_dir = os.path.join(work, "rec_all")
-rm = None
-if not (a.redo or a.redo_map) and os.path.isdir(rec_map_dir) and any(os.path.isdir(os.path.join(rec_map_dir, d)) for d in os.listdir(rec_map_dir)):
-    rm = pycolmap.Reconstruction(os.path.join(rec_map_dir, sorted(d for d in os.listdir(rec_map_dir) if os.path.isdir(os.path.join(rec_map_dir, d)))[0]))
-else:
-    os.makedirs(rec_map_dir, exist_ok=True)
-    if a.redo_map: os.system("rm -rf '%s'/* '%s'/*" % (rec_map_dir, rec_all_dir))
-    rm = best_rec(pycolmap.incremental_mapping(db, hd, rec_map_dir, mapper_opts(names_map, False)))
-# 지점 회전만 있는 매핑워크(HSSD 밀집 remap)는 시차가 없어 map 만으로는 초기화가 안 되거나 몇 장만 붙는다 →
-# 그때는 map+live 를 한 번에 재구성(joint). live 보행이 기준선을 준다. (OG 는 SPEC 3-b 이동 프레임으로 map 만으로도 되게)
-map_ok = rm is not None and rm.num_reg_images() >= max(10, 0.3 * len(maps))
-if rm is not None: log("map 재구성: 등록 %d/%d · 점 %d · 재투영 %.2fpx%s" % (rm.num_reg_images(), len(maps), rm.num_points3D(), rm.compute_mean_reprojection_error(), "" if map_ok else " → 빈약, joint 로"))
-else: log("map 재구성 실패 → joint 로")
-sub = [d for d in sorted(os.listdir(rec_map_dir)) if os.path.isdir(os.path.join(rec_map_dir, d))] if os.path.isdir(rec_map_dir) else []
-in_path = os.path.join(rec_map_dir, sub[0]) if (sub and map_ok) else ""
-os.makedirs(rec_all_dir, exist_ok=True)
-_subs = [d for d in sorted(os.listdir(rec_all_dir)) if os.path.isdir(os.path.join(rec_all_dir, d))]
-if not (a.redo or a.redo_map) and _subs:      # live 등록 결과 캐시 (10~17분짜리) — 가장 큰 모델
-    ra = best_rec({d: pycolmap.Reconstruction(os.path.join(rec_all_dir, d)) for d in _subs}); log("live 등록 캐시 사용 (%d모델)" % len(_subs))
-elif in_path:
-    ra = best_rec(pycolmap.incremental_mapping(db, hd, rec_all_dir, mapper_opts([], True), input_path=in_path))
-else:
-    ra = best_rec(pycolmap.incremental_mapping(db, hd, rec_all_dir, mapper_opts([], False)))
-if ra is None: sys.exit("live 등록 실패")
-n_live_reg = sum(1 for im in ra.images.values() if im.name.startswith("live/") and im.has_pose)
-log("live 등록: %d/%d" % (n_live_reg, len(lives)))
+if not a.from_poses:
+    rec_map_dir = os.path.join(work, "rec_map"); rec_all_dir = os.path.join(work, "rec_all")
+    rm = None
+    if not (a.redo or a.redo_map) and os.path.isdir(rec_map_dir) and any(os.path.isdir(os.path.join(rec_map_dir, d)) for d in os.listdir(rec_map_dir)):
+        rm = pycolmap.Reconstruction(os.path.join(rec_map_dir, sorted(d for d in os.listdir(rec_map_dir) if os.path.isdir(os.path.join(rec_map_dir, d)))[0]))
+    else:
+        os.makedirs(rec_map_dir, exist_ok=True)
+        if a.redo_map: os.system("rm -rf '%s'/* '%s'/*" % (rec_map_dir, rec_all_dir))
+        rm = best_rec(pycolmap.incremental_mapping(db, hd, rec_map_dir, mapper_opts(names_map, False)))
+    # 지점 회전만 있는 매핑워크(HSSD 밀집 remap)는 시차가 없어 map 만으로는 초기화가 안 되거나 몇 장만 붙는다 →
+    # 그때는 map+live 를 한 번에 재구성(joint). live 보행이 기준선을 준다. (OG 는 SPEC 3-b 이동 프레임으로 map 만으로도 되게)
+    map_ok = rm is not None and rm.num_reg_images() >= max(10, 0.3 * len(maps))
+    if rm is not None: log("map 재구성: 등록 %d/%d · 점 %d · 재투영 %.2fpx%s" % (rm.num_reg_images(), len(maps), rm.num_points3D(), rm.compute_mean_reprojection_error(), "" if map_ok else " → 빈약, joint 로"))
+    else: log("map 재구성 실패 → joint 로")
+    sub = [d for d in sorted(os.listdir(rec_map_dir)) if os.path.isdir(os.path.join(rec_map_dir, d))] if os.path.isdir(rec_map_dir) else []
+    in_path = os.path.join(rec_map_dir, sub[0]) if (sub and map_ok) else ""
+    os.makedirs(rec_all_dir, exist_ok=True)
+    _subs = [d for d in sorted(os.listdir(rec_all_dir)) if os.path.isdir(os.path.join(rec_all_dir, d))]
+    if not (a.redo or a.redo_map) and _subs:      # live 등록 결과 캐시 (10~17분짜리) — 가장 큰 모델
+        ra = best_rec({d: pycolmap.Reconstruction(os.path.join(rec_all_dir, d)) for d in _subs}); log("live 등록 캐시 사용 (%d모델)" % len(_subs))
+    elif in_path:
+        ra = best_rec(pycolmap.incremental_mapping(db, hd, rec_all_dir, mapper_opts([], True), input_path=in_path))
+    else:
+        ra = best_rec(pycolmap.incremental_mapping(db, hd, rec_all_dir, mapper_opts([], False)))
+    if ra is None: sys.exit("live 등록 실패")
+    n_live_reg = sum(1 for im in ra.images.values() if im.name.startswith("live/") and im.has_pose)
+    log("live 등록: %d/%d" % (n_live_reg, len(lives)))
 
-# ── 포즈 추출 → sim3 정렬(GT map 포즈, 미러 후보 포함) ──
-def poses(rec):
-    out = {}
-    for im in rec.images.values():
-        if not im.has_pose: continue
-        out[im.name] = (np.asarray(im.projection_center(), float), np.asarray(im.viewing_direction(), float))
-    return out
-P = poses(ra)
-gm = g["map"]; assert len(gm) == len(maps), "gt.map %d ≠ map 프레임 %d" % (len(gm), len(maps))
-src, dst = [], []
-for nm, m in zip(names_map, gm):
-    if nm in P: src.append(P[nm][0]); dst.append([m["apos"][0], 1.5, m["apos"][1]])
-src, dst = np.array(src), np.array(dst)
-def da_scale(rec, n):
-    """단안 메트릭 깊이(DA-V2)로 SfM 척도: 프레임의 3D 점 SfM 깊이 z 와 같은 픽셀 DA 깊이 비율 중앙값 (GT 불필요)"""
-    import torch
-    from transformers import AutoImageProcessor, AutoModelForDepthEstimation
-    from PIL import Image as _Im
-    mname = "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf"
-    dev = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
-    pr = AutoImageProcessor.from_pretrained(mname); md = AutoModelForDepthEstimation.from_pretrained(mname).to(dev).eval()
-    ims = sorted((im for im in rec.images.values() if im.has_pose and im.name.startswith("live/")), key=lambda im: im.name)
-    ims = ims[::max(1, len(ims) // n)][:n]; fr = []
-    for im in ims:
-        p2 = [q for q in im.points2D if q.has_point3D()]
-        if len(p2) < 8: continue
-        X = np.array([rec.points3D[q.point3D_id].xyz for q in p2]); xy = np.array([q.xy for q in p2])
-        cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world; z = (cfw * X)[:, 2]
-        img = _Im.open(os.path.join(hd, im.name)).convert("RGB"); inp = pr(images=img, return_tensors="pt").to(dev)
-        with torch.no_grad(): D = md(**inp).predicted_depth
-        D = torch.nn.functional.interpolate(D[None], size=img.size[::-1], mode="bicubic", align_corners=False)[0, 0].float().cpu().numpy()
-        u = np.clip(xy[:, 0].round().astype(int), 0, D.shape[1] - 1); v = np.clip(xy[:, 1].round().astype(int), 0, D.shape[0] - 1)
-        ok = (z > 0.3) & (D[v, u] > 0.3)
-        if ok.sum() >= 8: fr.append(float(np.median(D[v, u][ok] / z[ok])))
-    return float(np.median(fr)) if fr else float("nan"), len(fr)
-S_FIX = None
-if a.scale == "da":
+    # ── 포즈 추출 → sim3 정렬(GT map 포즈, 미러 후보 포함) ──
+    def poses(rec):
+        out = {}
+        for im in rec.images.values():
+            if not im.has_pose: continue
+            out[im.name] = (np.asarray(im.projection_center(), float), np.asarray(im.viewing_direction(), float))
+        return out
+    P = poses(ra)
+    gm = g["map"]; assert len(gm) == len(maps), "gt.map %d ≠ map 프레임 %d" % (len(gm), len(maps))
+    src, dst = [], []
+    for nm, m in zip(names_map, gm):
+        if nm in P: src.append(P[nm][0]); dst.append([m["apos"][0], 1.5, m["apos"][1]])
+    src, dst = np.array(src), np.array(dst)
+    def da_scale(rec, n):
+        """단안 메트릭 깊이(DA-V2)로 SfM 척도: 프레임의 3D 점 SfM 깊이 z 와 같은 픽셀 DA 깊이 비율 중앙값 (GT 불필요)"""
+        import torch
+        from transformers import AutoImageProcessor, AutoModelForDepthEstimation
+        from PIL import Image as _Im
+        mname = "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf"
+        dev = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+        pr = AutoImageProcessor.from_pretrained(mname); md = AutoModelForDepthEstimation.from_pretrained(mname).to(dev).eval()
+        ims = sorted((im for im in rec.images.values() if im.has_pose and im.name.startswith("live/")), key=lambda im: im.name)
+        ims = ims[::max(1, len(ims) // n)][:n]; fr = []
+        for im in ims:
+            p2 = [q for q in im.points2D if q.has_point3D()]
+            if len(p2) < 8: continue
+            X = np.array([rec.points3D[q.point3D_id].xyz for q in p2]); xy = np.array([q.xy for q in p2])
+            cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world; z = (cfw * X)[:, 2]
+            img = _Im.open(os.path.join(hd, im.name)).convert("RGB"); inp = pr(images=img, return_tensors="pt").to(dev)
+            with torch.no_grad(): D = md(**inp).predicted_depth
+            D = torch.nn.functional.interpolate(D[None], size=img.size[::-1], mode="bicubic", align_corners=False)[0, 0].float().cpu().numpy()
+            u = np.clip(xy[:, 0].round().astype(int), 0, D.shape[1] - 1); v = np.clip(xy[:, 1].round().astype(int), 0, D.shape[0] - 1)
+            ok = (z > 0.3) & (D[v, u] > 0.3)
+            if ok.sum() >= 8: fr.append(float(np.median(D[v, u][ok] / z[ok])))
+        return float(np.median(fr)) if fr else float("nan"), len(fr)
+S_FIX = 1.0 if a.from_poses else None
+if a.scale == "da" and not a.from_poses:
     _sda, _nf = da_scale(ra, a.da_n); S_FIX = _sda * a.da_k
     log("DA 척도: SfM→m 비율 %.3f (프레임 %d) × 상수 %.3f = %.3f — 정렬은 회전·병진만" % (_sda, _nf, a.da_k, S_FIX))
 def rigid(X, Y):
@@ -194,7 +202,7 @@ def align_by_labels():
             if (z1 > z) != (z2 > z) and x < (x2 - x1) * (z - z1) / (z2 - z1 + 1e-12) + x1: ins = not ins
         return ins
     downs = []
-    for im in ra.images.values():
+    for im in (ra.images.values() if ra is not None else []):
         if not im.has_pose: continue
         cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
         downs.append(cfw.rotation.matrix().T @ np.array([0, 1.0, 0]))
@@ -319,14 +327,14 @@ log("live 커버리지 %.2f · ATE 중앙 %.2fm 평균 %.2fm <0.5m %.2f <1m %.2f
     (ate < 1).mean() if len(ate) else 0, np.median(yerr) if len(yerr) else -1, (yerr < 10).mean() if len(yerr) else 0,
     ("%.2f (n=%d)" % (hit / nhit, nhit)) if nhit else "—"))
 # 정렬된 3D 점 내보내기 (평면도용: 벽·가구 = 높이 0.2~2.0m 점) — x, z, h(우리 프레임, y-up)
-_P3 = np.array([pt.xyz for pt in ra.points3D.values() if pt.track.length() >= 3]) if ra.num_points3D() else np.zeros((0, 3))
+_P3 = np.array([pt.xyz for pt in ra.points3D.values() if pt.track.length() >= 3]) if (ra is not None and ra.num_points3D()) else np.zeros((0, 3))
 if len(_P3):
     _A = (S3 * (R3 @ (M @ _P3.T))).T + T3
     np.savez_compressed(os.path.join(work, "points_%s.npz" % hn), x=_A[:, 0].astype(np.float32), z=_A[:, 2].astype(np.float32), h=_A[:, 1].astype(np.float32))
     log("3D 점 %d (트랙≥3) → points_%s.npz · 높이 중앙 %.2fm" % (len(_A), hn, float(np.median(_A[:, 1]))))
 # live 프레임의 2D-3D 대응 (u, v, 메트릭 깊이) — 거리 보정용. GT 앵커 좌표·GT 카메라 위치를 대체한다.
 _lt, _lu, _lv, _ld = [], [], [], []
-for f in lives:
+for f in (lives if ra is not None else []):
     t = int(f[:-4]); nm = "live/" + f
     im = next((i for i in ra.images.values() if i.name == nm and i.has_pose), None)
     if im is None: continue
@@ -371,7 +379,7 @@ with open(os.path.join(work, "map_pose_%s.jsonl" % hn), "w") as fo:
             apos, yaw = mpose[nm]; fo.write(json.dumps(dict(house=hn, name=nm, apos=apos, yaw=yaw, prop=(nm not in P), apos_gt=m["apos"], yaw_gt=m["yaw"])) + "\n")
 # 맵 프레임의 SfM 3D 점 (픽셀 u,v + 메트릭 깊이) — 초기맵 거리용 (DA 보다 정확, 있는 곳만)
 _mu, _mv, _md, _mi, _mn = [], [], [], [], []
-for k, nm in enumerate(names_map):
+for k, nm in enumerate(names_map if ra is not None else []):
     im = next((i for i in ra.images.values() if i.name == nm and i.has_pose), None)
     if im is None: continue
     p2 = [q for q in im.points2D if q.has_point3D()]
@@ -383,7 +391,7 @@ if _mu:
     np.savez_compressed(os.path.join(work, "map_points_%s.npz" % hn), u=np.concatenate(_mu).astype(np.float32), v=np.concatenate(_mv).astype(np.float32),
                         d=np.concatenate(_md).astype(np.float32), k=np.concatenate(_mi).astype(np.int32))
     log("맵 프레임 SfM 점 %d (프레임 %d)" % (sum(len(x) for x in _mu), len(_mn)))
-json.dump(dict(house=hn, map_reg=(rm.num_reg_images() if rm is not None else 0), n_map=len(maps), map_joint=(not map_ok), live_reg=len(rows), live_reg_raw=n_before, n_live=_nlive0, live_step=a.live_step, cov=cov, vmax=a.vmax, strict=a.strict,
+json.dump(dict(house=hn, map_reg=(rm.num_reg_images() if rm is not None else sum(1 for k in P if k.startswith("map/"))), n_map=len(maps), map_joint=(not map_ok), live_reg=len(rows), live_reg_raw=n_before, n_live=_nlive0, live_step=a.live_step, cov=cov, vmax=a.vmax, strict=a.strict,
                ate_med=float(np.median(ate)) if len(ate) else None, ate_lt05=float((ate < 0.5).mean()) if len(ate) else None,
                yaw_med=float(np.median(yerr)) if len(yerr) else None, room_hit=(hit / nhit) if nhit else None, n_room=nhit,
                reject_outside=bool(a.reject_outside), sim3_rms=float(rms), sim3_inl=INL, scale=float(s), scale_src=a.scale, align_src=a.align, da_k=a.da_k, mirror=bool(mirror), sec=time.time() - T0), open(os.path.join(work, "summary_%s.json" % hn), "w"), indent=1, default=float)
