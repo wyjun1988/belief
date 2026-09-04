@@ -322,6 +322,7 @@ if a.reject_outside and polys:
             nhit += 1; hit += pip(r["apos"], polys[m.get("room_gt", m.get("room"))])
 ate, yerr = np.array(ate), np.array(yerr)
 cov = len(rows) / _nlive0
+log(("live 표본 등록 %d/%d(%.2f) · " % (len(rows), len(lives), len(rows) / max(len(lives), 1))) if a.live_step > 1 else "")
 log("live 커버리지 %.2f · ATE 중앙 %.2fm 평균 %.2fm <0.5m %.2f <1m %.2f · yaw 중앙 %.1f° <10° %.2f · 카메라방 적중 %s" % (
     cov, np.median(ate) if len(ate) else -1, ate.mean() if len(ate) else -1, (ate < 0.5).mean() if len(ate) else 0,
     (ate < 1).mean() if len(ate) else 0, np.median(yerr) if len(yerr) else -1, (yerr < 10).mean() if len(yerr) else 0,
