@@ -20,6 +20,7 @@ i=0
 for SC in $(cat "$SCENES"); do
   H="$OUT/house_$(printf %04d $i)"; i=$((i+1))
   [ -d "$H" ] || continue
+  rm -f "$H"/map/*.jpg                     # 지점 수가 줄면 옛 프레임이 남는다 — gt["map"] 은 통째로 갈린다
   $HAB -u scripts/hab_episode.py --scene "$SC" --dataset "$HSSD_DATASET" --remap --map-travel $TRAVEL \
     --seed $((i-1+SEED0)) --out "$H" 2>&1 | grep -aE "매핑 포즈|remap 완료" | sed "s|^|  $(basename $H) |"
 done
