@@ -681,16 +681,16 @@ print("  분기: %s" % dict(res["case"]))
 br = res.get("br", Counter())
 ck = res.get("ck", Counter())
 print("  ── 3경우 분해 (GT 기준) ──")
-for c3 in ("①이동없음", "②재촬영", "③belief대상", "③확인기회O", "③확인기회X",
+for c3 in ("①이동없음", "②재촬영", "③belief대상", "③확인기회O", "③확인기회X", "③확인기회X(기록방오류)", "③기록없음",
            "③재방문없음", "④집밖반출"):
     tot = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3)
     if not tot: continue
     okc = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and o_)
     line = "  %-12s n=%-4d 정답 %.3f" % (c3, tot, okc / tot)
-    if c3 in ("③belief대상", "③확인기회O", "③확인기회X"):
+    if c3 in ("③belief대상", "③확인기회O", "③확인기회X", "③확인기회X(기록방오류)", "③기록없음"):
         h = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ == "c2")
         ho = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3 and b_ == "c2" and o_)
-        if c3 == "③확인기회X":
+        if c3.startswith("③확인기회X") or c3 == "③기록없음":
             # 증거 없음 → 안 넘기는 게 옳은 행동. 지표 = 무인계 준수율 (GT 정답률은 무의미)
             line += " | **무인계 준수 %.2f** (기록 답변이 정책상 옳음)" % (1 - h / tot)
         else:
@@ -718,7 +718,7 @@ if rows:
         return acc, float(np.percentile(bs, 2.5)), float(np.percentile(bs, 97.5)), len(sel)
     print("  ── 기준선 대조 (집 %d채 부트스트랩 95%% CI) ──" % len(_hs))
     print("  %-12s %-5s %-18s %-18s %-18s %-18s" % ("경우", "n", "시스템", "초기맵만", "최신강검출", "사전확률만"))
-    for c3 in ("전체", "①이동없음", "②재촬영", "③belief대상", "③확인기회O", "③확인기회X", "③재방문없음", "④집밖반출"):
+    for c3 in ("전체", "①이동없음", "②재촬영", "③belief대상", "③확인기회O", "③확인기회X", "③확인기회X(기록방오류)", "③기록없음", "③재방문없음", "④집밖반출"):
         cells = [_acc_ci(c3, k) for k in (2, 3, 4, 5)]
         if cells[0] is None: continue
         print("  %-12s %-5d %s" % (c3, cells[0][3],
