@@ -310,6 +310,7 @@ print("이동 계획 %d건 (③대본 %d)" % (len(plan), sum(1 for v in plan.val
 excluded_rooms = set()      # ③ 대본: 이동 후 배회에서 제외할 목적지 방
 hidden_oids = []            # ③ 대본: 배회 경로에서 시선이 닿으면 안 되는 물체
 forced_goals = []           # 대본이 요구하는 다음 목적지 방 (③: 원래 방 / ②: 목적지 방)
+_nofail = {}                # 대본 목적지별 경로 실패 횟수
 
 # ── 연속 보행 궤적 (텔레포트 아님) ──
 
@@ -369,6 +370,7 @@ def evidence_goals(oid, pos, K, D):
         dn = float(np.hypot(near[0] - pos[0], near[2] - pos[2]))
         if not (0.6 * D <= dn <= 1.4 * D): continue
         if not line_of_sight(np.array(near, float) + np.array([0, 1.5, 0]), oid): continue
+        if not (reachable(near) and reachable(far)): continue
         out.append((("pt", np.array(far, float)), ("pt", np.array(near, float))))
         if len(out) >= K: break
     return out
@@ -380,6 +382,10 @@ def los_point(cam, pt):
     ray = habitat_sim.geo.Ray(mn.Vector3(*[float(v) for v in cam]), mn.Vector3(*[float(v) for v in d / L]))
     res = sim.cast_ray(ray, max_distance=L - 0.15)
     return not res.has_hits()
+
+def reachable(q):
+    _p = habitat_sim.ShortestPath(); _p.requested_start = np.array(cur, float); _p.requested_end = np.array(q, float)
+    return bool(sim.pathfinder.find_path(_p)) and len(_p.points) >= 2
 
 def check_goals(pos, K, D):
     # ③ 대본: 옛 자리를 **보러 가는** 방문. evidence_goals 와 같은 [멀리→가까이] 구조이되 LOS 는 자리(점) 기준.
@@ -393,6 +399,7 @@ def check_goals(pos, K, D):
         dn = float(np.hypot(near[0] - pos[0], near[2] - pos[2]))
         if not (0.6 * D <= dn <= 1.4 * D): continue
         if not los_point(np.array(near, float) + np.array([0, 1.5, 0]), pos): continue
+        if not (reachable(near) and reachable(far)): continue          # 섬 위 지점 제외 (house_0000·0003 확인 방문 미실행 원인)
         out.append((("pt", np.array(far, float)), ("pt", np.array(near, float))))
         if len(out) >= K: break
     return out
@@ -574,7 +581,12 @@ while t < args.frames:
         else:
             goal = sim.pathfinder.get_random_navigable_point()
         path = habitat_sim.ShortestPath(); path.requested_start, path.requested_end = cur, goal
-        if not sim.pathfinder.find_path(path) or len(path.points) < 2: continue
+        if not sim.pathfinder.find_path(path) or len(path.points) < 2:
+            if fg is not None:
+                _nf = _nofail.get(id(fg), 0) + 1; _nofail[id(fg)] = _nf
+                if _nf <= 3: forced_goals.insert(0, fg)
+                else: print("  ⚠ 대본 목적지 포기(경로 없음 3회): %s" % (fg if not isinstance(fg, tuple) else "pt"), flush=True)
+            continue
         if excluded_rooms and _retry < 30 and any(
                 room_at(float(q[0]), float(q[2])) in excluded_rooms for q in path.points):
             _retry += 1
