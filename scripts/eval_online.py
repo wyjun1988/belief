@@ -52,6 +52,8 @@ if os.environ.get("VERIFY_JSONL"):
         VSC[(_d["house"], _d["oid"])] = _d["scored"]
     print("실검증 %d타겟" % len(VSC), flush=True)
 GDEP = None
+_GSTRICT = os.environ.get("GEO_STRICT", "1") == "1"   # GEO_DEPTH 가 있으면 GT 거리로 후퇴하지 않는다(기권) — 사다리 표기를 사실로
+_GHIT = [0, 0]   # [DA 적중, GT 후퇴] — "거리:DA" 표기가 사실인지 계측 (2026-09-04)
 if os.environ.get("GEO_DEPTH"):
     GDEP = {}
     for _l in open(os.environ["GEO_DEPTH"]):
@@ -346,8 +348,12 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             ray = _geo_ray(i)
             if ray is None: return None
             ap, b = ray
-            d = (GDEP.get((hn, int(ts[i]), oid)) if GDEP is not None
-                 else (live[ts[i]].get("dist") or {}).get(oid))
+            d = GDEP.get((hn, int(ts[i]), oid)) if GDEP is not None else None
+            if d is not None: _GHIT[0] += 1
+            elif GDEP is not None and _GSTRICT: _GHIT[1] += 1; return None
+            else:
+                d = (live[ts[i]].get("dist") or {}).get(oid)
+                if d is not None and GDEP is not None: _GHIT[1] += 1
             if d is None: return None
             return _room_pt([ap[0] + d*np.sin(np.radians(b)),
                              ap[1] + d*np.cos(np.radians(b))])
@@ -367,7 +373,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 def _proj(i2):
                     _ry = _geo_ray(i2)
                     _d = (GDEP.get((hn, int(ts[i2]), oid)) if GDEP is not None else None)
-                    if _d is None and _VISGT: _d = (live[ts[i2]].get("dist") or {}).get(oid)
+                    if GDEP is not None: _GHIT[0 if _d is not None else 1] += 1
+                    if _d is None and _VISGT and not (GDEP is not None and _GSTRICT): _d = (live[ts[i2]].get("dist") or {}).get(oid)
                     if not (_ry and _d): return None
                     _ap, _b = _ry
                     return [_ap[0] + _d * np.sin(np.radians(_b)), _ap[1] + _d * np.cos(np.radians(_b))]
@@ -451,6 +458,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     # 원거리 목격은 광선 방위 오차가 방을 넘긴다 (v3: k=0 타겟 거짓 인계 3/25) → 거리 상한
                     def _dist_of(i2):   # 실물 거리(DA) 가 있으면 그것, 없으면 GT dist (사다리 재료와 일치)
                         _d = GDEP.get((hn, int(ts[i2]), oid)) if GDEP is not None else None
+                        _GHIT[0 if _d is not None else 1] += 1
+                        if _d is None and _GSTRICT: return 1e9        # 거리 미상 → 상한 필터에서 탈락(기권)
                         return _d if _d is not None else ((live[ts[i2]].get("dist") or {}).get(oid) or 0)
                     _pas = [(i2, s_) for i2, s_ in _pas if _dist_of(i2) <= _c0maxd]
                     _pick = [i2 for i2, _s in _pas][:int(os.environ.get("C0_WIN", "3"))]
@@ -631,6 +640,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
 
 n = len(res["sys"])
 print("=== 온라인 상태기계 v1 · %s · SG_INIT=%s · n=%d ===" % (ROOT, SG_INIT, n))
+if GDEP is not None:
+    _tot = _GHIT[0] + _GHIT[1]
+    print("  거리 조회: DA 적중 %d · %s %d (적중률 %.2f)" % (_GHIT[0], "기권" if _GSTRICT else "⚠️GT 후퇴", _GHIT[1], _GHIT[0] / max(_tot, 1)))
 print("  재료: " + LADDER)
 print("  정지 지도(t=0 GT)        %.3f" % np.mean(res["static"]))
 print("  **기록(갱신 후)**         **%.3f**" % np.mean(res["rec"]))

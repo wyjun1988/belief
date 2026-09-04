@@ -34,7 +34,11 @@ SC = os.environ.get("SCORES", "t1_scores_t7ac.jsonl")
 OUTJ = os.environ.get("OUT_JSONL", "geo_depth_t7.jsonl")
 MODEL = os.environ.get("DEPTH_MODEL", "depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf")
 TILT = np.radians(float(os.environ.get("TILT", "10")))
-FRAME_W = float(os.environ.get("FRAME_W", "768"))   # 원본 프레임 폭 (SfM 픽셀 좌표 기준)
+FRAME_W = float(os.environ.get("FRAME_W", "768"))
+_GTFR = os.environ.get("GEO_GT_FRAMES", "0") == "1"   # 1 이면 구판(GT 목격 프레임 선택) — 기본은 시스템 신호만
+_NV = int(os.environ.get("GEO_NVERIFY", "10"))        # 타겟당 검증 통과 프레임 수
+_ND = int(os.environ.get("GEO_NDET", "6"))            # 타겟당 검출 상위 프레임 수
+_VTH = float(os.environ.get("VERIFY_TH", "0")); _VTH2 = float(os.environ.get("VERIFY_TH2", "-1e9"))   # 원본 프레임 폭 (SfM 픽셀 좌표 기준)
 BATCH = int(os.environ.get("BATCH", "8"))
 
 from transformers import AutoImageProcessor, AutoModelForDepthEstimation
@@ -90,17 +94,27 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         ti = ti_of(r["oid"])
         if ti is None: continue
         for e in r["scored"]: need[(int(e[0]), r["oid"])] = ti
-    for j, oid in enumerate(QT):                # b) GT 목격 8 · c) 최신 5
+    vpass = {}
+    for _r in (vsc.get(hn) or []):
+        vpass[_r["oid"]] = [e for e in _r["scored"] if e[1] >= _VTH and (len(e) < 3 or e[2] >= _VTH2)]
+    for j, oid in enumerate(QT):                # 검증 통과 + 검출 상위 (GEO_GT_FRAMES=1 이면 구판)
         v0 = g["gt0"].get(oid)
         if not v0 or not v0["room"] or cnt[v0["type"]] > 1 or v0["type"] not in vocab: continue
-        if oid not in mvs: continue
-        ti = vocab.index(v0["type"]); t0 = mvs[oid]
-        sights = sorted([i for i, t in enumerate(tsl)
-                         if t > t0 and oid in (live.get(t, {}).get("vis") or [])],
-                        key=lambda i: -tsl[i])[:8]
+        ti = vocab.index(v0["type"])
         TS = QS[:, j] + STx[:, j]
-        rec5 = sorted(np.argsort(-TS)[:50], key=lambda i: -tsl[i])[:5]
-        for i in list(sights) + [int(x) for x in rec5]: need[(int(i), oid)] = ti
+        if _GTFR and oid in mvs:      # 구판(GT 목격 프레임) — 대조용으로만
+            t0 = mvs[oid]
+            sights = sorted([i for i, t in enumerate(tsl)
+                             if t > t0 and oid in (live.get(t, {}).get("vis") or [])],
+                            key=lambda i: -tsl[i])[:8]
+            rec5 = sorted(np.argsort(-TS)[:50], key=lambda i: -tsl[i])[:5]
+            sel = list(sights) + [int(x) for x in rec5]
+        else:
+            # 시스템 신호만: ① 정지 물체도 포함, 프레임은 **검증 통과** + 검출 상위 (GT vis 불사용)
+            _vp = sorted(int(e[0]) for e in (vpass.get(oid) or []))[-_NV:]
+            _top = [int(x) for x in sorted(np.argsort(-TS)[:40], key=lambda i: -TS[i])[:_ND]]
+            sel = list(dict.fromkeys(_vp + _top))
+        for i in sel: need[(int(i), oid)] = ti
     frames = sorted({i for i, _o in need})
     frames = [i for i in frames if tsl[i] in lv]
     zmap = {}
