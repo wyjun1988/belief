@@ -278,6 +278,15 @@ if MOVE:                            # 이동 물체를 **이동성향**으로 �
                          replace=False, p=w_ / w_.sum())
         cands = [cands[i2] for i2 in idx]
 cen = {r: np.array(pl).mean(0) for r, pl in polys.items()}
+# ③ 물체 자격 (5차 §157: 대본은 4채 중 3채에서 옛 자리를 다시 봤는데 0건이 ③확인기회O 로 잡힘 —
+#   tray 는 초기맵에 아예 없고(OWL 기록률 0), toiletry·trashcan 은 집 안에 같은 타입이 여럿이라 평가기가 다른 개체를 집었다)
+#   → ③ 후보는 **집 안에서 타입이 유일**하고, 20채 초기맵 기록률이 낮은 타입(<0.6)이 아니어야 한다. 자격자를 앞으로.
+from collections import Counter as _Ctr
+_tcnt = _Ctr(v["type"] for v in objs.values())
+_LOWREC = {"mobile phone", "car", "shoes", "plate", "bowl", "toiletry", "tray", "drinkware", "book", "plush toy"}
+_elig = lambda o: _tcnt[objs[o]["type"]] == 1 and objs[o]["type"] not in _LOWREC
+cands = [o for o in cands if _elig(o)] + [o for o in cands if not _elig(o)]
+print("③ 자격(타입 유일·기록률 OK) %d/%d" % (sum(1 for o in cands if _elig(o)), len(cands)), flush=True)
 for i2, oid in enumerate(cands[:args.moves]):
     others = [r for r in polys if r != obj_room[oid]]
     if not others: continue
@@ -303,11 +312,11 @@ for i2, oid in enumerate(cands[:args.moves]):
         _dw = (MOVE or {}).get("dwell", {})
         _in = [r for r in others if not any(k in _rtype(r) for k in
                                             ("outdoor", "balcony", "porch", "garage", "yard"))] or others
-        _low = [r for r in _in if _dw.get(_rtype(r), 0.1) <= 0.35] or _in      # 실외는 ④ 몫 — ③ 목적지에서 제외
         # ③ 목적지가 복도·현관·계단처럼 **어디서나 보이는 통로**면 이동 뒤 배회 중 새 자리가 눈에 들어와 ② 로 샌다(house_0003: hallway 34프레임)
+        # 5차에서도 hallway 로 갔다: 저체류(≤0.35) 방이 통로뿐이면 제외가 비어 통로로 되돌아갔다 → 통로 제외를 **먼저**, 체류 문턱은 그 다음
         _open = ("hallway", "corridor", "entryway", "entry", "stair", "landing", "foyer")
-        _low2 = [r for r in _low if not any(k in _rtype(r) for k in _open)]
-        if _low2: _low = _low2
+        _in2 = [r for r in _in if not any(k in _rtype(r) for k in _open)] or _in
+        _low = [r for r in _in2 if _dw.get(_rtype(r), 0.1) <= 0.35] or _in2    # 실외는 ④ 몫 — ③ 목적지에서 제외
         tgt = max(_low, key=lambda r: float(np.linalg.norm(cen[r] - cen[obj_room[oid]])))
     plan[int(rng.integers(args.frames // 5, args.frames * 3 // 5))] = (oid, tgt, role)
 print("이동 계획 %d건 (③대본 %d)" % (len(plan), sum(1 for v in plan.values() if v[2] == "c3")), flush=True)

@@ -7237,3 +7237,14 @@ house_0000(§159)에서만 성공한 게 우연인지 보려고 COLMAP 정렬 �
 - house_0006 의 라벨 정렬 0.72 는 ATE 2.6 m 에서 나온 값이라 방 다각형이 큰 집의 우연이지 국소화가 아니다.
 - 첫 시도(`--global-live-step 40`)는 질의 26~40장 중 1장만 전역 통과에 들어가고 나머지가 폐기한 묶음 경로로 빠졌다 — 질의 모드는 **반드시 step 1**. `rtx_weekend.sh` 는 이미 step 1.
 - 결론: HSSD 렌더에서는 COLMAP 유지(안 접힌 집 0.69~0.97), VGGT 는 대체 불가. VGGT/CUT3R 판정은 실사풍 렌더·이동 프레임이 든 RTX OG 4채(주말 잡)로 넘긴다. HSSD 에서 VGGT 는 더 돌리지 않는다.
+
+#### §157 5차 — 대본은 됐는데 평가기가 ③ 로 안 잡는다: 물체 자격(타입 유일·기록률)과 통로 목적지
+5차(4채·재큐·즉시 재선택·navmesh 도달성·통로 제외 1판): **③확인기회O 여전히 0/4**. 그러나 gt.json 으로 뜯어보니 대본 자체는 3/4 채에서 성립했다.
+| 채 | 물체 | 이동 | 옛 자리 재방문(기하만족 프레임) | 이동 후 가시 | 평가 버킷 | 진짜 원인 |
+|---|---|---|---|---|---|---|
+| house_0000 | trashcan | kitchen→other room | 202 | 6 (bedroom) | ② | 새 자리가 배회 중 6프레임 보임 + 집 안에 trashcan 3개 |
+| house_0001 | tray | living→laundry | 64 | 0 | ③기록없음 | 초기맵(OWL)에 tray 가 아예 없음 |
+| house_0002 | toiletry | kitchen→bathroom | 167 | 0 | ③확인기회X(기록방오류) | toiletry 가 kitchen·bathroom 에 하나씩 → 평가기가 다른 개체를 집음 |
+| house_0003 | alarm clock | bedroom→hallway | 4 | 28 (hallway·dining) | ② | **또 hallway** — 저체류 방이 통로뿐이라 통로 제외가 비어 되돌아감 |
+20채 초기맵 기록률(GT 타입 중 OWL 이 초기맵에 남긴 비율): shoes·plate·mobile phone 0.00, bowl 0.20, toiletry 0.56, drinkware 0.60, book 0.64 / 가구·램프·화분류 1.00.
+고침(6차): ③ 후보는 **집 안에서 타입이 유일**하고 기록률 낮은 타입이 아니어야 한다(자격자를 앞으로) · 통로 제외를 체류 문턱보다 먼저 적용(폴백이 통로로 못 돌아감).
