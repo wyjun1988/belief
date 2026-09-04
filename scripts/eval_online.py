@@ -627,7 +627,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             elif _revis:
                 _ck = ("③belief대상" if _nlate < 0 else
                        "③확인기회O" if _nlate >= 2 else
-                       ("③기록없음" if not record else          # 초기맵에 그 타입이 없다 → 확인할 기록 자체가 없음(초기맵 재현율)
+                       ("③기록없음" if v0["type"] not in im else   # 초기맵에 그 타입이 없다(기록은 사전확률 후퇴) → 초기맵 재현율 문제
                         "③확인기회X(기록방오류)" if (_nlate_any >= 2) else "③확인기회X"))
             else:
                 _ck = "③재방문없음"
