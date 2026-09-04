@@ -597,9 +597,8 @@ while t < args.frames:
                         _leak = True; break
                 if _leak: break
             if _leak:
-                _retry += 1
-                if fg is not None: forced_goals.insert(0, fg)   # 대본 목적지 재큐
-            if _leak: _retry += 1; continue
+                if fg is not None: forced_goals.insert(0, fg)   # 대본 목적지 재큐 (종전엔 버려졌다)
+                _retry += 1; continue
         _retry = 0
         route, ri = list(path.points), 0
     a, b = np.array(route[ri]), np.array(route[ri + 1])
