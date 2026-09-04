@@ -387,6 +387,7 @@ def reachable(q):
     _p = habitat_sim.ShortestPath(); _p.requested_start = np.array(cur, float); _p.requested_end = np.array(q, float)
     return bool(sim.pathfinder.find_path(_p)) and len(_p.points) >= 2
 
+oid_for_check = None
 def check_goals(pos, K, D):
     # ③ 대본: 옛 자리를 **보러 가는** 방문. evidence_goals 와 같은 [멀리→가까이] 구조이되 LOS 는 자리(점) 기준.
     # 평가기의 '확인 기회' = 옛 자리 4m 이내·시야 ±35°·2프레임 이상 — 가까운 목적지를 D=2m 로 두면 자연히 만족한다.
@@ -400,6 +401,8 @@ def check_goals(pos, K, D):
         if not (0.6 * D <= dn <= 1.4 * D): continue
         if not los_point(np.array(near, float) + np.array([0, 1.5, 0]), pos): continue
         if not (reachable(near) and reachable(far)): continue          # 섬 위 지점 제외 (house_0000·0003 확인 방문 미실행 원인)
+        if oid_for_check is not None and (line_of_sight(np.array(near, float) + np.array([0, 1.5, 0]), oid_for_check) or
+                                          line_of_sight(np.array(far, float) + np.array([0, 1.5, 0]), oid_for_check)): continue   # 새 자리 물체가 보이는 방향 제외
         out.append((("pt", np.array(far, float)), ("pt", np.array(near, float))))
         if len(out) >= K: break
     return out
@@ -550,6 +553,7 @@ ri, t = 0, 0
 yaw = 0.0
 _retry = 0
 _dwell_left, _dwell_base, _just_dwelled, _dwelling = 0, 0.0, False, False
+_rej_dwell = False
 while t < args.frames:
     if ri + 1 >= len(route) and args.dwell > 0 and not _just_dwelled:
         # 도착 → 체류: 방 체류 가중에 비례한 길이만큼 제자리에서 고개 스캔. 실제 생활은 대부분
@@ -560,6 +564,7 @@ while t < args.frames:
         _dwell_base, _just_dwelled = yaw, True
         route, ri = [np.array(cur, float), np.array(cur, float)], 0
     elif ri + 1 >= len(route):
+        _rej_dwell = _just_dwelled              # 거부되면 이 값을 되돌려 다음 프레임에 바로 다시 고른다(체류 없이)
         _just_dwelled = False
         if forced_goals or (MOVE and MOVE.get("dwell")):
             # 대본 목적지가 있으면 그 방, 아니면 방 체류 가중(③ 제외 방은 뺀다)
@@ -568,6 +573,7 @@ while t < args.frames:
                 fg = forced_goals.pop(0)
                 if isinstance(fg, tuple) and fg[0] == "pt": goal = np.array(fg[1], float)
                 else: r_pick = fg
+                if os.environ.get("SCRIPT_DEBUG"): print("  [대본] t=%d pop %s (남은 %d, retry %d)" % (len(live), "pt%s" % np.round(fg[1][[0, 2]], 1).tolist() if isinstance(fg, tuple) else fg, len(forced_goals), _retry), flush=True)
             else:
                 rs_ = [r for r in polys if r not in excluded_rooms] or list(polys)
                 wv = np.array([MOVE["dwell"].get(_rtype(r), 0.1) for r in rs_], float)
@@ -587,11 +593,13 @@ while t < args.frames:
                 if _nf <= 3: forced_goals.insert(0, fg)
                 else: print("  ⚠ 대본 목적지 포기(경로 없음 3회): %s" % (fg if not isinstance(fg, tuple) else "pt"), flush=True)
             continue
-        if excluded_rooms and _retry < 30 and any(
+        _is_pt = isinstance(fg, tuple) and fg[0] == "pt"
+        if excluded_rooms and _retry < 30 and not _is_pt and any(
                 room_at(float(q[0]), float(q[2])) in excluded_rooms for q in path.points):
             _retry += 1
             if fg is not None: forced_goals.insert(0, fg)   # ⚠️ 종전엔 재추첨마다 대본 목적지가 **버려졌다**(§157: 확인 방문 미실행)
-            continue          # ③ 대본: 제외 방을 **경유**하는 경로도 버린다
+            _just_dwelled = _rej_dwell
+            continue          # ③ 대본: 제외 방을 **경유**하는 경로도 버린다 (확인 방문 pt 목적지는 예외 — 경유는 허용, 시선 누출만 검사)
         if hidden_oids and _retry < 30:
             # ③ 대본: 경로 위 어느 지점(눈높이)에서든 ③ 물체가 12m 안에서 **시선에 들어오면** 버린다
             # (옷장 속 시계가 침실 문 너머로 보이던 실측 — 방 제외만으로는 못 막는다)
@@ -608,9 +616,10 @@ while t < args.frames:
                     if np.linalg.norm(tg - camq) < 12.0 and line_of_sight(camq, ho):
                         _leak = True; break
                 if _leak: break
-            if _leak:
+            if _leak and not (_is_pt and _retry >= 6):        # 확인 방문은 6회까지만 시선 누출로 거부, 그 뒤 수락
                 if fg is not None: forced_goals.insert(0, fg)   # 대본 목적지 재큐 (종전엔 버려졌다)
-                _retry += 1; continue
+                _retry += 1; _just_dwelled = _rej_dwell; continue
+        if os.environ.get("SCRIPT_DEBUG") and fg is not None: print("  [대본] t=%d 경로 수락 → %s (%d점)" % (len(live), "pt" if isinstance(fg, tuple) else fg, len(path.points)), flush=True)
         _retry = 0
         route, ri = list(path.points), 0
     a, b = np.array(route[ri]), np.array(route[ri + 1])
@@ -673,7 +682,7 @@ while t < args.frames:
                         excluded_rooms.add(real); hidden_oids.append(oid)
                         # 종전: 원래 방 재방문만 → 옛 자리를 안 봐서 27건 중 24건이 '확인기회X/재방문없음'(§157).
                         # 옛 자리 2m 시선 지점을 2회 방문(사이에 저체류 방 경유)해 '확인 기회'를 대본이 보장한다.
-                        _cvs = check_goals(_oldp, 2, 2.0)
+                        oid_for_check = oid; _cvs = check_goals(_oldp, 2, 2.0); oid_for_check = None
                         _low = sorted(polys, key=lambda r: (MOVE or {}).get("dwell", {}).get(_rtype(r), 0.1))
                         _low = [r for r in _low if r not in excluded_rooms]
                         for _j, (_gf, _gn) in enumerate(_cvs):
