@@ -164,6 +164,12 @@ if not a.from_poses:
             ok = (z > 0.3) & (D[v, u] > 0.3)
             if ok.sum() >= 8: fr.append(float(np.median(D[v, u][ok] / z[ok])))
         return float(np.median(fr)) if fr else float("nan"), len(fr)
+if a.from_poses:                                  # COLMAP 블록을 건너뛰었으니 정렬 입력(gm·src·dst)만 여기서 만든다
+    gm = g["map"]; assert len(gm) == len(maps), "gt.map %d ≠ map 프레임 %d" % (len(gm), len(maps))
+    src, dst = [], []
+    for nm, m in zip(names_map, gm):
+        if nm in P: src.append(P[nm][0]); dst.append([m["apos"][0], 1.5, m["apos"][1]])
+    src, dst = np.array(src), np.array(dst)
 S_FIX = 1.0 if a.from_poses else None
 if a.scale == "da" and not a.from_poses:
     _sda, _nf = da_scale(ra, a.da_n); S_FIX = _sda * a.da_k
