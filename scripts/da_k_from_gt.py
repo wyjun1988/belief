@@ -24,12 +24,19 @@ for k in idx:
     with torch.no_grad(): d = mdl(**proc(images=img, return_tensors="pt").to(DEV)).predicted_depth
     D = torch.nn.functional.interpolate(d[None], size=(H, W), mode="bicubic", align_corners=False)[0, 0].float().cpu().numpy()
     fr = []
+    fx = W / 2.0                                       # hfov 90° 핀홀
     for oid, b in m["box"].items():
         gd = m["dist"].get(oid)
         if gd is None or not (a.min_d <= gd <= a.max_d): continue
-        u = int(np.clip((b[0] + b[2]) / 2, 2, W - 3)); v = int(np.clip((b[1] + b[3]) / 2, 2, H - 3))
-        z = float(np.median(D[v-2:v+3, u-2:u+3]))
-        if z > 0.1: fr.append(gd / z)              # dist 는 수평거리, DA 는 광축 깊이 — 눈높이 물체는 근사 동일
+        bw, bh = b[2] - b[0], b[3] - b[1]
+        if bw < 40 or bh < 40: continue                # 작은 박스는 중심이 배경에 떨어진다
+        x0, x1 = int(max(0, b[0])), int(min(W, b[2])); y0, y1 = int(max(0, b[1])), int(min(H, b[3]))
+        patch = D[y0:y1, x0:x1]
+        if patch.size < 100: continue
+        z = float(np.percentile(patch, 20))            # 물체는 배경 앞 → 박스 안 깊이의 하위 20%
+        u = (b[0] + b[2]) / 2.0; beta = np.arctan((u - W / 2.0) / fx)
+        zg = gd * np.cos(beta)                          # 수평거리 → 광축 깊이
+        if z > 0.1: fr.append(zg / z)
     if fr: per.append(float(np.median(fr))); rat += fr
 K = float(np.median(rat)) if rat else float("nan")
 print("K = GT/DA 중앙 %.3f · 표본 %d(프레임 %d) · 프레임간 산포 %.2f  (HSSD 기준 0.468)" % (K, len(rat), len(per), float(np.std(per) / (np.median(per) + 1e-9)) if per else 0))
