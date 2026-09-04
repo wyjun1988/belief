@@ -554,6 +554,15 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             _e = [i for i in vis_i if ts[i] <= cut]
             _l = [i for i in vis_i if ts[i] > cut]
             _nlate = len(_l)
+            # 진단: 방 게이트(arm==record) 없이 기하만으로 자리를 본 후반 프레임 — 기록 방이 틀려 X 가 된 경우를 가른다
+            _nlate_any = 0
+            for i in range(len(ts)):
+                m = live[ts[i]]
+                if ts[i] <= cut or m.get("yaw") is None or m.get("apos") is None: continue
+                dx = spot[0] - m["apos"][0]; dz = spot[2] - m["apos"][1]
+                if np.hypot(dx, dz) > ABS_DIST: continue
+                if abs((np.degrees(np.arctan2(dx, dz)) - m["yaw"] + 180) % 360 - 180) > ABS_ANG: continue
+                _nlate_any += 1
             _mode = os.environ.get("ABS_MODE", "spot")
             if _mode in ("spot", "both"):
                 # v4 자리-국소: 프레임 전역 TS 는 오검출 바닥에 묻힌다(진단 §DIAG).
@@ -617,7 +626,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 _ck = "②재촬영"
             elif _revis:
                 _ck = ("③belief대상" if _nlate < 0 else
-                       "③확인기회O" if _nlate >= 2 else "③확인기회X")
+                       "③확인기회O" if _nlate >= 2 else
+                       ("③기록없음" if not record else          # 초기맵에 그 타입이 없다 → 확인할 기록 자체가 없음(초기맵 재현율)
+                        "③확인기회X(기록방오류)" if (_nlate_any >= 2) else "③확인기회X"))
             else:
                 _ck = "③재방문없음"
         else:
