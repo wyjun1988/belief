@@ -30,6 +30,8 @@ ap.add_argument("--chunk", type=int, default=8, help="한 번에 푸는 live 프
 ap.add_argument("--live-step", type=int, default=1, help="live N장마다 1장 (긴 에피소드)")
 ap.add_argument("--res", type=int, default=518, help="VGGT 입력 해상도(기본 518)")
 ap.add_argument("--model", default="facebook/VGGT-1B")
+ap.add_argument("--inlier-th", type=float, default=0.35, help="앵커 RANSAC 인라이어 문턱(정규화 잔차)")
+ap.add_argument("--min-inliers", type=int, default=5, help="정렬에 필요한 최소 앵커 수")
 ap.add_argument("--rms-max", type=float, default=0.5, help="앵커 정렬 rms(상대) 상한 — 넘으면 그 묶음 기권")
 ap.add_argument("--da-model", default="depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf")
 ap.add_argument("--da-n", type=int, default=24, help="척도 추정에 쓸 프레임 수")
@@ -148,7 +150,7 @@ def umeyama_rigid(X, Y):
     return s, R, cy - s * (R @ cx)
 rows = [dict(name="map/" + maps[i], c=[round(float(v), 4) for v in Cm[k]], f=[round(float(v), 4) for v in Fm[k]])
         for k, i in enumerate(midx)]
-nchunk = int(np.ceil(len(lives) / a.chunk)); nok = 0; _rmss = []; last_c = None
+nchunk = int(np.ceil(len(lives) / a.chunk)); nok = 0; _rmss = []; _nins = []; last_c = None
 for ci in range(nchunk):
     grp = lives[ci * a.chunk:(ci + 1) * a.chunk]
     if not grp: continue
@@ -172,13 +174,28 @@ for ci in range(nchunk):
     except Exception as e:
         log("묶음 %d 실패: %s" % (ci, str(e)[:80])); continue
     na = len(order)
-    s_, R_, t_ = umeyama_rigid(C[:na], Cm[order])
-    res = np.linalg.norm((s_ * (R_ @ C[:na].T)).T + t_ - Cm[order], axis=1)
-    rms = float(np.sqrt((res ** 2).mean())) / (float(np.std(Cm[order])) + 1e-9)
-    _rmss.append(rms)
+    # 앵커 전부/전무 정렬은 한 장만 어긋나도(방 전환·급회전 구간) 묶음 전체를 버린다.
+    # → 3점 RANSAC 으로 **맞는 앵커만** 골라 정렬한다. 최소 인라이어 수는 --min-inliers.
+    _A, _B = C[:na], Cm[order]; _sc = float(np.std(_B)) + 1e-9
+    _best = None
+    _rng = np.random.default_rng(0)
+    for _ in range(60 if na > 3 else 1):
+        _i3 = _rng.choice(na, 3, replace=False) if na > 3 else np.arange(na)
+        try: _s3, _R3, _t3 = umeyama_rigid(_A[_i3], _B[_i3])
+        except Exception: continue
+        _e = np.linalg.norm((_s3 * (_R3 @ _A.T)).T + _t3 - _B, axis=1) / _sc
+        _in = _e < a.inlier_th
+        if _best is None or _in.sum() > _best.sum(): _best = _in
+    if _best is None or _best.sum() < a.min_inliers: _best = np.ones(na, bool)
+    _use = _best if _best.sum() >= a.min_inliers else np.ones(na, bool)
+    s_, R_, t_ = umeyama_rigid(_A[_use], _B[_use])
+    res = np.linalg.norm((s_ * (R_ @ _A[_use].T)).T + t_ - _B[_use], axis=1)
+    rms = float(np.sqrt((res ** 2).mean())) / _sc
+    _nin = int(_use.sum())
+    _rmss.append(rms); _nins.append(_nin)
     if ci == 0:
-        log("첫 묶음 진단: 앵커 %d · 척도 %.3f · 잔차(m) %s · 정규화 rms %.3f · 지도중심 산포 %.2f" % (
-            na, s_, np.round(res, 2).tolist(), rms, float(np.std(Cm[order]))))
+        log("첫 묶음 진단: 앵커 %d(인라이어 %d) · 척도 %.3f · 잔차(m) %s · 정규화 rms %.3f · 지도중심 산포 %.2f" % (
+            na, _nin, s_, np.round(res, 2).tolist(), rms, float(np.std(Cm[order]))))
     if rms > a.rms_max: continue                      # 앵커가 안 맞는 묶음은 기권
     nok += 1
     for k, f in enumerate(grp):
@@ -191,6 +208,6 @@ with open(out, "w") as fo:
     for r in rows: fo.write(json.dumps(r) + "\n")
 if _rmss:
     _q = np.percentile(_rmss, [10, 50, 90])
-    log("앵커 정렬 rms 분위 10/50/90 = %.3f / %.3f / %.3f (상한 %.2f)" % (_q[0], _q[1], _q[2], a.rms_max))
+    log("앵커 정렬 rms 분위 10/50/90 = %.3f / %.3f / %.3f (상한 %.2f) · 인라이어 중앙 %d/%d" % (_q[0], _q[1], _q[2], a.rms_max, int(np.median(_nins)) if _nins else 0, a.anchors))
     if nok == 0: log("⚠️ 전부 기권 — rms 중앙값이 상한보다 크면 --rms-max 를 그 값 이상으로. 중앙값이 1 이상이면 정렬 자체가 실패(앵커 검색 불량).")
 log("→ %s · 지도 %d · live %d/%d (묶음 채택 %d/%d)" % (out, len(midx), len(rows) - len(midx), n_live0, nok, nchunk))
