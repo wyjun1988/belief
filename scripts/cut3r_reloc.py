@@ -22,6 +22,7 @@ ap.add_argument("house"); ap.add_argument("--out", default=None)
 ap.add_argument("--cut3r-root", required=True, help="git clone 한 CUT3R 디렉터리 (src/ 가 있는 곳)")
 ap.add_argument("--model-path", required=True, help="체크포인트 .pth (cut3r_512_dpt_4_64.pth 권장)")
 ap.add_argument("--size", type=int, default=512, help="입력 크기(512 또는 224)")
+ap.add_argument("--query-frames", default=None, help="json {house:[t,…]} — 이 프레임들만 세션 뒤에 추가(scripts/query_frames.py)")
 ap.add_argument("--live-step", type=int, default=4)
 ap.add_argument("--map-max", type=int, default=0, help="0=지도 전부")
 ap.add_argument("--max-frames", type=int, default=2000, help="한 세션에 넣는 총 프레임 상한(메모리 보호)")
@@ -53,7 +54,10 @@ maps = sorted(f for f in os.listdir(os.path.join(hd, "map")) if f.endswith(".jpg
 lives = sorted(f for f in os.listdir(os.path.join(hd, "live")) if f.endswith(".jpg"))
 n_live0 = len(lives)
 if a.map_max and len(maps) > a.map_max: maps = maps[:: int(np.ceil(len(maps) / a.map_max))][:a.map_max]
-if a.live_step > 1: lives = lives[::a.live_step]
+if a.query_frames:
+    _q = set("%06d.jpg" % t for t in json.load(open(a.query_frames)).get(hn, [])); lives = [f for f in lives if f in _q]
+    log("질의 프레임 모드: %d/%d" % (len(lives), n_live0))
+elif a.live_step > 1: lives = lives[::a.live_step]
 names = ["map/" + f for f in maps] + ["live/" + f for f in lives]
 if len(names) > a.max_frames:
     log("⚠️ 프레임 %d > 상한 %d — live 를 더 성기게(--live-step) 하거나 --max-frames 를 올려라" % (len(names), a.max_frames)); names = names[:a.max_frames]

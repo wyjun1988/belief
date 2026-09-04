@@ -220,3 +220,13 @@ python scripts/vggt_reloc.py <house> --out ~/khcache/vggt/raw_<h>.jsonl \
 - 나머지 live 는 묶음마다 **시간상 이웃인 전역-통과 live 프레임**을 앵커로 쓴다(지점 회전 앵커와 달리 서로 겹친다).
 보고: 끝줄 `지도 N · live M/전체 (묶음 채택 k/K)` 와 `앵커 정렬 rms 분위`, 그리고 2-2 정렬·평가 결과 줄. **채택이 0 이면 전역
 통과의 live 표본만이라도 `--from-poses` 로 평가**하면 된다(표본 포즈만으로도 커버리지 1/16 의 정직한 표가 나온다).
+
+## 14. 질의 프레임만 국소화 (2026-09-04) — 1fps 전부를 이어 붙이지 않는다
+평가기가 live 포즈를 쓰는 프레임은 **검증기가 채점한 후보 프레임**(②) 과 그 근처(③)뿐이다(타겟당 수십 장).
+```bash
+THOR_ROOT=<og4> A3_PREFIX=<a3 캐시 접두사> VERIFY_JSONL=<검증 점수 jsonl> python scripts/query_frames.py --out q.json
+python scripts/vggt_reloc.py <house> --query-frames q.json --anchor-mode window --anchors 12 --chunk 4 --map-max 400 --out raw_<h>.jsonl
+python scripts/cut3r_reloc.py <house> --query-frames q.json …   # CUT3R 도 같은 스위치
+```
+지도는 0-e 의 **연속 보행 매핑**이어야 한다(회전만 있는 지도는 앵커 구간에 시차가 없다). 묶음이 작아진 만큼 앵커를 12장으로 늘린다.
+채택 프레임 수가 곧 커버리지다 — 원본 대비가 아니라 **질의 프레임 대비**로 보고(`live 표본 등록 N/M`).

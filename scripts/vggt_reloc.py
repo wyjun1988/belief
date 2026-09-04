@@ -28,6 +28,7 @@ ap.add_argument("--anchor-mode", default="window", choices=["window", "topk"], h
 ap.add_argument("--selfcheck", action="store_true", help="지도 프레임 부분집합을 두 번째 통과로 다시 풀어 지도 통과와의 sim3 잔차를 본다 — 실패 원인이 검색인지 규약/재현성인지 가른다")
 ap.add_argument("--anchors", type=int, default=8, help="live 묶음마다 함께 넣는 지도 앵커 수")
 ap.add_argument("--chunk", type=int, default=8, help="한 번에 푸는 live 프레임 수")
+ap.add_argument("--query-frames", default=None, help="json {house:[t,…]} — 이 프레임들만 국소화(평가기가 포즈를 쓰는 검증 후보 프레임). scripts/query_frames.py 가 만든다. 1fps 전부를 이어 붙이지 않는다")
 ap.add_argument("--live-step", type=int, default=1, help="live N장마다 1장 (긴 에피소드)")
 ap.add_argument("--res", type=int, default=518, help="VGGT 입력 해상도(기본 518)")
 ap.add_argument("--model", default="facebook/VGGT-1B")
@@ -53,7 +54,11 @@ log("VGGT 적재 · %s · %s" % (DEV, DT))
 maps = sorted(f for f in os.listdir(os.path.join(hd, "map")) if f.endswith(".jpg"))
 lives = sorted(f for f in os.listdir(os.path.join(hd, "live")) if f.endswith(".jpg"))
 n_live0 = len(lives)
-if a.live_step > 1: lives = lives[::a.live_step]
+if a.query_frames:
+    _q = json.load(open(a.query_frames)).get(hn, [])
+    _qs = set("%06d.jpg" % t for t in _q); lives = [f for f in lives if f in _qs]
+    log("질의 프레임 모드: %d/%d 장만 국소화" % (len(lives), n_live0))
+elif a.live_step > 1: lives = lives[::a.live_step]
 log("매핑 %d · live %d(원본 %d)" % (len(maps), len(lives), n_live0))
 
 import tempfile, shutil
