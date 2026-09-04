@@ -171,6 +171,7 @@ if a.from_poses:                                  # COLMAP 블록을 건너뛰�
         if nm in P: src.append(P[nm][0]); dst.append([m["apos"][0], 1.5, m["apos"][1]])
     src, dst = np.array(src), np.array(dst)
 S_FIX = 1.0 if a.from_poses else None
+if a.from_poses: map_ok = True; rm = None; ra = None
 if a.scale == "da" and not a.from_poses:
     _sda, _nf = da_scale(ra, a.da_n); S_FIX = _sda * a.da_k
     log("DA 척도: SfM→m 비율 %.3f (프레임 %d) × 상수 %.3f = %.3f — 정렬은 회전·병진만" % (_sda, _nf, a.da_k, S_FIX))
