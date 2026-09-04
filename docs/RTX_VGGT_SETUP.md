@@ -230,3 +230,16 @@ python scripts/cut3r_reloc.py <house> --query-frames q.json …   # CUT3R 도 �
 ```
 지도는 0-e 의 **연속 보행 매핑**이어야 한다(회전만 있는 지도는 앵커 구간에 시차가 없다). 묶음이 작아진 만큼 앵커를 12장으로 늘린다.
 채택 프레임 수가 곧 커버리지다 — 원본 대비가 아니라 **질의 프레임 대비**로 보고(`live 표본 등록 N/M`).
+
+## 15. 최종 판정 절차 (2026-09-04) — 한 채, 한 번, GT sim3 진단으로 끝낸다
+로컬(HSSD)에서 VGGT 지도는 **GT 로 sim3 를 맞춰도 ATE 2.99 m** 였다(§159) — 정렬이 아니라 재구성 자체가 틀린 것. OG 에서
+같은 진단을 한 번만 하면 VGGT 를 쓸지 말지가 정해진다(0-e 의 보행 지도가 만들어진 뒤):
+```bash
+git pull
+THOR_ROOT=<og4> A3_PREFIX=<a3> VERIFY_JSONL=<검증jsonl> python scripts/query_frames.py --out q.json
+python scripts/vggt_reloc.py <house_0000> --query-frames q.json --global-live-step 1 --map-max 400 --res 518 --out raw_vggt.jsonl
+python scripts/sfm_reloc.py <house_0000> --from-poses raw_vggt.jsonl --scale gt --align gt --out /tmp/gt.jsonl   # 진단(GT 사용, 채점 아님)
+python scripts/sfm_reloc.py <house_0000> --from-poses raw_vggt.jsonl --scale da --align sites --out pose_vggt.jsonl # 실제 판
+```
+보내 줄 것: 두 실행의 `정렬(` 줄(인라이어·rms)과 `live 커버리지 …` 줄. **GT sim3 인라이어 ≥0.8 이면** VGGT 채택(그 뒤 라벨 정렬만
+손보면 된다), **<0.5 이면 VGGT 종료 → CUT3R**(`docs/RTX_CUT3R_SETUP.md`). 중간이면 두 줄 다 보내 달라.
