@@ -23,6 +23,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("house")
 ap.add_argument("--out", default=None)
 ap.add_argument("--map-max", type=int, default=96, help="지도 재구성에 넣을 매핑 프레임 상한(메모리). 초과하면 균등 표본")
+ap.add_argument("--anchor-mode", default="window", choices=["window", "topk"], help="window=매핑워크의 **연속 구간**(서로 겹쳐 VGGT 가 묶어 풀 수 있다) · topk=기술자 상위(흩어져 있어 서로 연결 불가 → rms>1 로 전부 기권)")
+ap.add_argument("--selfcheck", action="store_true", help="지도 프레임 부분집합을 두 번째 통과로 다시 풀어 지도 통과와의 sim3 잔차를 본다 — 실패 원인이 검색인지 규약/재현성인지 가른다")
 ap.add_argument("--anchors", type=int, default=8, help="live 묶음마다 함께 넣는 지도 앵커 수")
 ap.add_argument("--chunk", type=int, default=8, help="한 번에 푸는 live 프레임 수")
 ap.add_argument("--live-step", type=int, default=1, help="live N장마다 1장 (긴 에피소드)")
@@ -103,6 +105,22 @@ if Dm is not None:
     del dm
 Cm = Cm * scale
 
+if a.selfcheck:
+    # 지도 프레임의 연속 구간을 **두 번째 통과**로 다시 풀어, 지도 통과와 sim3 로 맞춰 본다.
+    # 잔차가 작으면 VGGT 규약·재현성은 정상이고 문제는 앵커 검색 → window 모드로 해결된다.
+    def _um(X, Y):
+        n = len(X); cx, cy = X.mean(0), Y.mean(0); H = (X - cx).T @ (Y - cy) / n
+        U, S, Vt = np.linalg.svd(H); d = np.sign(np.linalg.det(Vt.T @ U.T)); R = Vt.T @ np.diag([1, 1, d]) @ U.T
+        var = float(((X - cx) ** 2).sum() / n); sc = float((S[:2].sum() + d * S[2]) / max(var, 1e-9))
+        return sc, R, cy - sc * (R @ cx)
+    for tag, idx in (("연속 8장", list(range(0, 8))), ("연속 8장(중간)", list(range(len(midx) // 2, len(midx) // 2 + 8))),
+                     ("흩어진 8장", list(range(0, len(midx), max(1, len(midx) // 8)))[:8])):
+        C2, F2, _ = run([mpaths[i] for i in idx])
+        sc, R2, t2 = _um(C2, Cm[idx])
+        r = np.linalg.norm((sc * (R2 @ C2.T)).T + t2 - Cm[idx], axis=1)
+        log("자가검사 %s: 잔차 중앙 %.3fm · 정규화 rms %.3f" % (tag, float(np.median(r)), float(np.sqrt((r**2).mean())) / (float(np.std(Cm[idx])) + 1e-9)))
+    log("→ '연속' 이 작고 '흩어진' 이 크면 원인은 앵커 검색(= --anchor-mode window 로 해결). 둘 다 크면 VGGT 규약/재현성 문제.")
+
 # ── 3. 검색용 전역 기술자 (의존성 0: 32x32 회색조 정규화 코사인) ──
 def desc(path):
     g = np.asarray(Image.open(path).convert("L").resize((32, 32)), np.float32).ravel()
@@ -130,12 +148,17 @@ for ci in range(nchunk):
     gp = [os.path.join(hd, "live", f) for f in grp]
     q = np.stack([desc(p) for p in gp]).mean(0)
     _by_desc = np.argsort(-(Dm_desc @ q))
-    if last_c is not None:                       # 직전 묶음 위치 근처가 훨씬 믿을 만하다(1fps 라도 사람은 순간이동하지 않는다)
+    if a.anchor_mode == "window":
+        # ⚠️ 흩어진 앵커는 서로 시야가 겹치지 않아 VGGT 가 한 묶음 안에서 연결하지 못한다(정규화 rms > 1, 전부 기권).
+        # 매핑워크는 순서가 곧 경로이므로 **연속 구간**을 쓰면 앵커끼리 겹쳐 국소적으로 강체가 된다.
+        _c = int(_by_desc[0]) if last_c is None else int(np.argmin(np.linalg.norm(Cm - last_c, axis=1)))
+        _h = a.anchors // 2
+        _lo = max(0, min(_c - _h, len(midx) - a.anchors)); order = np.arange(_lo, min(_lo + a.anchors, len(midx)))
+    elif last_c is not None:
         _by_pos = np.argsort(np.linalg.norm(Cm - last_c, axis=1))
-        order = list(dict.fromkeys(list(_by_pos[:a.anchors // 2]) + list(_by_desc[:a.anchors])))[:a.anchors]
+        order = np.array(list(dict.fromkeys(list(_by_pos[:a.anchors // 2]) + list(_by_desc[:a.anchors])))[:a.anchors])
     else:
-        order = list(_by_desc[:a.anchors])
-    order = np.array(order)
+        order = np.array(list(_by_desc[:a.anchors]))
     paths = [mpaths[i] for i in order] + gp
     try:
         C, F, _ = run(paths)

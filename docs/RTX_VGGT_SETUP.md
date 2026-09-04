@@ -106,3 +106,33 @@ git pull
 python scripts/vggt_reloc.py <house_0000> --out ~/khcache/vggt/raw_house_0000.jsonl \
   --live-step 4 --anchors 12 --rms-max 0.6
 ```
+
+## 9. rms 1.0 초과 (2026-09-04 2차) — 앵커가 서로 안 겹친다
+분위수 1.069 / 1.338 / 1.548 은 "문턱이 빡빡하다"가 아니라 **앵커 8장이 서로 정합되지 않았다**는 뜻이다.
+원인: 기술자 상위 8장은 집 안 여기저기에 **흩어져 있어 서로 시야가 겹치지 않는다**. VGGT 는 한 묶음을 **함께** 푸는
+모델이라, 서로 안 겹치는 이미지들은 상대 위치를 정할 근거가 없다. 지도 통과(60장 연속 경로)에서는 프레임이 사슬로
+이어져 있어 잘 풀렸던 것이다.
+
+**조치(푸시됨): `--anchor-mode window`(기본)** — 매핑워크는 순서가 곧 경로이므로 **연속 구간 8장**을 앵커로 쓴다.
+구간 중심은 첫 묶음에선 기술자 최상위, 이후엔 직전 묶음 위치의 최근접 지도 프레임.
+
+**먼저 자가검사 한 번**(1분, 원인 확정):
+```bash
+git pull
+python scripts/vggt_reloc.py <house_0000> --selfcheck --live-step 999 --out /tmp/sc.jsonl
+```
+세 줄이 찍힌다:
+```
+자가검사 연속 8장:     잔차 중앙 …m · 정규화 rms …
+자가검사 연속 8장(중간): …
+자가검사 흩어진 8장:   …
+```
+- **연속이 작고(≲0.2) 흩어진 것이 크면** → 원인 확정, 아래 본 실행으로 진행.
+- **셋 다 크면** → VGGT 좌표 규약이나 재현성 문제이니 그 세 줄을 보내 달라(내가 extrinsic 해석을 고친다).
+
+본 실행:
+```bash
+python scripts/vggt_reloc.py <house_0000> --out ~/khcache/vggt/raw_house_0000.jsonl \
+  --live-step 4 --anchor-mode window --anchors 8 --rms-max 0.5
+```
+그래도 채택이 0 이면 `--anchors 12 --chunk 4` 로 (앵커 구간을 넓히고 묶음을 줄여 앵커 비중을 키운다).
