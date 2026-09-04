@@ -22,6 +22,7 @@ from PIL import Image
 ap = argparse.ArgumentParser()
 ap.add_argument("house")
 ap.add_argument("--out", default=None)
+ap.add_argument("--global-live-step", type=int, default=0, help="단일 전역 통과: 지도 전부 + live N장마다 1장을 **한 번에** 푼다(0=끔). 이 live 프레임들은 이후 묶음의 앵커가 된다 — 시간상 이웃이라 서로 겹친다(지점 회전 앵커의 무시차 문제 회피)")
 ap.add_argument("--map-max", type=int, default=96, help="지도 재구성에 넣을 매핑 프레임 상한(메모리). 초과하면 균등 표본")
 ap.add_argument("--anchor-mode", default="window", choices=["window", "topk"], help="window=매핑워크의 **연속 구간**(서로 겹쳐 VGGT 가 묶어 풀 수 있다) · topk=기술자 상위(흩어져 있어 서로 연결 불가 → rms>1 로 전부 기권)")
 ap.add_argument("--selfcheck", action="store_true", help="지도 프레임 부분집합을 두 번째 통과로 다시 풀어 지도 통과와의 sim3 잔차를 본다 — 실패 원인이 검색인지 규약/재현성인지 가른다")
@@ -83,12 +84,16 @@ def run(paths):
     D = pred["depth"][0].float().cpu().numpy()[..., 0] if "depth" in pred else None
     return C, F, D
 
-# ── 1. 지도: 한 번의 전방 통과 ──
+# ── 1. 지도: 한 번의 전방 통과 (+ 선택: live 표본을 같은 통과에 넣어 전역 앵커로) ──
 midx = list(range(len(maps)))
 if len(midx) > a.map_max: midx = midx[:: int(np.ceil(len(midx) / a.map_max))][:a.map_max]
 mpaths = [os.path.join(hd, "map", maps[i]) for i in midx]
-Cm, Fm, Dm = run(mpaths)
-log("지도 재구성 %d프레임 · 중심 산포 %.2f" % (len(mpaths), float(np.std(Cm))))
+gl_idx = list(range(0, len(lives), a.global_live_step)) if a.global_live_step > 0 else []
+gpaths = [os.path.join(hd, "live", lives[i]) for i in gl_idx]
+Call, Fall, Dall = run(mpaths + gpaths)
+Cm, Fm = Call[:len(mpaths)], Fall[:len(mpaths)]; Dm = Dall[:len(mpaths)] if Dall is not None else None
+Cg, Fg = Call[len(mpaths):], Fall[len(mpaths):]
+log("전역 통과 %d프레임 (지도 %d + live 표본 %d) · 지도 중심 산포 %.2f" % (len(mpaths) + len(gpaths), len(mpaths), len(gpaths), float(np.std(Cm))))
 
 # ── 2. 척도: DA 메트릭 깊이 / VGGT 깊이 비율 중앙값 (GT 불필요) ──
 scale = 1.0
@@ -107,7 +112,7 @@ if Dm is not None:
     if rat: scale = float(np.median(rat))
     log("척도(DA/VGGT) %.3f · 프레임 %d · 산포 %.2f" % (scale, len(rat), float(np.std(rat) / (np.median(rat) + 1e-9))))
     del dm
-Cm = Cm * scale
+Cm = Cm * scale; Cg = Cg * scale
 
 def _um(X, Y):
     n = len(X); cx, cy = X.mean(0), Y.mean(0); H = (X - cx).T @ (Y - cy) / n
@@ -150,14 +155,28 @@ def umeyama_rigid(X, Y):
     return s, R, cy - s * (R @ cx)
 rows = [dict(name="map/" + maps[i], c=[round(float(v), 4) for v in Cm[k]], f=[round(float(v), 4) for v in Fm[k]])
         for k, i in enumerate(midx)]
+gl_set = set(gl_idx)
+for k, i in enumerate(gl_idx):          # 전역 통과에 들어간 live 는 그대로 확정 포즈
+    rows.append(dict(name="live/" + lives[i], c=[round(float(v), 4) for v in Cg[k]], f=[round(float(v), 4) for v in Fg[k]]))
 nchunk = int(np.ceil(len(lives) / a.chunk)); nok = 0; _rmss = []; _nins = []; last_c = None
 for ci in range(nchunk):
     grp = lives[ci * a.chunk:(ci + 1) * a.chunk]
     if not grp: continue
     gp = [os.path.join(hd, "live", f) for f in grp]
+    if gl_idx:
+        # 전역 앵커: 이 묶음과 **시간상 가장 가까운** 전역-통과 live 프레임들 (서로 겹치는 이웃)
+        _c0 = ci * a.chunk + len(grp) // 2
+        _near = sorted(range(len(gl_idx)), key=lambda k: abs(gl_idx[k] - _c0))[:a.anchors]
+        paths = [gpaths[k] for k in _near] + gp
+        try: C, F, _ = run(paths)
+        except Exception as e: log("묶음 %d 실패: %s" % (ci, str(e)[:80])); continue
+        order = np.array(_near); Cm_anchor = Cg[order]
+    else:
+        Cm_anchor = None
     q = np.stack([desc(p) for p in gp]).mean(0)
     _by_desc = np.argsort(-(Dm_desc @ q))
-    if a.anchor_mode == "window":
+    if gl_idx: pass
+    elif a.anchor_mode == "window":
         # ⚠️ 흩어진 앵커는 서로 시야가 겹치지 않아 VGGT 가 한 묶음 안에서 연결하지 못한다(정규화 rms > 1, 전부 기권).
         # 매핑워크는 순서가 곧 경로이므로 **연속 구간**을 쓰면 앵커끼리 겹쳐 국소적으로 강체가 된다.
         _c = int(_by_desc[0]) if last_c is None else int(np.argmin(np.linalg.norm(Cm - last_c, axis=1)))
@@ -168,15 +187,17 @@ for ci in range(nchunk):
         order = np.array(list(dict.fromkeys(list(_by_pos[:a.anchors // 2]) + list(_by_desc[:a.anchors])))[:a.anchors])
     else:
         order = np.array(list(_by_desc[:a.anchors]))
-    paths = [mpaths[i] for i in order] + gp
-    try:
-        C, F, _ = run(paths)
-    except Exception as e:
-        log("묶음 %d 실패: %s" % (ci, str(e)[:80])); continue
+    if not gl_idx:
+        paths = [mpaths[i] for i in order] + gp
+        try:
+            C, F, _ = run(paths)
+        except Exception as e:
+            log("묶음 %d 실패: %s" % (ci, str(e)[:80])); continue
+        Cm_anchor = Cm[order]
     na = len(order)
     # 앵커 전부/전무 정렬은 한 장만 어긋나도(방 전환·급회전 구간) 묶음 전체를 버린다.
     # → 3점 RANSAC 으로 **맞는 앵커만** 골라 정렬한다. 최소 인라이어 수는 --min-inliers.
-    _A, _B = C[:na], Cm[order]; _sc = float(np.std(_B)) + 1e-9
+    _A, _B = C[:na], Cm_anchor; _sc = float(np.std(_B)) + 1e-9
     _best = None
     _rng = np.random.default_rng(0)
     for _ in range(60 if na > 3 else 1):
@@ -194,11 +215,12 @@ for ci in range(nchunk):
     _nin = int(_use.sum())
     _rmss.append(rms); _nins.append(_nin)
     if ci == 0:
-        log("첫 묶음 진단: 앵커 %d(인라이어 %d) · 척도 %.3f · 잔차(m) %s · 정규화 rms %.3f · 지도중심 산포 %.2f" % (
-            na, _nin, s_, np.round(res, 2).tolist(), rms, float(np.std(Cm[order]))))
+        log("첫 묶음 진단: 앵커 %d(인라이어 %d) · 척도 %.3f · 잔차(m) %s · 정규화 rms %.3f · 앵커 산포 %.2f" % (
+            na, _nin, s_, np.round(res, 2).tolist(), rms, float(np.std(Cm_anchor))))
     if rms > a.rms_max: continue                      # 앵커가 안 맞는 묶음은 기권
     nok += 1
     for k, f in enumerate(grp):
+        if (ci * a.chunk + k) in gl_set: continue          # 전역 통과에서 이미 확정
         c = s_ * (R_ @ C[na + k]) + t_; fv = R_ @ F[na + k]
         rows.append(dict(name="live/" + f, c=[round(float(v), 4) for v in c], f=[round(float(v), 4) for v in fv]))
         last_c = c
