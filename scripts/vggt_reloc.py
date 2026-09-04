@@ -86,7 +86,9 @@ def run(paths):
     R = E[:, :3, :3]; t = E[:, :3, 3]
     C = np.einsum("nij,nj->ni", np.transpose(R, (0, 2, 1)), -t)     # 카메라 중심
     F = np.transpose(R, (0, 2, 1))[:, :, 2]                         # 광축(카메라 +z) → 월드
+    U = -np.transpose(R, (0, 2, 1))[:, :, 1]                        # 카메라 up(−y) → 월드 (중력 추정용)
     D = pred["depth"][0].float().cpu().numpy()[..., 0] if "depth" in pred else None
+    run.last_U = U
     return C, F, D
 
 # ── 1. 지도: 한 번의 전방 통과 (+ 선택: live 표본을 같은 통과에 넣어 전역 앵커로) ──
@@ -95,7 +97,7 @@ if len(midx) > a.map_max: midx = midx[:: int(np.ceil(len(midx) / a.map_max))][:a
 mpaths = [os.path.join(hd, "map", maps[i]) for i in midx]
 gl_idx = list(range(0, len(lives), a.global_live_step)) if a.global_live_step > 0 else []
 gpaths = [os.path.join(hd, "live", lives[i]) for i in gl_idx]
-Call, Fall, Dall = run(mpaths + gpaths)
+Call, Fall, Dall = run(mpaths + gpaths); Uall = run.last_U
 Cm, Fm = Call[:len(mpaths)], Fall[:len(mpaths)]; Dm = Dall[:len(mpaths)] if Dall is not None else None
 Cg, Fg = Call[len(mpaths):], Fall[len(mpaths):]
 log("전역 통과 %d프레임 (지도 %d + live 표본 %d) · 지도 중심 산포 %.2f" % (len(mpaths) + len(gpaths), len(mpaths), len(gpaths), float(np.std(Cm))))
@@ -158,11 +160,11 @@ def umeyama_rigid(X, Y):
     var = float(((X - cx) ** 2).sum() / n)
     s = float((S[:2].sum() + d * S[2]) / max(var, 1e-9))
     return s, R, cy - s * (R @ cx)
-rows = [dict(name="map/" + maps[i], c=[round(float(v), 4) for v in Cm[k]], f=[round(float(v), 4) for v in Fm[k]])
+rows = [dict(name="map/" + maps[i], c=[round(float(v), 4) for v in Cm[k]], f=[round(float(v), 4) for v in Fm[k]], u=[round(float(v), 4) for v in Uall[k]])
         for k, i in enumerate(midx)]
 gl_set = set(gl_idx)
 for k, i in enumerate(gl_idx):          # 전역 통과에 들어간 live 는 그대로 확정 포즈
-    rows.append(dict(name="live/" + lives[i], c=[round(float(v), 4) for v in Cg[k]], f=[round(float(v), 4) for v in Fg[k]]))
+    rows.append(dict(name="live/" + lives[i], c=[round(float(v), 4) for v in Cg[k]], f=[round(float(v), 4) for v in Fg[k]], u=[round(float(v), 4) for v in Uall[len(mpaths) + k]]))
 nchunk = int(np.ceil(len(lives) / a.chunk)); nok = 0; _rmss = []; _nins = []; last_c = None
 for ci in range(nchunk):
     grp = lives[ci * a.chunk:(ci + 1) * a.chunk]

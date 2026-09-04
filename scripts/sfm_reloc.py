@@ -206,6 +206,15 @@ def align_by_labels():
         if not im.has_pose: continue
         cfw = im.cam_from_world() if callable(im.cam_from_world) else im.cam_from_world
         downs.append(cfw.rotation.matrix().T @ np.array([0, 1.0, 0]))
+    if not downs and a.from_poses:
+        # 외부 포즈: 어댑터가 카메라 up 벡터("u")를 내보내면 그것으로, 없으면 카메라 중심 평면의 법선(모두 눈높이)으로
+        _ups = [np.asarray(_d["u"], float) for _l in open(a.from_poses) for _d in [json.loads(_l)] if "u" in _d]
+        if _ups: downs = [-u_ for u_ in _ups]
+        else:
+            _Cc = np.array([P[k][0] for k in P]); _Cc = _Cc - _Cc.mean(0)
+            _n = np.linalg.svd(_Cc, full_matrices=False)[2][-1]
+            if _n[1] < 0: _n = -_n                      # 부호 추정: 원시 프레임의 +y 쪽 (어댑터가 u 를 주면 불필요)
+            downs = [-_n]; log("⚠️ 외부 포즈에 u 가 없어 중력을 카메라 평면 법선으로 추정(부호는 가정) — 어댑터를 갱신하라")
     up = -np.mean(downs, 0); up /= np.linalg.norm(up)
     # up → +y 회전
     v = np.cross(up, [0, 1.0, 0]); c = float(np.dot(up, [0, 1.0, 0])); vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])

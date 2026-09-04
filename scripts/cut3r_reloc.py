@@ -71,15 +71,16 @@ def _run_stream(plist):
     with torch.no_grad():
         out = inference(views, model, DEV, dtype=torch.float32, verbose=False)
     preds = out["pred"] if isinstance(out, dict) and "pred" in out else out
-    C, F, Dm = [], [], []
+    C, F, Dm, U_ = [], [], [], []
     for p_ in preds:
         pose = np.asarray((p_["camera_pose"] if "camera_pose" in p_ else p_["cam_pose"]).squeeze().detach().cpu().numpy() if torch.is_tensor(p_.get("camera_pose", p_.get("cam_pose"))) else p_.get("camera_pose", p_.get("cam_pose"))).reshape(4, 4)
-        C.append(pose[:3, 3]); F.append(pose[:3, :3] @ np.array([0, 0, 1.0]))
+        C.append(pose[:3, 3]); F.append(pose[:3, :3] @ np.array([0, 0, 1.0])); U_.append(-(pose[:3, :3] @ np.array([0, 1.0, 0])))
         pts = p_.get("pts3d_in_other_view", p_.get("pts3d"))
         if pts is not None:
             pts = pts.detach().cpu().numpy() if torch.is_tensor(pts) else np.asarray(pts)
             Dm.append(float(np.nanmedian(np.linalg.norm(pts.reshape(-1, 3) - pose[:3, 3], axis=1))))
         else: Dm.append(np.nan)
+    _run_stream.last_U = np.array(U_)
     return np.array(C), np.array(F), np.array(Dm)
 
 if a.selfcheck:
@@ -90,7 +91,7 @@ if a.selfcheck:
     log("→ 크면 세션이 live 를 넣을 때 지도까지 다시 쓴다는 뜻 — 그 경우 CUT3R 의 상태 고정(freeze) 옵션을 찾아 켜야 한다.")
     sys.exit(0)
 
-C, F, Dm = _run_stream(paths)
+C, F, Dm = _run_stream(paths); U = _run_stream.last_U
 log("세션 완료 · 중심 산포 %.2f · 대표깊이 중앙 %.2f" % (float(np.std(C)), float(np.nanmedian(Dm))))
 scale = 1.0
 if a.da_scale and np.isfinite(Dm).any():
@@ -105,6 +106,6 @@ if a.da_scale and np.isfinite(Dm).any():
     if rat: scale = float(np.median(rat)); log("DA 척도 비율 %.3f (프레임 %d · 산포 %.2f) — CUT3R 이 메트릭이면 ≈1" % (scale, len(rat), float(np.std(rat) / (np.median(rat) + 1e-9))))
 out = a.out or os.path.join(os.path.dirname(hd), "raw_cut3r_%s.jsonl" % hn)
 with open(out, "w") as fo:
-    for nm, c, f in zip(names, C * scale, F):
-        fo.write(json.dumps(dict(name=nm, c=[round(float(v), 4) for v in c], f=[round(float(v), 4) for v in f])) + "\n")
+    for nm, c, f, u in zip(names, C * scale, F, U):
+        fo.write(json.dumps(dict(name=nm, c=[round(float(v), 4) for v in c], f=[round(float(v), 4) for v in f], u=[round(float(v), 4) for v in u])) + "\n")
 log("→ %s · 지도 %d · live %d/%d" % (out, len(maps), len(names) - len(maps), n_live0))
