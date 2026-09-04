@@ -157,3 +157,25 @@ python scripts/vggt_reloc.py <house_0000> --selfcheck --live-step 999 --out /tmp
 ```bash
 python scripts/vggt_reloc.py <house> --out ~/khcache/vggt/raw_<h>.jsonl --live-step 4 --anchor-mode window --anchors 8 --rms-max 0.5
 ```
+
+## 11. r4 회신 (2026-09-04) — **VGGT 는 잠시 보류, COLMAP 기준선 먼저**
+r4 결과(재현성 0.0001 정상 · live 채택 0 · rms 중앙 1.444)는 우리 쪽 M2 재현과 **정확히 일치**한다. 같은 코드로 또 돌리면
+같은 값이 나올 뿐이니 **VGGT 실행은 잠시 멈춰 달라.** 원인 가설(아래)을 우리가 로컬에서 검증 중이고, 확정되면 설정을
+확정해 한 번에 보낸다.
+
+가설: 우리가 지도 프레임을 `--map-max` 로 **균등 표본**해 왔다. 128장을 20장으로 줄이면 "연속 앵커 8장"이 원본 기준으로는
+7장씩 건너뛴 것이라 서로 겹치지 않는다. VGGT 는 묶음을 함께 푸는 모델이라 안 겹치는 이미지들의 상대 위치를 정할 수 없다.
+→ **지도를 표본 없이 전부** 넣으면(96GB 면 128~184장 가능) 앵커가 원본 기준 진짜 인접 프레임이 되어 해결될 것으로 본다.
+검증 중(map-max 48 vs 96 의 자가검사 rms 비교). 결과가 나오면 12절에 확정 설정을 적는다.
+
+### 지금 할 것: COLMAP 기준선 표 채우기 (GPU 불필요, 채당 1분)
+완료된 house_0000·0001·0003 에 대해 **2-2 단계**를 돌려 주면 VGGT 없이도 비교표 첫 행들이 채워진다.
+```bash
+for h in <og4>/house_0000 <og4>/house_0001 <og4>/house_0003; do hn=$(basename $h)
+  python scripts/sfm_reloc.py $h --from-poses <그 채의 COLMAP 원시 포즈 jsonl> \
+    --scale da --align sites --work ~/khcache/colmap/$hn --out ~/khcache/colmap/pose_$hn.jsonl
+done
+```
+※ CPU COLMAP 을 우리 `sfm_reloc.py` 로 돌렸다면 `--from-poses` 없이 그대로 결과가 나와 있을 것이다. 그 경우
+`~/khcache/<...>/summary_<house>.json` 세 개를 보내 주면 된다. 필요한 값: `cov · ate_med · ate_lt05 · yaw_med · room_hit · sim3_inl · sec`.
+보고는 §2 표 형식(채별 한 줄) 그대로.
