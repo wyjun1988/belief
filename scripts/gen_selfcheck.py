@@ -41,6 +41,11 @@ def detect(path, ty):
 
 fails = 0
 for hd in sys.argv[1:]:
+    if not os.path.exists(os.path.join(hd, "gt.json")):
+        # 한 채의 생성 실패가 체인 전체를 죽이지 말 것 (h40c3: house_0019 가 gt.json 없이 끝나
+        # 자가검사가 예외로 중단 → 나머지 30채 벤치가 통째로 날아갔다). 실패로 세고 계속한다.
+        print("%s gt.json 없음 — 생성 실패채, 건너뜀" % os.path.basename(hd), flush=True)
+        fails += 1; continue
     g = json.load(open(os.path.join(hd, "gt.json"))); live = g["live"]
     wit = len(os.listdir(os.path.join(hd, "witness"))) if os.path.isdir(os.path.join(hd, "witness")) else 0
     pre = [0, 0]; post = [0, 0]
