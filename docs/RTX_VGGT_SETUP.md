@@ -136,3 +136,24 @@ python scripts/vggt_reloc.py <house_0000> --out ~/khcache/vggt/raw_house_0000.js
   --live-step 4 --anchor-mode window --anchors 8 --rms-max 0.5
 ```
 그래도 채택이 0 이면 `--anchors 12 --chunk 4` 로 (앵커 구간을 넓히고 묶음을 줄여 앵커 비중을 키운다).
+
+## 10. 연속 앵커도 rms>1 (2026-09-04 3차) — 전처리가 원인이었다
+자가검사에서 **연속 앵커도** rms>1 → 앵커 선택 문제가 아니라는 진단이 맞다. 원인은 내 코드의 순서 보장 방식이었다.
+
+`load_and_preprocess_images` 는 **묶음 전체를 공통 크기로 리사이즈**한다. 9절에서 순서를 지키려고 한 장씩 불렀더니
+프레임마다 크기·주점이 달라져 기하가 통째로 깨졌다(지도 통과도 함께 오염 → 두 통과가 서로 안 맞음).
+→ **임시 디렉터리에 `%04d_` 접두사 심볼릭 링크**를 만들어, 로더가 정렬해도 내 순서와 같게 하고 **전처리는 묶음으로** 되돌렸다.
+
+재현성 자가검사도 추가했다(동일 입력 재실행):
+```bash
+git pull
+python scripts/vggt_reloc.py <house_0000> --selfcheck --live-step 999 --out /tmp/sc.jsonl
+```
+네 줄이 찍힌다. **첫 줄 `자가검사 동일 N장 재실행` 의 정규화 rms 가 0 에 가까워야 정상**이다.
+- 첫 줄이 0 에 가깝고 "연속 8장"도 작으면 → 본 실행으로.
+- **첫 줄이 크면** 모델이 같은 입력에 다른 결과를 낸다는 뜻이니 그 줄을 보내 달라(그때는 extrinsic 해석을 뜯는다).
+
+본 실행은 9절과 동일:
+```bash
+python scripts/vggt_reloc.py <house> --out ~/khcache/vggt/raw_<h>.jsonl --live-step 4 --anchor-mode window --anchors 8 --rms-max 0.5
+```

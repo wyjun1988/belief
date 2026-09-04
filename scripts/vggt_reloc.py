@@ -53,18 +53,20 @@ n_live0 = len(lives)
 if a.live_step > 1: lives = lives[::a.live_step]
 log("매핑 %d · live %d(원본 %d)" % (len(maps), len(lives), n_live0))
 
-_ORDER_SAFE = os.environ.get("VGGT_ORDER_SAFE", "1") == "1"
+import tempfile, shutil
+_STAGE = tempfile.mkdtemp(prefix="vggt_order_")
 def _load(paths):
-    """⚠️ vggt 의 load_and_preprocess_images 는 버전에 따라 경로를 **내부 정렬**한다. 그러면 [앵커…, live…]
-    순서가 뒤섞여 앵커 행이 엉뚱한 프레임이 되고 정렬이 전부 실패한다(2026-09-04 RTX 158/158 기권).
-    → 한 장씩 전처리해 쌓아 순서를 보장한다."""
-    if not _ORDER_SAFE: return load_and_preprocess_images(paths)
-    ts_ = [load_and_preprocess_images([p]) for p in paths]
-    sh = {tuple(t.shape[-2:]) for t in ts_}
-    if len(sh) > 1:                       # 크기가 제각각이면 최소 크기로 자른다
-        h = min(t.shape[-2] for t in ts_); w = min(t.shape[-1] for t in ts_)
-        ts_ = [t[..., :h, :w] for t in ts_]
-    return torch.cat(ts_, 0)
+    """순서 보장 + 전처리 일관성. 두 가지를 동시에 만족해야 한다:
+      (1) load_and_preprocess_images 는 버전에 따라 경로를 **내부 정렬**한다 → 순서가 깨진다.
+      (2) 그렇다고 한 장씩 부르면 **묶음 공통 크기 리사이즈**가 사라져 프레임마다 스케일·주점이 달라지고
+          기하가 통째로 깨진다(2026-09-04 자가검사에서 연속 앵커도 rms>1 이 나온 원인).
+    → 임시 디렉터리에 `%03d_` 접두사로 심볼릭 링크를 걸어 **정렬해도 내 순서와 같게** 만들고, 전처리는 묶음으로 한다."""
+    for f in os.listdir(_STAGE): os.unlink(os.path.join(_STAGE, f))
+    lp = []
+    for k, p_ in enumerate(paths):
+        d_ = os.path.join(_STAGE, "%04d_%s" % (k, os.path.basename(p_)))
+        os.symlink(os.path.abspath(p_), d_); lp.append(d_)
+    return load_and_preprocess_images(sorted(lp))
 def run(paths):
     """VGGT 한 번 → (중심 (N,3), 전방 (N,3), 깊이 (N,H,W) 또는 None)"""
     im = _load(paths).to(DEV)
@@ -105,14 +107,19 @@ if Dm is not None:
     del dm
 Cm = Cm * scale
 
+def _um(X, Y):
+    n = len(X); cx, cy = X.mean(0), Y.mean(0); H = (X - cx).T @ (Y - cy) / n
+    U, S, Vt = np.linalg.svd(H); d = np.sign(np.linalg.det(Vt.T @ U.T)); R = Vt.T @ np.diag([1, 1, d]) @ U.T
+    var = float(((X - cx) ** 2).sum() / n); sc = float((S[:2].sum() + d * S[2]) / max(var, 1e-9))
+    return sc, R, cy - sc * (R @ cx)
 if a.selfcheck:
     # 지도 프레임의 연속 구간을 **두 번째 통과**로 다시 풀어, 지도 통과와 sim3 로 맞춰 본다.
     # 잔차가 작으면 VGGT 규약·재현성은 정상이고 문제는 앵커 검색 → window 모드로 해결된다.
-    def _um(X, Y):
-        n = len(X); cx, cy = X.mean(0), Y.mean(0); H = (X - cx).T @ (Y - cy) / n
-        U, S, Vt = np.linalg.svd(H); d = np.sign(np.linalg.det(Vt.T @ U.T)); R = Vt.T @ np.diag([1, 1, d]) @ U.T
-        var = float(((X - cx) ** 2).sum() / n); sc = float((S[:2].sum() + d * S[2]) / max(var, 1e-9))
-        return sc, R, cy - sc * (R @ cx)
+    C0r, _, _ = run(mpaths)                      # 동일 입력 재실행 — 재현성 확인 (여기서 실패하면 모델/전처리 문제)
+    _sc, _R0, _t0 = _um(C0r, Cm / scale if scale else Cm)
+    _r0 = np.linalg.norm((_sc * (_R0 @ C0r.T)).T + _t0 - (Cm / scale if scale else Cm), axis=1)
+    log("자가검사 동일 %d장 재실행: 잔차 중앙 %.4f · 정규화 rms %.4f (0 에 가까워야 정상)" % (
+        len(mpaths), float(np.median(_r0)), float(np.sqrt((_r0**2).mean())) / (float(np.std(Cm / (scale or 1))) + 1e-9)))
     for tag, idx in (("연속 8장", list(range(0, 8))), ("연속 8장(중간)", list(range(len(midx) // 2, len(midx) // 2 + 8))),
                      ("흩어진 8장", list(range(0, len(midx), max(1, len(midx) // 8)))[:8])):
         C2, F2, _ = run([mpaths[i] for i in idx])
