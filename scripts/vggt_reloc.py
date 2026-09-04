@@ -23,7 +23,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("house")
 ap.add_argument("--out", default=None)
 ap.add_argument("--global-live-step", type=int, default=0, help="단일 전역 통과: 지도 전부 + live N장마다 1장을 **한 번에** 푼다(0=끔). 이 live 프레임들은 이후 묶음의 앵커가 된다 — 시간상 이웃이라 서로 겹친다(지점 회전 앵커의 무시차 문제 회피)")
-ap.add_argument("--map-max", type=int, default=96, help="지도 재구성에 넣을 매핑 프레임 상한(메모리). 초과하면 균등 표본")
+ap.add_argument("--map-max", type=int, default=0, help="지도 재구성에 넣을 매핑 프레임 상한(메모리). 초과하면 균등 표본. **0 = 전부**(기본, RTX 96GB)")
 ap.add_argument("--anchor-mode", default="window", choices=["window", "topk"], help="window=매핑워크의 **연속 구간**(서로 겹쳐 VGGT 가 묶어 풀 수 있다) · topk=기술자 상위(흩어져 있어 서로 연결 불가 → rms>1 로 전부 기권)")
 ap.add_argument("--selfcheck", action="store_true", help="지도 프레임 부분집합을 두 번째 통과로 다시 풀어 지도 통과와의 sim3 잔차를 본다 — 실패 원인이 검색인지 규약/재현성인지 가른다")
 ap.add_argument("--anchors", type=int, default=8, help="live 묶음마다 함께 넣는 지도 앵커 수")
@@ -74,7 +74,12 @@ def _load(paths):
     lp = []
     for k, p_ in enumerate(paths):
         d_ = os.path.join(_STAGE, "%04d_%s" % (k, os.path.basename(p_)))
-        os.symlink(os.path.abspath(p_), d_); lp.append(d_)
+        if a.res and a.res != 518:                   # ⚠️ 종전엔 --res 가 로더에 전달되지 않아 무시됐다(392 와 518 결과가 동일했던 이유)
+            im_ = Image.open(p_).convert("RGB"); w_, h_ = im_.size; sc_ = a.res / float(max(w_, h_))
+            im_.resize((max(14, int(round(w_ * sc_ / 14)) * 14), max(14, int(round(h_ * sc_ / 14)) * 14)), Image.BICUBIC).save(d_, quality=92)
+        else:
+            os.symlink(os.path.abspath(p_), d_)
+        lp.append(d_)
     return load_and_preprocess_images(sorted(lp))
 def run(paths):
     """VGGT 한 번 → (중심 (N,3), 전방 (N,3), 깊이 (N,H,W) 또는 None)"""
@@ -94,7 +99,7 @@ def run(paths):
 
 # ── 1. 지도: 한 번의 전방 통과 (+ 선택: live 표본을 같은 통과에 넣어 전역 앵커로) ──
 midx = list(range(len(maps)))
-if len(midx) > a.map_max: midx = midx[:: int(np.ceil(len(midx) / a.map_max))][:a.map_max]
+if a.map_max > 0 and len(midx) > a.map_max: midx = midx[:: int(np.ceil(len(midx) / a.map_max))][:a.map_max]   # 0 = 전부
 mpaths = [os.path.join(hd, "map", maps[i]) for i in midx]
 gl_idx = list(range(0, len(lives), a.global_live_step)) if a.global_live_step > 0 else []
 gpaths = [os.path.join(hd, "live", lives[i]) for i in gl_idx]
