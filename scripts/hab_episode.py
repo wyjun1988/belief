@@ -556,7 +556,7 @@ while t < args.frames:
         _just_dwelled = False
         if forced_goals or (MOVE and MOVE.get("dwell")):
             # 대본 목적지가 있으면 그 방, 아니면 방 체류 가중(③ 제외 방은 뺀다)
-            r_pick = None; goal = None
+            r_pick = None; goal = None; fg = None
             if forced_goals:
                 fg = forced_goals.pop(0)
                 if isinstance(fg, tuple) and fg[0] == "pt": goal = np.array(fg[1], float)
@@ -577,7 +577,9 @@ while t < args.frames:
         if not sim.pathfinder.find_path(path) or len(path.points) < 2: continue
         if excluded_rooms and _retry < 30 and any(
                 room_at(float(q[0]), float(q[2])) in excluded_rooms for q in path.points):
-            _retry += 1; continue          # ③ 대본: 제외 방을 **경유**하는 경로도 버린다
+            _retry += 1
+            if fg is not None: forced_goals.insert(0, fg)   # ⚠️ 종전엔 재추첨마다 대본 목적지가 **버려졌다**(§157: 확인 방문 미실행)
+            continue          # ③ 대본: 제외 방을 **경유**하는 경로도 버린다
         if hidden_oids and _retry < 30:
             # ③ 대본: 경로 위 어느 지점(눈높이)에서든 ③ 물체가 12m 안에서 **시선에 들어오면** 버린다
             # (옷장 속 시계가 침실 문 너머로 보이던 실측 — 방 제외만으로는 못 막는다)
@@ -594,6 +596,7 @@ while t < args.frames:
                     if np.linalg.norm(tg - camq) < 12.0 and line_of_sight(camq, ho):
                         _leak = True; break
                 if _leak: break
+            if _leak: _retry += 1; if fg is not None: forced_goals.insert(0, fg)
             if _leak: _retry += 1; continue
         _retry = 0
         route, ri = list(path.points), 0
