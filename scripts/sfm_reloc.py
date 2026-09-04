@@ -170,7 +170,7 @@ if a.from_poses:                                  # COLMAP 블록을 건너뛰�
     for nm, m in zip(names_map, gm):
         if nm in P: src.append(P[nm][0]); dst.append([m["apos"][0], 1.5, m["apos"][1]])
     src, dst = np.array(src), np.array(dst)
-S_FIX = 1.0 if a.from_poses else None
+S_FIX = (1.0 if a.scale == "da" else None) if a.from_poses else None   # 외부 포즈: --scale da=어댑터가 준 미터 그대로(rigid) · --scale gt=척도까지 GT sim3 로(진단)
 if a.from_poses: map_ok = True; rm = None; ra = None
 if a.scale == "da" and not a.from_poses:
     _sda, _nf = da_scale(ra, a.da_n); S_FIX = _sda * a.da_k
