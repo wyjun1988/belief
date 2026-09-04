@@ -36,6 +36,7 @@ ap.add_argument("--inlier-th", type=float, default=0.35, help="앵커 RANSAC 인
 ap.add_argument("--min-inliers", type=int, default=5, help="정렬에 필요한 최소 앵커 수")
 ap.add_argument("--rms-max", type=float, default=0.5, help="앵커 정렬 rms(상대) 상한 — 넘으면 그 묶음 기권")
 ap.add_argument("--da-model", default="depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf")
+ap.add_argument("--da-k", type=float, default=0.468, help="DA-V2 metric 이 렌더에서 과대한 만큼의 데이터셋 상수(§146: HSSD 0.468). ⚠️ 빠뜨리면 지도가 2배 커져 정렬이 전부 실패한다(§159 원인). OG 는 1채로 재보정")
 ap.add_argument("--da-n", type=int, default=24, help="척도 추정에 쓸 프레임 수")
 a = ap.parse_args()
 
@@ -116,8 +117,8 @@ if Dm is not None:
         dd = torch.nn.functional.interpolate(dd[None], size=(H, W), mode="bicubic", align_corners=False)[0, 0].float().cpu().numpy()
         v = Dm[k]; ok = (v > 0.05) & (dd > 0.05)
         if ok.sum() > 500: rat.append(float(np.median(dd[ok] / v[ok])))
-    if rat: scale = float(np.median(rat))
-    log("척도(DA/VGGT) %.3f · 프레임 %d · 산포 %.2f" % (scale, len(rat), float(np.std(rat) / (np.median(rat) + 1e-9))))
+    if rat: scale = float(np.median(rat)) * a.da_k
+    log("척도(DA/VGGT) %.3f × 상수 %.3f = %.3f · 프레임 %d · 산포 %.2f" % (float(np.median(rat)) if rat else 1.0, a.da_k, scale, len(rat), float(np.std(rat) / (np.median(rat) + 1e-9)) if rat else 0.0))
     del dm
 Cm = Cm * scale; Cg = Cg * scale
 

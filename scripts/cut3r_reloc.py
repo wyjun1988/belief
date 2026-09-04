@@ -27,6 +27,7 @@ ap.add_argument("--live-step", type=int, default=4)
 ap.add_argument("--map-max", type=int, default=0, help="0=지도 전부")
 ap.add_argument("--max-frames", type=int, default=2000, help="한 세션에 넣는 총 프레임 상한(메모리 보호)")
 ap.add_argument("--da-scale", type=int, default=1, help="1=DA-V2 metric 깊이 비율로 척도 보정")
+ap.add_argument("--da-k", type=float, default=0.468, help="DA-V2 렌더 보정 상수(§146). OG 는 1채로 재보정")
 ap.add_argument("--da-model", default="depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf")
 ap.add_argument("--selfcheck", action="store_true", help="지도만 넣은 세션 vs 지도+live 세션에서 지도 포즈가 같은가(상태 안정성)")
 a = ap.parse_args()
@@ -103,7 +104,7 @@ if a.da_scale and np.isfinite(Dm).any():
         img = Image.open(paths[k]).convert("RGB")
         with torch.no_grad(): dd = dm(**dp(images=img, return_tensors="pt").to(DEV)).predicted_depth
         rat.append(float(np.median(dd.float().cpu().numpy())) / Dm[k])
-    if rat: scale = float(np.median(rat)); log("DA 척도 비율 %.3f (프레임 %d · 산포 %.2f) — CUT3R 이 메트릭이면 ≈1" % (scale, len(rat), float(np.std(rat) / (np.median(rat) + 1e-9))))
+    if rat: scale = float(np.median(rat)) * a.da_k; log("DA 척도 비율 %.3f × 상수 %.3f = %.3f (프레임 %d) — CUT3R 이 메트릭이면 비율≈1/상수" % (float(np.median(rat)), a.da_k, scale, len(rat)))
 out = a.out or os.path.join(os.path.dirname(hd), "raw_cut3r_%s.jsonl" % hn)
 with open(out, "w") as fo:
     for nm, c, f, u in zip(names, C * scale, F, U):
