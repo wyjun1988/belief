@@ -45,6 +45,9 @@ ap.add_argument("--map-sites", type=int, default=1,
                 help="매핑워크: 방당 촬영 지점 수 (최원점 샘플링으로 흩뿌림). 초기 등록은 일회성이라 무겁게 가도 "
                      "된다 — 지점 1개·6방향(36장/채)은 겹침이 없어 다시점 일치가 불가능했다 (2026-09-03)")
 ap.add_argument("--map-step", type=int, default=60, help="매핑워크 방향 간격(°). 45 면 8방향")
+ap.add_argument("--map-travel", type=float, default=0.0,
+                help="지점 사이를 걸으며 N m 마다 프레임 기록(0=끔). 제자리 회전만으로는 시차가 없어 SfM·피드포워드가 "
+                     "지도를 못 세운다(매핑 128장 중 4~7장만 등록). SPEC 3-b 와 같은 취지.")
 ap.add_argument("--remap", action="store_true",
                 help="매핑워크만 다시 돌려 기존 --out 의 map/ 과 gt.json[map] 을 교체 (live 는 그대로). "
                      "종전 매핑워크는 live 루프 뒤(이동 후 장면)에서 돌았고 좌표가 인스턴스 원점이라 "
@@ -406,6 +409,7 @@ if args.remap:
     for _f in glob.glob(os.path.join(_mapdir, "*.jpg")): os.remove(_f)
 os.makedirs(_mapdir, exist_ok=True)
 mi = 0
+_allsites = []
 for r, pl in polys.items():
     c = np.array(pl).mean(0)
     # 방당 --map-sites 지점: 방 폴리곤 안 보행점 후보 40개에서 최원점 샘플링 (서로 떨어진 시점)
@@ -420,8 +424,41 @@ for r, pl in polys.items():
     sites = [_cands[0]]
     while len(sites) < min(args.map_sites, len(_cands)):
         sites.append(max(_cands, key=lambda q: min(np.hypot(q[0]-s_[0], q[2]-s_[2]) for s_ in sites)))
-    for mp_pt in sites:
-      for yy in range(0, 360, args.map_step):
+    for mp_pt in sites: _allsites.append((r, mp_pt))
+
+# 촬영 포즈 목록: 지점 회전 + (선택) 지점 사이 이동 프레임. 순서는 탐욕 최근접 경로.
+_ord, _rem = [], list(range(len(_allsites)))
+while _rem:
+    if not _ord: _ord.append(_rem.pop(0))
+    else:
+        _p = _allsites[_ord[-1]][1]
+        _k = min(_rem, key=lambda i: float(np.hypot(_allsites[i][1][0] - _p[0], _allsites[i][1][2] - _p[2])))
+        _rem.remove(_k); _ord.append(_k)
+_poses = []
+for _si, _k in enumerate(_ord):
+    _r, _pt = _allsites[_k]
+    for _yy in range(0, 360, args.map_step): _poses.append((_r, _pt, float(_yy)))
+    if args.map_travel > 0 and _si + 1 < len(_ord):
+        _nxt = _allsites[_ord[_si + 1]][1]
+        _path = habitat_sim.ShortestPath(); _path.requested_start = _pt; _path.requested_end = _nxt
+        if sim.pathfinder.find_path(_path) and len(_path.points) >= 2:
+            _pts = [np.array(q, float) for q in _path.points]
+            _acc = 0.0
+            for _a2, _b2 in zip(_pts[:-1], _pts[1:]):
+                _seg = float(np.linalg.norm(_b2 - _a2))
+                if _seg < 1e-3: continue
+                _hd = float(np.degrees(np.arctan2(-(_b2[0] - _a2[0]), -(_b2[2] - _a2[2]))) % 360)
+                _d = args.map_travel - _acc
+                while _d < _seg:
+                    _q = _a2 + (_b2 - _a2) * (_d / _seg)
+                    _poses.append((_r, sim.pathfinder.snap_point(_q), _hd))
+                    _d += args.map_travel
+                _acc = (_acc + _seg) % args.map_travel
+print("매핑 포즈 %d (지점 %d · 이동프레임 %d · 간격 %.2fm)" % (
+    len(_poses), len(_allsites), len(_poses) - len(_allsites) * len(range(0, 360, args.map_step)), args.map_travel), flush=True)
+for _mpz in _poses:
+    if True:
+        r, mp_pt, yy = _mpz
         st = habitat_sim.AgentState(); st.position = mp_pt
         ry = np.radians(yy)
         st.rotation = np.quaternion(np.cos(ry / 2), 0, np.sin(ry / 2), 0)
