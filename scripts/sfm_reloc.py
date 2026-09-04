@@ -22,6 +22,7 @@ ap.add_argument("house")
 ap.add_argument("--work", default=None, help="DB·재구성 디렉터리 (기본 ~/khcache/sfm/<house>)")
 ap.add_argument("--vocab", default=os.path.expanduser("~/khcache/colmap/vocab_tree_faiss_flickr100K_words32K.bin"))
 ap.add_argument("--threads", type=int, default=4)
+ap.add_argument("--live-step", type=int, default=1, help="live 프레임 N장마다 1장만 SfM 에 넣는다(긴 에피소드용). 등록 안 된 프레임은 평가에서 기하 기권")
 ap.add_argument("--topk", type=int, default=20, help="vocab-tree 검색 이미지 수")
 ap.add_argument("--features", type=int, default=2048, help="프레임당 SIFT 상한. 질감이 많은 장면(v3c: 상한 없이 5,400개)에서 매칭이 제곱으로 느려진다")
 ap.add_argument("--out", default=None)
@@ -45,6 +46,8 @@ work = a.work or os.path.expanduser("~/khcache/sfm/%s" % hn); os.makedirs(work, 
 g = json.load(open(os.path.join(hd, "gt.json")))
 maps = sorted(f for f in os.listdir(os.path.join(hd, "map")) if f.endswith(".jpg"))
 lives = sorted(f for f in os.listdir(os.path.join(hd, "live")) if f.endswith(".jpg"))
+_nlive0 = len(lives)
+if a.live_step > 1: lives = lives[::a.live_step]
 names_map = ["map/" + f for f in maps]; names_live = ["live/" + f for f in lives]
 from PIL import Image
 W, H = Image.open(os.path.join(hd, "map", maps[0])).size; fx = W / 2.0          # hfov 90° 핀홀
@@ -64,7 +67,7 @@ if not os.path.exists(mk_ext):
     _so = pycolmap.SiftExtractionOptions(); _so.max_num_features = a.features; eo.sift = _so   # ⚠️ eo.sift 는 복사본을 돌려준다 — 통째로 대입해야 상한이 먹는다
     pycolmap.extract_features(db, hd, image_names=names_map + names_live, camera_mode=pycolmap.CameraMode.SINGLE,
                               camera_model="PINHOLE", reader_options=ro, extraction_options=eo, device=DEV)
-    open(mk_ext, "w").close(); log("SIFT 추출 map %d + live %d" % (len(maps), len(lives)))
+    open(mk_ext, "w").close(); log("SIFT 추출 map %d + live %d%s" % (len(maps), len(lives), (" (원본 %d 에서 %d장마다)" % (_nlive0, a.live_step)) if a.live_step > 1 else ""))
 if not os.path.exists(mk_mat):
     mo = pycolmap.FeatureMatchingOptions(); mo.num_threads = a.threads; mo.use_gpu = a.gpu
     if ap_matcher == "vocab":
@@ -310,7 +313,7 @@ if a.reject_outside and polys:
         if m.get("room_gt", m.get("room")) in polys:
             nhit += 1; hit += pip(r["apos"], polys[m.get("room_gt", m.get("room"))])
 ate, yerr = np.array(ate), np.array(yerr)
-cov = len(rows) / len(lives)
+cov = len(rows) / _nlive0
 log("live 커버리지 %.2f · ATE 중앙 %.2fm 평균 %.2fm <0.5m %.2f <1m %.2f · yaw 중앙 %.1f° <10° %.2f · 카메라방 적중 %s" % (
     cov, np.median(ate) if len(ate) else -1, ate.mean() if len(ate) else -1, (ate < 0.5).mean() if len(ate) else 0,
     (ate < 1).mean() if len(ate) else 0, np.median(yerr) if len(yerr) else -1, (yerr < 10).mean() if len(yerr) else 0,
@@ -380,7 +383,7 @@ if _mu:
     np.savez_compressed(os.path.join(work, "map_points_%s.npz" % hn), u=np.concatenate(_mu).astype(np.float32), v=np.concatenate(_mv).astype(np.float32),
                         d=np.concatenate(_md).astype(np.float32), k=np.concatenate(_mi).astype(np.int32))
     log("맵 프레임 SfM 점 %d (프레임 %d)" % (sum(len(x) for x in _mu), len(_mn)))
-json.dump(dict(house=hn, map_reg=(rm.num_reg_images() if rm is not None else 0), n_map=len(maps), map_joint=(not map_ok), live_reg=len(rows), live_reg_raw=n_before, n_live=len(lives), cov=cov, vmax=a.vmax, strict=a.strict,
+json.dump(dict(house=hn, map_reg=(rm.num_reg_images() if rm is not None else 0), n_map=len(maps), map_joint=(not map_ok), live_reg=len(rows), live_reg_raw=n_before, n_live=_nlive0, live_step=a.live_step, cov=cov, vmax=a.vmax, strict=a.strict,
                ate_med=float(np.median(ate)) if len(ate) else None, ate_lt05=float((ate < 0.5).mean()) if len(ate) else None,
                yaw_med=float(np.median(yerr)) if len(yerr) else None, room_hit=(hit / nhit) if nhit else None, n_room=nhit,
                reject_outside=bool(a.reject_outside), sim3_rms=float(rms), sim3_inl=INL, scale=float(s), scale_src=a.scale, align_src=a.align, da_k=a.da_k, mirror=bool(mirror), sec=time.time() - T0), open(os.path.join(work, "summary_%s.json" % hn), "w"), indent=1, default=float)
