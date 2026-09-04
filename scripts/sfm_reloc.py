@@ -372,6 +372,7 @@ with open(out, "w") as fo:
 # 맵 포즈 내보내기 + **지점 전파**: 매핑 프로토콜은 지점당 NA 각도(45° 스텝)다. 지점 회전 프레임은 시차가 없어 절반쯤 SfM 에
 # 안 붙는데, 같은 지점의 등록 프레임이 하나라도 있으면 위치는 그 평균, yaw 는 45°×(각도 차)로 채운다(프로토콜 지식, GT 아님).
 NA = int(os.environ.get("MAP_ANGLES", "8")); STEP = float(os.environ.get("MAP_YAW_STEP", "45"))
+if a.from_poses or any(m.get("travel") for m in gm): NA = 10**9   # 외부 포즈·이동 프레임 지도: 지점당 8각 블록 가정이 깨지므로 전파 끔
 mpose = {nm: to_ours(*P[nm]) for nm in names_map if nm in P}
 _sgn = []
 for b0 in range(0, len(names_map), NA):
