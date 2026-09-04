@@ -304,6 +304,10 @@ for i2, oid in enumerate(cands[:args.moves]):
         _in = [r for r in others if not any(k in _rtype(r) for k in
                                             ("outdoor", "balcony", "porch", "garage", "yard"))] or others
         _low = [r for r in _in if _dw.get(_rtype(r), 0.1) <= 0.35] or _in      # 실외는 ④ 몫 — ③ 목적지에서 제외
+        # ③ 목적지가 복도·현관·계단처럼 **어디서나 보이는 통로**면 이동 뒤 배회 중 새 자리가 눈에 들어와 ② 로 샌다(house_0003: hallway 34프레임)
+        _open = ("hallway", "corridor", "entryway", "entry", "stair", "landing", "foyer")
+        _low2 = [r for r in _low if not any(k in _rtype(r) for k in _open)]
+        if _low2: _low = _low2
         tgt = max(_low, key=lambda r: float(np.linalg.norm(cen[r] - cen[obj_room[oid]])))
     plan[int(rng.integers(args.frames // 5, args.frames * 3 // 5))] = (oid, tgt, role)
 print("이동 계획 %d건 (③대본 %d)" % (len(plan), sum(1 for v in plan.values() if v[2] == "c3")), flush=True)
