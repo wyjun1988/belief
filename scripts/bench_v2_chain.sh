@@ -22,6 +22,7 @@ if [ -z "$SCORER" ]; then
   if [ "$(uname)" = Darwin ] && [ -x "$HOME/mlx-venv/bin/python" ]; then SCORER=mlx; else SCORER=hf; fi
 fi
 MLX=${MLX:-$HOME/mlx-venv/bin/python}
+[ -x "$MLX" ] || MLX=$PY          # mlx-venv 가 없는 기계(M2)에서는 kx-venv 로 — 종전엔 조용히 빈 점수 파일을 만들고 벤치가 죽었다
 MODEL=${MODEL:-Qwen/Qwen3.5-9B}
 mkdir -p "$B2/cache" "$B2/scores"
 [ -f "$HSSD_DATASET" ] || { echo "HSSD_DATASET 없음: $HSSD_DATASET (HF hssd-hab 내려받기)"; exit 2; }
