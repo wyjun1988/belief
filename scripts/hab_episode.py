@@ -388,12 +388,12 @@ def reachable(q):
     return bool(sim.pathfinder.find_path(_p)) and len(_p.points) >= 2
 
 oid_for_check = None
-def check_goals(pos, K, D, avoid_visible=True):
+def check_goals(pos, K, D, avoid_visible=True, n_ang=16):
     # ③ 대본: 옛 자리를 **보러 가는** 방문. evidence_goals 와 같은 [멀리→가까이] 구조이되 LOS 는 자리(점) 기준.
     # 평가기의 '확인 기회' = 옛 자리 4m 이내·시야 ±35°·2프레임 이상 — 가까운 목적지를 D=2m 로 두면 자연히 만족한다.
     # 1차: 새 자리의 물체가 안 보이는 방향만 → 없으면 2차: 그 조건 없이 (물체가 보이면 ②로 넘어가는 것은 평가기가 가른다)
     out = []; start = float(rng.uniform(0, 360))
-    for ang in np.linspace(start, start + 360, 16, endpoint=False):
+    for ang in np.linspace(start, start + 360, n_ang, endpoint=False):
         a = np.radians(ang); dirv = np.array([np.sin(a), 0, np.cos(a)])
         near = sim.pathfinder.snap_point(np.array([pos[0], pos[1], pos[2]]) + D * dirv)
         far = sim.pathfinder.snap_point(np.array([pos[0], pos[1], pos[2]]) + (D + 1.5) * dirv)
@@ -406,7 +406,12 @@ def check_goals(pos, K, D, avoid_visible=True):
                                                             line_of_sight(np.array(far, float) + np.array([0, 1.5, 0]), oid_for_check)): continue
         out.append((("pt", np.array(far, float)), ("pt", np.array(near, float))))
         if len(out) >= K: break
-    if not out and avoid_visible: return check_goals(pos, K, D, avoid_visible=False)
+    # 새 자리 물체가 보이면 ②(재관측)로 바뀌어 ③ 표본이 사라진다 → 가시 방향 허용 대신 **거리·각도 탐색을 넓힌다**(4차: 2/4채가 ② 로 샘)
+    if not out and avoid_visible:
+        for D2 in (2.8, 1.5, 3.5):
+            out = check_goals(pos, K, D2, avoid_visible=True, n_ang=32)
+            if out: break
+        if not out: print("  ⚠ ③ 확인 지점 없음(새 자리 물체가 모든 방향에서 보임) → 방 방문으로 후퇴", flush=True)
     return out
 
 def witness(oid, pos, t, k):
@@ -618,7 +623,7 @@ while t < args.frames:
                     if np.linalg.norm(tg - camq) < 12.0 and line_of_sight(camq, ho):
                         _leak = True; break
                 if _leak: break
-            if _leak and not (_is_pt and _retry >= 6):        # 확인 방문은 6회까지만 시선 누출로 거부, 그 뒤 수락
+            if _leak and not (_is_pt and _retry >= 12):       # 확인 방문은 12회까지 시선 누출로 거부(누출 수락 = ② 로 샘), 그 뒤 수락
                 if fg is not None: forced_goals.insert(0, fg)   # 대본 목적지 재큐 (종전엔 버려졌다)
                 _retry += 1; _just_dwelled = _rej_dwell; continue
         if os.environ.get("SCRIPT_DEBUG") and fg is not None: print("  [대본] t=%d 경로 수락 → %s (%d점)" % (len(live), "pt" if isinstance(fg, tuple) else fg, len(path.points)), flush=True)
