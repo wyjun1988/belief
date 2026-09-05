@@ -64,6 +64,14 @@ PRIOR_JSON = os.environ.get("PRIOR_JSON", "data/thor_prior.json")
 PR = json.load(open(PRIOR_JSON))
 # ── 위치·yaw 를 SfM 추정으로 대체 (사다리 '위치:SfM'): POSE_JSONL = {house,t,apos,yaw} ──
 POSE = None
+# 카메라방을 좌표 없이 정하는 경로 (매핑워크 검색) — scripts/room_retrieval.py 산출
+_RETR = None
+if os.environ.get("ROOM_JSONL"):
+    _RETR = {}
+    for _l in open(os.path.expanduser(os.environ["ROOM_JSONL"])):
+        _d = json.loads(_l); _RETR.setdefault(_d["house"], {})[int(_d["t"])] = _d["room"]
+    print("카메라방 검색 %d채 %d프레임" % (len(_RETR), sum(len(v) for v in _RETR.values())), flush=True)
+
 if os.environ.get("POSE_JSONL"):
     POSE = {}
     for _l in open(os.environ["POSE_JSONL"]):
@@ -85,7 +93,7 @@ LADDER = "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vi
     ("DA" if os.environ.get("GEO_DEPTH") else "GT") if _LG else "—",
     "실측" if VSC is not None else "모의(GT vis)",
     "GT(인스턴스선택·부재분할)" if _VISGT else "검출(경우분류만 GT)",
-    "SfM" if POSE is not None else "GT", "(열린공간 병합)" if os.environ.get("ROOM_GROUPS") == "1" else "",
+    ("검색" if os.environ.get("ROOM_JSONL") else "SfM" if POSE is not None else "GT"), "(열린공간 병합)" if os.environ.get("ROOM_GROUPS") == "1" else "",
     os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), "(광선만)" if os.environ.get("C0_RAYPICK") == "1" else "",
     ("(≤%sm)" % os.environ.get("C0_MAXD")) if os.environ.get("C0_MAXD") else "", "(방위다양)" if os.environ.get("C0_DIVERSE") == "1" else "", _ANCH_EX, _ANCH_TY, _ANCH_DP,
     (" · yaw:이동방향우선(정지시 투표)" if os.environ.get("YAW_ORDER") == "motion_first" else " · yaw대체:이동방향" if os.environ.get("YAW_FALLBACK") == "motion" else ""),
@@ -182,6 +190,19 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             else: m_["room"] = None                       # 포즈 없는 프레임: 카메라방 미상
         _hit = np.mean([m_["room"] == m_["room_gt"] for m_ in live.values() if m_["room"] is not None]) if _nr else 0
         print("  %s 카메라방 SfM 판정 %d/%d · GT 일치 %.2f" % (hn, _nr, len(live), _hit), flush=True)
+    # 카메라방: 좌표 없이 — 매핑워크 검색(ROOM_JSONL). 사다리 '카메라방:검색'
+    # (2026-09-05 사용자 지적: 이 프로젝트의 답은 방이지 좌표가 아니다. SfM/VGGT 재구성이
+    #  4채 중 3채 접히는데, 방 판정에는 3D 가 필요 없다 — 매핑워크 프레임의 사용자 방 라벨과
+    #  검출 프로파일 최근접이면 된다.)
+    if _RETR is not None:
+        _rr = _RETR.get(hn, {})
+        _n2 = 0
+        for t, m_ in live.items():
+            if "room_gt" not in m_: m_["room_gt"] = m_.get("room")
+            if int(t) in _rr: m_["room"] = _rr[int(t)]; _n2 += 1
+        _h2 = np.mean([m_["room"] == m_["room_gt"] for m_ in live.values()
+                       if m_.get("room") is not None and m_.get("room_gt") is not None])
+        print("  %s 카메라방 검색 판정 %d/%d · GT 일치 %.2f" % (hn, _n2, len(live), _h2), flush=True)
     arm = np.array([live[t]["room"] for t in ts])
     AS = S[:, nT:]
     im = {}; im_inst = {}
