@@ -38,6 +38,7 @@ ap.add_argument("--fast", action="store_true", help="전역 BA 를 덜 자주(1.
 ap.add_argument("--redo-map", action="store_true", help="DB(특징·매칭)는 두고 재구성만 다시 — 매퍼 노브 실험용")
 ap.add_argument("--minmatch", type=int, default=0, help="매퍼 min_num_matches (기본 15). 반복 구조에서 지도가 접히면 30~40 으로")
 ap.add_argument("--strict", action="store_true", help="PnP 등록 문턱 강화(abs_pose_min_num_inliers 60·inlier_ratio 0.4) — 반복 구조 유령 등록 억제")
+ap.add_argument("--map-only", action="store_true", help="정렬·포즈를 지도 단독 재구성(rec_map)에서만 — live 보행이 지도를 오염시키는지 가르는 진단")
 ap.add_argument("--seq-overlap", type=int, default=20, help="matcher=seq 의 순차 창(프레임). 지도가 0.2m 간격이면 20 ≈ 4m")
 ap.add_argument("--matcher", default="vocab", choices=["vocab", "exhaustive", "seq"], help="vocab: 순차+vocab-tree 검색(faiss 판 트리 필요) · exhaustive: 전수")
 ap.add_argument("--gpu", action="store_true", help="CUDA 박스(RTX)에서 SIFT·매칭을 GPU 로")
@@ -131,6 +132,11 @@ if not a.from_poses:
         ra = best_rec(pycolmap.incremental_mapping(db, hd, rec_all_dir, mapper_opts([], True), input_path=in_path))
     else:
         ra = best_rec(pycolmap.incremental_mapping(db, hd, rec_all_dir, mapper_opts([], False)))
+    if a.map_only and rm is not None:
+        # §165 계획 3단계: 정렬을 **지도 단독 재구성**으로만. 종전에는 joint(rec_all) 포즈로 정렬했는데,
+        # 새 데이터는 live 1200장 중 800장이 제자리(정지)라 joint 가 지도를 끌고 갈 수 있다.
+        # fix_existing_frames 가 실제로 지도를 고정했는지도 이 비교로 드러난다.
+        ra = rm; log("정렬 재료 = 지도 단독 재구성(map %d장) — joint 미사용" % rm.num_reg_images())
     if ra is None: sys.exit("live 등록 실패")
     n_live_reg = sum(1 for im in ra.images.values() if im.name.startswith("live/") and im.has_pose)
     log("live 등록: %d/%d" % (n_live_reg, len(lives)))
