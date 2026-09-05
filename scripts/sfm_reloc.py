@@ -38,7 +38,8 @@ ap.add_argument("--fast", action="store_true", help="전역 BA 를 덜 자주(1.
 ap.add_argument("--redo-map", action="store_true", help="DB(특징·매칭)는 두고 재구성만 다시 — 매퍼 노브 실험용")
 ap.add_argument("--minmatch", type=int, default=0, help="매퍼 min_num_matches (기본 15). 반복 구조에서 지도가 접히면 30~40 으로")
 ap.add_argument("--strict", action="store_true", help="PnP 등록 문턱 강화(abs_pose_min_num_inliers 60·inlier_ratio 0.4) — 반복 구조 유령 등록 억제")
-ap.add_argument("--matcher", default="vocab", choices=["vocab", "exhaustive"], help="vocab: 순차+vocab-tree 검색(faiss 판 트리 필요) · exhaustive: 전수")
+ap.add_argument("--seq-overlap", type=int, default=20, help="matcher=seq 의 순차 창(프레임). 지도가 0.2m 간격이면 20 ≈ 4m")
+ap.add_argument("--matcher", default="vocab", choices=["vocab", "exhaustive", "seq"], help="vocab: 순차+vocab-tree 검색(faiss 판 트리 필요) · exhaustive: 전수")
 ap.add_argument("--gpu", action="store_true", help="CUDA 박스(RTX)에서 SIFT·매칭을 GPU 로")
 a = ap.parse_args()
 
@@ -77,11 +78,16 @@ if not a.from_poses and not os.path.exists(mk_ext):
     open(mk_ext, "w").close(); log("SIFT 추출 map %d + live %d%s" % (len(maps), len(lives), (" (원본 %d 에서 %d장마다)" % (_nlive0, a.live_step)) if a.live_step > 1 else ""))
 if not a.from_poses and not os.path.exists(mk_mat):
     mo = pycolmap.FeatureMatchingOptions(); mo.num_threads = a.threads; mo.use_gpu = a.gpu
-    if ap_matcher == "vocab":
-        so = pycolmap.SequentialPairingOptions(); so.overlap = 8; so.loop_detection = False
-        pycolmap.match_sequential(db, matching_options=mo, pairing_options=so, device=DEV); log("순차 매칭(overlap 8)")
-        vo = pycolmap.VocabTreePairingOptions(); vo.vocab_tree_path = a.vocab; vo.num_images = a.topk; vo.num_threads = a.threads
-        pycolmap.match_vocabtree(db, matching_options=mo, pairing_options=vo, device=DEV); log("vocab-tree 매칭(top%d)" % a.topk)
+    if ap_matcher in ("vocab", "seq"):
+        # seq: 순차만 — vocab-tree 검색이 **반복 구조에서 거짓 루프**를 만드는 것이 §164 진단의 결론이라
+        # (GT sim3 자유척도에서도 인라이어 0.06~0.17) 검색을 빼고 시간 이웃만 잇는다. 대신 창을 넓힌다.
+        so = pycolmap.SequentialPairingOptions(); so.overlap = 8 if ap_matcher == "vocab" else a.seq_overlap
+        so.loop_detection = False
+        pycolmap.match_sequential(db, matching_options=mo, pairing_options=so, device=DEV)
+        log("순차 매칭(overlap %d)" % so.overlap)
+        if ap_matcher == "vocab":
+            vo = pycolmap.VocabTreePairingOptions(); vo.vocab_tree_path = a.vocab; vo.num_images = a.topk; vo.num_threads = a.threads
+            pycolmap.match_vocabtree(db, matching_options=mo, pairing_options=vo, device=DEV); log("vocab-tree 매칭(top%d)" % a.topk)
     else:                                   # 검색 없이 전수 — 1.3k 장이면 CPU 로 십수 분, 살아있는 vocab tree 가 없을 때
         xo = pycolmap.ExhaustivePairingOptions(); xo.block_size = 100
         pycolmap.match_exhaustive(db, matching_options=mo, pairing_options=xo, device=DEV); log("전수 매칭")
