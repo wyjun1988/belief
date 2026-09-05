@@ -265,7 +265,7 @@ def align_by_labels():
         for dy in np.arange(-3, 3.01, 0.5):
             y = np.radians(yaw + dy); Ry2 = np.array([[np.cos(y), 0, np.sin(y)], [0, 1, 0], [-np.sin(y), 0, np.cos(y)]]) @ Mm
             sp = np.array([Ry2 @ p for p, _ in sites])[:, [0, 2]]
-        cp = np.array([Ry2 @ q for q in cams])[:, [0, 2]] if len(cams) else np.zeros((0, 2))   # --map-only: live 0장
+            cp = np.array([Ry2 @ q for q in cams])[:, [0, 2]] if len(cams) else np.zeros((0, 2))   # --map-only: live 0장
             for dx in np.arange(-0.6, 0.61, 0.15):
                 for dz in np.arange(-0.6, 0.61, 0.15):
                     t2 = tt + [dx, dz]
