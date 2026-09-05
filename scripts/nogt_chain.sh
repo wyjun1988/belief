@@ -11,7 +11,8 @@ HAB=${HAB:-$HOME/miniforge3/envs/hab/bin/python}; PY=${PY:-$HOME/kx-venv/bin/pyt
 MLX=${MLX:-$HOME/mlx-venv/bin/python}
 [ -x "$MLX" ] || MLX=$PY          # M2 에는 mlx-venv 가 없다 — kx-venv 에 mlx_vlm 이 들어 있어 그대로 돈다
 HSSD_DATASET=${HSSD_DATASET:-$HOME/hssd-hab/hssd-hab-uncluttered.scene_dataset_config.json}
-TRAVEL=${TRAVEL:-0.35}; PAR=${PAR:-3}; THREADS=${THREADS:-3}; STEP=${STEP:-1}
+TRAVEL=${TRAVEL:-0.2}; SITES=${SITES:-3}; MSTEP=${MSTEP:-45}; PAR=${PAR:-3}; THREADS=${THREADS:-3}; STEP=${STEP:-1}
+FEAT=${FEAT:-4096}      # §163: 지도 밀도와 특징점이 재구성의 유일한 지렛대
 export KMP_DUPLICATE_LIB_OK=TRUE
 cd "$(dirname "$0")/.."; mkdir -p $SFM $B/scores
 
@@ -22,7 +23,7 @@ for SC in $(cat "$SCENES"); do
   H="$OUT/house_$(printf %04d $i)"; i=$((i+1))
   [ -d "$H" ] || continue
   rm -f "$H"/map/*.jpg                     # 지점 수가 줄면 옛 프레임이 남는다 — gt["map"] 은 통째로 갈린다
-  $HAB -u scripts/hab_episode.py --scene "$SC" --dataset "$HSSD_DATASET" --remap --map-travel $TRAVEL \
+  $HAB -u scripts/hab_episode.py --scene "$SC" --dataset "$HSSD_DATASET" --remap --map-travel $TRAVEL --map-sites $SITES --map-step $MSTEP \
     --seed $((i-1+SEED0)) --out "$H" 2>&1 | grep -aE "매핑 포즈|remap 완료" | sed "s|^|  $(basename $H) |"
 done
 fi
@@ -38,7 +39,7 @@ if [ "$STEP" -le 3 ]; then
 echo "=== 3. SfM 재국소화 (라벨 정렬·DA 척도 — GT 0) ==="
 N=$(ls -d $OUT/house_* | wc -l | tr -d ' ')
 ROOT=$OUT HOUSES=$N PAR=$PAR THREADS=$THREADS SFM=$SFM PY=$PY \
-  EXTRA="--align sites --scale da --fast" OUT=$SFM/pose_all.jsonl bash scripts/sfm_batch.sh 2>&1 | tail -40
+  EXTRA="--align sites --scale da --fast --features $FEAT" OUT=$SFM/pose_all.jsonl bash scripts/sfm_batch.sh 2>&1 | tail -40
 fi
 
 if [ "$STEP" -le 4 ]; then
