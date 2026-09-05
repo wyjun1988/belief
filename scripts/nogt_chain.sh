@@ -14,7 +14,7 @@ HSSD_DATASET=${HSSD_DATASET:-$HOME/hssd-hab/hssd-hab-uncluttered.scene_dataset_c
 TRAVEL=${TRAVEL:-0.2}; SITES=${SITES:-3}; MSTEP=${MSTEP:-45}; PAR=${PAR:-3}; THREADS=${THREADS:-3}; STEP=${STEP:-1}
 FEAT=${FEAT:-4096}      # §163: 지도 밀도와 특징점이 재구성의 유일한 지렛대
 export KMP_DUPLICATE_LIB_OK=TRUE
-cd "$(dirname "$0")/.."; mkdir -p $SFM $B/scores
+cd "$(dirname "$0")/.."; mkdir -p $SFM $B/scores $B/cache   # cache 를 안 만들어 4채 판이 조용히 죽었다(2026-09-05)
 
 if [ "$STEP" -le 1 ]; then
 echo "=== 1. 재매핑 (이동 프레임 ${TRAVEL}m) ==="
