@@ -38,6 +38,15 @@ DEV = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_a
 sys.path.insert(0, a.cut3r_root); sys.path.insert(0, os.path.join(a.cut3r_root, "src"))
 def _load_cut3r():
     """버전별 import 지점 — 실패하면 리포지토리 demo.py 의 import 세 줄로 바꿔 달라."""
+    # PyTorch ≥2.6 은 torch.load 기본이 weights_only=True 라 CUT3R 체크포인트(argparse Namespace 등 비텐서 객체 포함)를 못 연다
+    # (RTX 2026-09-07 보고). 리포지토리 안의 torch.load 호출을 다 고칠 수 없으니 기본값을 되돌린다. 신뢰하는 공식 체크포인트에만 쓴다.
+    import torch as _t, functools as _ft
+    if not getattr(_t.load, "_khronos_patched", False):
+        _orig = _t.load
+        @_ft.wraps(_orig)
+        def _load(*args, **kw):
+            kw.setdefault("weights_only", False); return _orig(*args, **kw)
+        _load._khronos_patched = True; _t.load = _load
     try:
         from dust3r.model import ARCroco3DStereo          # CUT3R 의 모델 클래스
         from dust3r.inference import inference             # 순차 추론(영속 상태)

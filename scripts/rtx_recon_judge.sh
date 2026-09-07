@@ -5,6 +5,7 @@
 # 규칙: GPU0 미접촉. 단계가 실패해도 다음으로 넘어가고 결과 파일에 FAIL 을 남긴다. 재실행하면 이미 있는 산출물은 건너뛴다.
 # 판정: [진단] sim3 정렬 인라이어 ≥0.4 이면 지도가 섰다(<0.2 접힘) · [실제] 카메라방 적중 ≥0.8 이면 채택선. HSSD 기준선은 docs/RTX_TASKS_20260907.md §4.
 set -u
+export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1     # PyTorch ≥2.6: CUT3R 체크포인트(비텐서 객체 포함) 적재 허용 — cut3r_reloc.py 의 패치와 이중 안전장치
 OG4=${OG4:?og4 디렉터리 (house_* 포함)}; RES=${RES:-$HOME/khcache/RTX_RECON_RESULTS.md}
 VG=${VG:-$HOME/khcache/vggt}; CR=${CR:-$HOME/khcache/cut3r}; CUT3R_ROOT=${CUT3R_ROOT:-}; CUT3R_CKPT=${CUT3R_CKPT:-}
 LSTEP=${LSTEP:-10}          # live 프레임 표본 간격 (질의 목록이 없으니 균일 표본: 1200장 → 120장)

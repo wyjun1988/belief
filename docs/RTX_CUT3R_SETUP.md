@@ -50,3 +50,6 @@ python scripts/sfm_reloc.py <house> --from-poses ~/khcache/cut3r/raw_<h>.jsonl -
 
 ## 5. 어디서 돌리나
 H100 이 비어 있으면 CUT3R 은 H100, VGGT 는 RTX GPU1 — **같은 4채, 같은 표**로 나란히. 둘 다 GPU0(BEHAVIOR)는 미접촉.
+- **`torch.load` weights_only 오류 (PyTorch ≥2.6, RTX 2026-09-07)**: `Weights only load failed` / `Unsupported global: argparse.Namespace` 류로 자가검사·본 실행이 시작 직후 죽는다.
+  → `git pull` 후의 `scripts/cut3r_reloc.py` 는 `torch.load` 기본값을 `weights_only=False` 로 되돌린다(공식 체크포인트만 쓰므로 안전). 셸에서 `export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` 을 붙이면 리포지토리의 다른 진입점(demo.py)도 같이 풀린다.
+  `rtx_recon_judge.sh` 는 이 변수를 스스로 설정한다.
