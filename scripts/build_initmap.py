@@ -54,13 +54,13 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     if _MPD:
         _f = os.path.join(os.path.expanduser(_MPD), _hn0, "map_pose_%s.jsonl" % _hn0)
         _pm = {json.loads(l)["name"]: json.loads(l) for l in open(_f)} if os.path.exists(_f) else {}
-        for _k, _m in enumerate(mp):
+        for _k, _m in enumerate(mp) if _pm else []:      # 포즈 파일이 없으면(점만 쓰는 경우) GT 스캔 포즈를 그대로 둔다
             _r = _pm.get("map/%04d.jpg" % _k)
             _m["apos_gt"], _m["yaw_gt"] = _m.get("apos"), _m.get("yaw")
             if _r and (os.environ.get("MAP_PROP", "1") == "1" or not _r.get("prop")): _m["apos"], _m["yaw"] = _r["apos"], _r["yaw"]; _npose += 1
             else: _m["apos"] = None                      # SfM 미등록 맵 프레임은 투영에서 뺀다
         print("  %s 맵 포즈 SfM 대체 %d/%d" % (_hn0, _npose, len(mp)), flush=True)
-    _DAD = os.environ.get("MAP_DEPTH") in ("da", "pts"); _DAK = float(os.environ.get("DA_K", "0.468"))
+    _DAD = os.environ.get("MAP_DEPTH") in ("da", "pts"); _DAK_ENV = os.environ.get("DA_K", "0.468"); _DAK = 1.0 if _DAK_ENV == "auto" else float(_DAK_ENV)
     _DAFB = os.environ.get("MAP_DEPTH") == "da"        # pts: SfM 점 깊이만(없으면 검출 버림) · da: 없으면 DA 깊이
     _MPTS = None                                     # 맵 프레임 SfM 점 (있으면 DA 보다 우선)
     if _MPD and os.environ.get("MAP_POINTS", "1") == "1":
@@ -76,11 +76,22 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         _dadev = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
         _daproc = AutoImageProcessor.from_pretrained(_dname); _damdl = AutoModelForDepthEstimation.from_pretrained(_dname).to(_dadev).eval()
         print("  거리: DA-V2 metric × %.3f (%s)" % (_DAK, _dadev), flush=True)
-    def _da_depth(img):
+    def _da_depth(img, k_=None):
         inp = _daproc(images=img, return_tensors="pt").to(_dadev)
         with torch.no_grad(): d = _damdl(**inp).predicted_depth
-        return torch.nn.functional.interpolate(d[None], size=img.size[::-1], mode="bicubic", align_corners=False)[0, 0].float().cpu().numpy() * _DAK
+        return torch.nn.functional.interpolate(d[None], size=img.size[::-1], mode="bicubic", align_corners=False)[0, 0].float().cpu().numpy() * (_DAK if k_ is None else k_)
     mfs = sorted(glob.glob(os.path.join(hd, "map", "*.jpg")))
+    if _DAFB and _DAK_ENV == "auto":
+        # DA 척도 자가보정: 스캔 지도의 삼각측량 점(미터) / DA 원시 깊이 의 중앙값 (HSSD 768px 는 0.468 이 아니라 0.52~0.65 — 채마다 다르다)
+        _rat = []
+        if _MPTS:
+            for _kk in sorted(_MPTS)[:: max(1, len(_MPTS) // 20)][:20]:
+                if _kk >= len(mfs): continue
+                _Dr = _da_depth(Image.open(mfs[_kk]).convert("RGB"), 1.0); _u, _v, _d = _MPTS[_kk]
+                _ui = np.clip(_u.astype(int), 0, _Dr.shape[1] - 1); _vi = np.clip(_v.astype(int), 0, _Dr.shape[0] - 1)
+                _dr = _Dr[_vi, _ui]; _ok = _dr > 0.05; _rat += list(_d[_ok] / _dr[_ok])
+        _DAK = float(np.median(_rat)) if len(_rat) >= 30 else 0.468
+        print("  %s DA 척도 자가보정 %.3f (점 %d)" % (hn, _DAK, len(_rat)), flush=True)
     if not mp or not mfs:
         print("  %s 매핑워크 없음 — 건너뜀" % hn, flush=True); continue
     vocab = list(np.load(fa, allow_pickle=True)["vocab"])
@@ -107,7 +118,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
 
     # 방×타입 점수 누적. GEO=1 이면 **투영으로 물체 위치를 추정해 방을 정한다**
     # (프레임의 room 을 그대로 쓰면 문 너머 물체가 옆방으로 오염 — §121 후속 실측 0.316)
-    acc = {}; cnt_ = {}; pts_ = {}
+    acc = {}; cnt_ = {}; pts_ = {}; raw_ = {}     # raw_: INITMAP_RAW=1 이면 투영점 원자료 [x, z, 점수, 카메라x, 카메라z, 프레임] 을 저장 → 군집 규칙을 OWL 재실행 없이 실험
     for k in range(0, min(len(mfs), len(mp)), 1):
         room = mp[k]["room"]
         im = Image.open(mfs[k]).convert("RGB")
@@ -147,6 +158,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                         _y0, _x0 = int(np.clip(_cy, 2, _Dk.shape[0] - 3)), int(np.clip(_cxp, 2, _Dk.shape[1] - 3))
                         d_ = float(np.median(_Dk[_y0-2:_y0+3, _x0-2:_x0+3]))
                     if not (0.3 < d_ < 12): continue
+                    d_ = d_ / max(0.3, float(np.cos(np.radians(pbx(cx)))))   # z-깊이(DA·SfM 점) → 시선 방향 거리. 빠져 있어 화면 가장자리 검출이 최대 29% 가까이 찍혔다(2026-09-07)
                 else:
                     # 거리: 그 화면 위치에 가장 가까운 GT 물체의 거리 (GT 재료)
                     cand = [(abs(((mp[k]["ctr"][o][0]) - cx)), o) for o in dmap]
@@ -156,6 +168,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     d_ = dmap[o_near]
                 pt = [ap[0] + d_ * np.sin(np.radians(b)), ap[1] + d_ * np.cos(np.radians(b))]
                 pts_.setdefault(v, []).append((pt, float(s[c]), (float(ap[0]), float(ap[1]))))
+                if os.environ.get("INITMAP_RAW") == "1": raw_.setdefault(v, []).append([round(float(pt[0]), 3), round(float(pt[1]), 3), round(float(s[c]), 4), round(float(ap[0]), 3), round(float(ap[1]), 3), int(k)])
                 rr = room_pt(pt)
                 # ⚠️ 거리 감쇠·관측수 가중은 **역효과**였다 (0.583→0.551, 2026-09-01):
                 # 둘 다 "가까이·자주 보인 것" 을 우대해 **관측자 방 편향을 되살린다** —
@@ -172,6 +185,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     # ── 인스턴스 분리: 투영점을 군집화해 **타입당 여러 방**을 허용 ──
     # 실제 주거는 의자·책이 여러 방에 흩어진다. 타입당 방 1개로 접으면 그 사실이
     # 통째로 사라진다(2026-09-01). 군집 반경 CLU m, 점수합 상위 MAXI 개까지.
+    if raw_: json.dump(raw_, open(os.path.join(os.path.realpath(hd), "initmap_raw.json"), "w"))
     CLU = float(os.environ.get("INITMAP_CLUSTER", "2.0"))
     MAXI = int(os.environ.get("INITMAP_MAXINST", "3"))
     inst_out = []

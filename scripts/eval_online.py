@@ -51,6 +51,34 @@ if os.environ.get("VERIFY_JSONL"):
         _d = json.loads(_l)
         VSC[(_d["house"], _d["oid"])] = _d["scored"]
     print("실검증 %d타겟" % len(VSC), flush=True)
+ABSV = None                                   # ③ 검증기 부재(abs_verify_mlx.py 산출): {(house, oid): {late:[[t, s_box, s_wide, sim, geo]], early:[...]}}
+if os.environ.get("ABS_VERIFY_JSONL"):
+    ABSV = {}
+    for _l in open(os.path.expanduser(os.environ["ABS_VERIFY_JSONL"])):
+        _r = json.loads(_l); ABSV[(_r["house"], _r["oid"])] = _r
+    ABSV_TP = float(os.environ.get("ABSV_TP", "0"))       # 양성 문턱(s_ac > τp = "있다")
+    ABSV_MINL = int(os.environ.get("ABSV_MINL", "2"))     # 최근 자리 프레임 최소 장수
+    ABSV_EARLY = os.environ.get("ABSV_EARLY", "1") == "1" # 이른 자리 프레임에 양성 ≥1 요구(없으면 스캔 관측으로 대신)
+    ABSV_MOB = float(os.environ.get("ABSV_MOB", "0.2"))   # 이동성 사전확률(PRIOR_JSON mobility) 이 이 값 미만인 타입(붙박이)은 부재 검사를 하지 않는다
+    ABSV_GEOFIRST = os.environ.get("ABSV_GEOFIRST", "1") == "1"   # 기하(포즈) 자리 프레임이 2장 이상이면 그것만 쓴다(문맥 검색은 보충용)
+    try: _MOB = json.load(open(os.environ.get("PRIOR_JSON", "data/thor_prior.json"))).get("mobility", {})   # PRIOR_JSON 변수는 아래에서 정의되므로 env 를 직접 읽는다
+    except Exception: _MOB = {}
+    if not _MOB: print("⚠️  ABS_VERIFY: mobility 사전확률 없음 → 붙박이 게이트 비활성", flush=True)
+    def absv_fired(hn_, oid_, ci=1, type_=None):
+        r_ = ABSV.get((hn_, oid_))
+        if not r_: return None
+        if type_ is not None and _MOB and _MOB.get(type_, 0.0) < ABSV_MOB: return None
+        late_ = r_["late"]
+        if os.environ.get("ABSV_GEOONLY", "0") == "1": late_ = [x for x in late_ if len(x) > 4 and x[4]]          # 기하(포즈) 자리 프레임만 — CLIP 문맥 프레임은 물체를 못 보는 비율 89%(c3, §166-18)
+        elif ABSV_GEOFIRST and sum((x[4] if len(x) > 4 else 0) for x in late_) >= 2: late_ = [x for x in late_ if len(x) > 4 and x[4]]
+        if len(late_) < ABSV_MINL: return None
+        if sum(x[ci] > ABSV_TP for x in late_) > 0: return False
+        _emin = float(os.environ.get("ABSV_EARLY_MIN", "0"))          # 이른 자리 프레임의 최고 점수가 이 값 이상이어야(있었다는 명확한 증거) 부재를 인정
+        if _emin > 0:
+            if not r_["early"]: return None
+            if max(x[ci] for x in r_["early"]) < _emin: return False
+        if ABSV_EARLY and r_["early"] and sum(x[ci] > ABSV_TP for x in r_["early"]) == 0: return False
+        return True
 GDEP = None
 _GSTRICT = os.environ.get("GEO_STRICT", "1") == "1"   # GEO_DEPTH 가 있으면 GT 거리로 후퇴하지 않는다(기권) — 사다리 표기를 사실로
 _GHIT = [0, 0]   # [DA 적중, GT 후퇴] — "거리:DA" 표기가 사실인지 계측 (2026-09-04)
@@ -97,8 +125,8 @@ LADDER = "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vi
     os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), "(광선만)" if os.environ.get("C0_RAYPICK") == "1" else "",
     ("(≤%sm)" % os.environ.get("C0_MAXD")) if os.environ.get("C0_MAXD") else "", "(방위다양)" if os.environ.get("C0_DIVERSE") == "1" else "", _ANCH_EX, _ANCH_TY, _ANCH_DP,
     (" · yaw:이동방향우선(정지시 투표)" if os.environ.get("YAW_ORDER") == "motion_first" else " · yaw대체:이동방향" if os.environ.get("YAW_FALLBACK") == "motion" else ""),
-    ("기하(%s)" % os.environ.get("ABS_MODE", "spot")) if ABS_GEO else "점수마진")
-_NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT", "위치:GT"))
+    ((("기하(%s)" % os.environ.get("ABS_MODE", "spot")) + (" 자리:GT⚠️" if os.environ.get("ABS_SPOT", "gt") == "gt" else " 자리:초기맵")) if ABS_GEO else "점수마진") + (" +검증기부재(%s)" % os.environ.get("ABS_VERIFY_MODE", "or") if os.environ.get("ABS_VERIFY_JSONL") else ""))
+_NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT", "위치:GT", "자리:GT"))   # 자리:GT = 부재 게이트가 GT 물체 원위치를 씀(2026-09-07 발견)
 print("재료 사다리 → " + LADDER, flush=True)
 if _NGT:
     print("⚠️  GT 재료 %d종 포함 — 이 수치를 '무GT' 라 부르지 말 것" % _NGT, flush=True)
@@ -382,12 +410,13 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         # ── 상태기계 ──
         # v3: 기록은 **불변** — 질의 시점에 검증된 최신 증거와 마진 비교만 한다.
         # (영구 덮어쓰기는 국소화 노이즈로 정지 물체 기록을 오염시킨다 — v1 실측 −0.11)
+        _rec_pos = None
         if SG_INIT == "gt":
             record = v0["room"]
         else:
             # 인스턴스판이 있으면 **첫 목격 프레임의 투영 위치**에 가장 가까운 인스턴스를
             # 고른다(타입당 방 1개로 접지 않는다 — 실제 주거는 같은 타입이 여러 방에).
-            record = im.get(v0["type"])
+            record = im.get(v0["type"]); _rec_pos = None        # _rec_pos: 고른 초기맵 인스턴스의 자리 [x, z] (ABS_SPOT=initmap 에서 부재 게이트의 자리로)
             _cands = im_inst.get(v0["type"])
             if _cands and _geo is not None:
                 # VIS_GT=0: 시스템 신호만 — 검출 점수 상위(hits) 중 가장 이른 프레임 + 실물 거리(DA)
@@ -417,10 +446,10 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                             _dd = abs((_bc - _b + 180) % 360 - 180)
                             if _dd < _bd: _bd, _best = _dd, c3[1]
                         if _best is not None and _bd < float(os.environ.get("INST_ANG", "25")): _bv[_best] += 1
-                    record = max(_cands, key=lambda c3: (1 + _bv.get(c3[1], 0)) * _prior(v0["type"], rt.get(c3[1], c3[1])) * (c3[2] ** 0.5))[1]
+                    _bestc = max(_cands, key=lambda c3: (1 + _bv.get(c3[1], 0)) * _prior(v0["type"], rt.get(c3[1], c3[1])) * (c3[2] ** 0.5)); record = _bestc[1]; _rec_pos = _bestc[0]
                 elif os.environ.get("INST_SEL", "bearing") == "prior":
                     # 후보 인스턴스를 **방 사전확률 × 검출 가중**으로 — 투영(거리 잡음)에 의존하지 않는 GT-free 선택
-                    record = max(_cands, key=lambda c3: _prior(v0["type"], rt.get(c3[1], c3[1])) * (c3[2] ** 0.5))[1]
+                    _bestc = max(_cands, key=lambda c3: _prior(v0["type"], rt.get(c3[1], c3[1])) * (c3[2] ** 0.5)); record = _bestc[1]; _rec_pos = _bestc[0]
                 elif os.environ.get("INST_SEL", "bearing") == "priorvote":
                     _src = _vpass if _vpass else (sorted(hits)[:8] if len(hits) else [])
                     _votes = Counter()
@@ -548,12 +577,14 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         inr = np.where(arm == record)[0]
         fired = False
         _nlate = -1                                 # 부재확인 기회(자리 본 후반 프레임 수)
-        if ABS_GEO and v0.get("pos") is not None:
+        _spot_src = os.environ.get("ABS_SPOT", "gt")     # gt: GT 물체 원위치(⚠️ GT 재료) · initmap: 고른 초기맵 인스턴스 자리(무GT, 2026-09-07)
+        _spot = v0.get("pos") if _spot_src == "gt" else ([_rec_pos[0], 0.0, _rec_pos[1]] if _rec_pos is not None else None)
+        if ABS_GEO and _spot is not None:
             # v2 (v1 은 ①을 0.97→0.59 로 붕괴시켜 기각):
             #  ⓐ 같은 방에서 본 프레임만 — v1 은 벽 너머 방향 응시도 "봤다"로 셌다
             #  ⓑ 자기참조 기준 — v1 의 "TS<자기 q0.98=미검출" 은 정지 물체일수록
             #    자동 성립. 대신 "후반 최고 목격 < 전반(있던 시절) 중앙값" 비교
-            spot = v0["pos"]
+            spot = _spot
             vis_i = []
             for i in range(len(ts)):
                 m = live[ts[i]]
@@ -601,9 +632,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     fired = r_e >= 0.5 and r_l <= 0.15
             if not fired and _mode in ("cmp", "both")                and len(_e) >= ABS_MINE and len(_l) >= ABS_MINL:
                 fired = float(np.max(TS[_l])) < float(np.quantile(TS[_e], ABS_Q))
-            if os.environ.get("ABS_DIAG") == "1" and mv and not np.any(vis & (ts > mv[-1]["t"])):
-                print("DIAG %s %s e=%d l=%d fired=%d maxL=%.3f qE=%.3f"
-                      % (hn, v0["type"], len(_e), len(_l), int(fired),
+            if (os.environ.get("ABS_DIAG") == "1" and mv and not np.any(vis & (ts > mv[-1]["t"]))) or os.environ.get("ABS_DIAG") == "2":
+                print("DIAG %s %s e=%d l=%d fired=%d spot_err=%.2f maxL=%.3f qE=%.3f"
+                      % (hn, v0["type"], len(_e), len(_l), int(fired), float(np.hypot(_spot[0] - v0["pos"][0], _spot[2] - v0["pos"][2])) if (_spot is not None and v0.get("pos")) else -1,
                          float(np.max(TS[_l])) if len(_l) else -9,
                          float(np.quantile(TS[_e], ABS_Q)) if len(_e) else -9), flush=True)
         if not fired and len(inr) >= 9:
@@ -618,6 +649,10 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             if len(ge) >= 3 and len(gl) >= 3:
                 drop = float(np.quantile(TS[ge], .9) - np.quantile(TS[gl], .9))
                 fired = drop >= ABS_TH       # 기본 0.055 = thor4 근사 — thor7 은 ABS_TH 격자로
+        _fv = absv_fired(hn, oid, type_=v0["type"]) if ABSV is not None else None
+        if _fv is True and os.environ.get("ABS_VERIFY_MODE", "or") in ("or", "only"): fired = True      # 검증기 부재 규칙 B (2026-09-07)
+        if _fv is False and os.environ.get("ABS_VERIFY_MODE", "or") == "only": fired = False
+        if fired and alt is not None and os.environ.get("ABS_OVER_C0", "0") == "1": alt = None        # 부재 발화가 목격채택보다 우선 (§166-15 ⓒ)
         if alt is not None:
             ans = alt
             res["case"]["c0"] += 1
