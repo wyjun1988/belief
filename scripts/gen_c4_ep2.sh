@@ -13,7 +13,7 @@ for SC in $(cat "$SCENES"); do
       echo "=== $H2 ← $SC (ep1 이동 $NMV) $(date +%H:%M) ==="
       $HAB -u scripts/hab_episode.py --scene "$SC" --dataset "$HSSD_DATASET" --move data/hssd_move.json \
         --frames 1200 --moves 8 --case3 ${CASE3:-1.0} --far 0.0 --evidence 3:1.4 --dwell 0 --pace 0.25 --turn 0.5 --scan 35 --max-turn 999 \
-        --map-travel 0.35 --map-sites 1 --map-step 60 --seed $((OFFSET + i + 1200)) --out "$H2" 2>&1 \
+        --map-travel 0.35 --map-sites 1 --map-step 60 --c3-check-dist ${C3DIST:-2.0} --seed $((OFFSET + i + 1200)) --out "$H2" 2>&1 \
         | grep -aE "이동 계획|이동 기록|이동 취소|Traceback|Error" || echo "  $SC 실패"
       [ -f "$H2/gt.json" ] || { echo "  ⚠ gt.json 없음 → 삭제: $H2"; rm -rf "$H2"; }   # 생성 중 죽은 집은 남기지 않는다(체인이 그 집에서 죽는다)
     fi

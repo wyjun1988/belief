@@ -33,6 +33,7 @@ ap.add_argument("--move", default=None,
 ap.add_argument("--outdoor", type=float, default=0.0,
                 help="이동 중 이 비율은 **집 밖**(outdoor/balcony/porch/garage)으로 — "
                      "'가방에 넣어 나갔다' 시나리오. 답은 '밖'이 되어야 한다")
+ap.add_argument("--c3-check-dist", type=float, default=2.0, help="③ 대본의 옛 자리 확인 방문 거리(m). 벤치 질의 범위 RoI ≤1.5 m 를 만족시키려면 1.2")
 ap.add_argument("--c3-dest", default="prior", choices=["prior", "far_low"],
                 help="③ 목적지: prior=목적지 사전확률(유형 먼저, 인스턴스 균등; 2026-09-07 기본) · far_low=가장 먼 저체류 방(종전 — belief 와 정반대라 인계분 정답 0.04)")
 ap.add_argument("--case3", type=float, default=0.5,
@@ -717,7 +718,7 @@ while t < args.frames:
                         excluded_rooms.add(real); hidden_oids.append(oid)
                         # 종전: 원래 방 재방문만 → 옛 자리를 안 봐서 27건 중 24건이 '확인기회X/재방문없음'(§157).
                         # 옛 자리 2m 시선 지점을 2회 방문(사이에 저체류 방 경유)해 '확인 기회'를 대본이 보장한다.
-                        oid_for_check = oid; _cvs = check_goals(_oldp, 2, 2.0); oid_for_check = None
+                        oid_for_check = oid; _cvs = check_goals(_oldp, 2, args.c3_check_dist); oid_for_check = None   # 확인 방문 거리: RoI(≤1.5 m) 질의 범위에 맞추려면 1.2 (2026-09-07)
                         _low = sorted(polys, key=lambda r: (MOVE or {}).get("dwell", {}).get(_rtype(r), 0.1))
                         _low = [r for r in _low if r not in excluded_rooms]
                         for _j, (_gf, _gn) in enumerate(_cvs):
