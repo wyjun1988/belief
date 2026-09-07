@@ -42,6 +42,7 @@ ap.add_argument("--map-only", action="store_true", help="정렬·포즈를 지�
 ap.add_argument("--seq-overlap", type=int, default=20, help="matcher=seq 의 순차 창(프레임). 지도가 0.2m 간격이면 20 ≈ 4m")
 ap.add_argument("--matcher", default="vocab", choices=["vocab", "exhaustive", "seq"], help="vocab: 순차+vocab-tree 검색(faiss 판 트리 필요) · exhaustive: 전수")
 ap.add_argument("--gpu", action="store_true", help="CUDA 박스(RTX)에서 SIFT·매칭을 GPU 로")
+ap.add_argument("--joint-mode", default="auto", choices=["auto", "scratch", "live-first"], help="auto: 지도 단독 재구성이 서면(map_ok) 그걸 씨앗으로 고정하고 live 등록, 빈약하면 joint · scratch: 지도 재구성 생략, map+live 를 처음부터 joint(씨앗 없음) · live-first: live 만 먼저 재구성 → 고정 → map 프레임을 등록(live 가 이끈다). §166 가설(촘촘한 지도가 씨앗이 되어 접힘을 전파) 검증용. DB 는 재사용, 재구성은 rec_scratch/rec_live+rec_livefirst 에 따로 캐시")
 a = ap.parse_args()
 
 hd = a.house.rstrip("/"); hn = os.path.basename(hd)
@@ -109,9 +110,16 @@ def best_rec(recs):
     return max(recs.values(), key=lambda r: r.num_reg_images()) if recs else None
 
 if not a.from_poses:
-    rec_map_dir = os.path.join(work, "rec_map"); rec_all_dir = os.path.join(work, "rec_all")
+    rec_map_dir = os.path.join(work, "rec_map")
+    rec_all_dir = os.path.join(work, {"auto": "rec_all", "scratch": "rec_scratch", "live-first": "rec_livefirst"}[a.joint_mode])
     rm = None
-    if not (a.redo or a.redo_map) and os.path.isdir(rec_map_dir) and any(os.path.isdir(os.path.join(rec_map_dir, d)) for d in os.listdir(rec_map_dir)):
+    if a.joint_mode != "auto":
+        # §166 검증: 촘촘한 지도가 map 단독으로 서서(map_ok) joint 의 씨앗(input_path + fix_existing_frames)이 되면
+        # 접힌 지도가 live 까지 끌고 간다는 가설. 옛 성공판은 map 단독이 7/128 로 빈약해 joint 로 폴백했고 live 가 이끌었다.
+        #  scratch    = 지도 단독 재구성을 아예 생략, map+live 를 처음부터 joint (옛 '빈약 → joint' 경로를 강제)
+        #  live-first = live 만 먼저 재구성 → 그 모델을 고정하고 map 프레임을 등록 (지도는 따라붙기만 한다)
+        log("joint 모드 %s — 지도 단독 재구성을 씨앗으로 쓰지 않는다" % a.joint_mode)
+    elif not (a.redo or a.redo_map) and os.path.isdir(rec_map_dir) and any(os.path.isdir(os.path.join(rec_map_dir, d)) for d in os.listdir(rec_map_dir)):
         rm = pycolmap.Reconstruction(os.path.join(rec_map_dir, sorted(d for d in os.listdir(rec_map_dir) if os.path.isdir(os.path.join(rec_map_dir, d)))[0]))
     else:
         os.makedirs(rec_map_dir, exist_ok=True)
@@ -121,13 +129,27 @@ if not a.from_poses:
     # 그때는 map+live 를 한 번에 재구성(joint). live 보행이 기준선을 준다. (OG 는 SPEC 3-b 이동 프레임으로 map 만으로도 되게)
     map_ok = rm is not None and rm.num_reg_images() >= max(10, 0.3 * len(maps))
     if rm is not None: log("map 재구성: 등록 %d/%d · 점 %d · 재투영 %.2fpx%s" % (rm.num_reg_images(), len(maps), rm.num_points3D(), rm.compute_mean_reprojection_error(), "" if map_ok else " → 빈약, joint 로"))
-    else: log("map 재구성 실패 → joint 로")
+    elif a.joint_mode == "auto": log("map 재구성 실패 → joint 로")
     sub = [d for d in sorted(os.listdir(rec_map_dir)) if os.path.isdir(os.path.join(rec_map_dir, d))] if os.path.isdir(rec_map_dir) else []
     in_path = os.path.join(rec_map_dir, sub[0]) if (sub and map_ok) else ""
     os.makedirs(rec_all_dir, exist_ok=True)
     _subs = [d for d in sorted(os.listdir(rec_all_dir)) if os.path.isdir(os.path.join(rec_all_dir, d))]
     if not (a.redo or a.redo_map) and _subs:      # live 등록 결과 캐시 (10~17분짜리) — 가장 큰 모델
         ra = best_rec({d: pycolmap.Reconstruction(os.path.join(rec_all_dir, d)) for d in _subs}); log("live 등록 캐시 사용 (%d모델)" % len(_subs))
+    elif a.joint_mode == "live-first":
+        rec_live_dir = os.path.join(work, "rec_live"); os.makedirs(rec_live_dir, exist_ok=True)
+        _ls = [d for d in sorted(os.listdir(rec_live_dir)) if os.path.isdir(os.path.join(rec_live_dir, d))]
+        if not (a.redo or a.redo_map) and _ls: log("live 단독 재구성 캐시 사용 (%d모델)" % len(_ls))
+        else:
+            if a.redo_map: os.system("rm -rf '%s'/*" % rec_live_dir)
+            pycolmap.incremental_mapping(db, hd, rec_live_dir, mapper_opts(names_live, False))
+            _ls = [d for d in sorted(os.listdir(rec_live_dir)) if os.path.isdir(os.path.join(rec_live_dir, d))]
+        _lrecs = {d: pycolmap.Reconstruction(os.path.join(rec_live_dir, d)) for d in _ls}
+        if not _lrecs: sys.exit("live 단독 재구성 실패")
+        _ld = max(_lrecs, key=lambda d: _lrecs[d].num_reg_images()); rl = _lrecs[_ld]
+        log("live 단독 재구성: 등록 %d/%d · 점 %d · 재투영 %.2fpx (%d모델 중 %s)" % (rl.num_reg_images(), len(lives), rl.num_points3D(), rl.compute_mean_reprojection_error(), len(_lrecs), _ld))
+        ra = best_rec(pycolmap.incremental_mapping(db, hd, rec_all_dir, mapper_opts([], True), input_path=os.path.join(rec_live_dir, _ld)))
+        if ra is not None: log("live 고정 → map 등록: %d/%d" % (sum(1 for im in ra.images.values() if im.name.startswith("map/") and im.has_pose), len(maps)))
     elif in_path:
         ra = best_rec(pycolmap.incremental_mapping(db, hd, rec_all_dir, mapper_opts([], True), input_path=in_path))
     else:
@@ -422,7 +444,7 @@ if _mu:
     np.savez_compressed(os.path.join(work, "map_points_%s.npz" % hn), u=np.concatenate(_mu).astype(np.float32), v=np.concatenate(_mv).astype(np.float32),
                         d=np.concatenate(_md).astype(np.float32), k=np.concatenate(_mi).astype(np.int32))
     log("맵 프레임 SfM 점 %d (프레임 %d)" % (sum(len(x) for x in _mu), len(_mn)))
-json.dump(dict(house=hn, map_reg=(rm.num_reg_images() if rm is not None else sum(1 for k in P if k.startswith("map/"))), n_map=len(maps), map_joint=(not map_ok), live_reg=len(rows), live_reg_raw=n_before, n_live=_nlive0, live_step=a.live_step, cov=cov, vmax=a.vmax, strict=a.strict,
+json.dump(dict(house=hn, map_reg=(rm.num_reg_images() if rm is not None else sum(1 for k in P if k.startswith("map/"))), n_map=len(maps), map_joint=(not map_ok), joint_mode=a.joint_mode, live_reg=len(rows), live_reg_raw=n_before, n_live=_nlive0, live_step=a.live_step, cov=cov, vmax=a.vmax, strict=a.strict,
                ate_med=float(np.median(ate)) if len(ate) else None, ate_lt05=float((ate < 0.5).mean()) if len(ate) else None,
                yaw_med=float(np.median(yerr)) if len(yerr) else None, room_hit=(hit / nhit) if nhit else None, n_room=nhit,
                reject_outside=bool(a.reject_outside), sim3_rms=float(rms), sim3_inl=INL, scale=float(s), scale_src=a.scale, align_src=a.align, da_k=a.da_k, mirror=bool(mirror), sec=time.time() - T0), open(os.path.join(work, "summary_%s.json" % hn), "w"), indent=1, default=float)

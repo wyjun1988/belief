@@ -513,6 +513,9 @@ print("매핑 포즈 %d (지점 %d · 이동프레임 %d · 간격 %.2fm)" % (
 for _mpz in _poses:
     if True:
         r, mp_pt, yy = _mpz
+        # 2026-09-05 버그 수정: 이동 프레임(--map-travel)에 **출발 지점의 방**이 붙어 19~41% 가 틀린 라벨이었다 →
+        # live 프레임과 같은 room_at(현재 위치) 로 통일. 배포에서도 라벨은 사람의 현재 위치를 따른다(걸으며 방 이름을 말함).
+        r = room_at(float(mp_pt[0]), float(mp_pt[2])) or r
         st = habitat_sim.AgentState(); st.position = mp_pt
         ry = np.radians(yy)
         st.rotation = np.quaternion(np.cos(ry / 2), 0, np.sin(ry / 2), 0)

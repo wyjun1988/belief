@@ -657,6 +657,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         res.setdefault("ck", Counter())[(_ck, _br, ans == tgt)] += 1
         res.setdefault("rows", []).append((hn, _ck, ans == tgt, record0 == tgt,
                                            base_new == tgt, base_pri == tgt))
+        if os.environ.get("ROWS_OUT"):        # 물체 단위 진단 덤프(2026-09-06): 경우·분기·답·기록·정답 — 실패 원인 분해용, 채점에는 무영향
+            with open(os.path.expanduser(os.environ["ROWS_OUT"]), "a") as _fo:
+                _fo.write(json.dumps(dict(house=hn, oid=oid, type=v0.get("type"), case=_ck, branch=_br, tgt=tgt, ans=ans, record=record0, ok=bool(ans == tgt)), ensure_ascii=False) + "\n")
         # ── 증거 조건부 ② (평가 프로토콜 v2, 2026-09-02): 시나리오가 준 목격 수와 시스템 능력을 분리 ──
         if mv and VSC is not None and (hn, oid) in VSC:
             _t0e = mv[-1]["t"]; _k = 0; _at = 0; _af = 0; _fr = []

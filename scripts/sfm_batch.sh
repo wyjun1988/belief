@@ -8,7 +8,10 @@ PY=${PY:-$HOME/kx-venv/bin/python}; [ -x "$PY" ] || PY=python
 SFM=${SFM:-$HOME/khcache/sfm}; OUT=${OUT:-$SFM/pose_$(basename $ROOT)_${HOUSES}.jsonl}
 mkdir -p $SFM/logs; export KMP_DUPLICATE_LIB_OK=TRUE PY SFM THREADS EXTRA
 run_one() { h=$1; hn=$(basename $h)
-  $PY -u scripts/sfm_reloc.py $h --threads $THREADS $EXTRA --out $SFM/pose_$hn.jsonl > $SFM/logs/$hn.log 2>&1
+  # ⚠️ --work 를 반드시 $SFM 아래로: 없으면 sfm_reloc 기본값 ~/khcache/sfm/<house> 를 **데이터셋이 달라도 공유**해
+  # .extracted 마커·rec_* 캐시를 그대로 읽는다. 2026-09-05 sfm-nogt40(19채)·sfm-nogt20(4채)이 9/3 hssd20S2 재구성을
+  # 새 GT 에 채점한 것으로 확인됨 — §165. summary 도 $SFM/<house>/ 에서 읽으므로 경로가 이제 일치한다.
+  $PY -u scripts/sfm_reloc.py $h --work $SFM/$hn --threads $THREADS $EXTRA --out $SFM/pose_$hn.jsonl > $SFM/logs/$hn.log 2>&1
   tr -d "\000" < $SFM/logs/$hn.log | tr "\r" "\n" | grep -a -E "^\[.*(정렬|커버리지)|실패|Traceback|Error" | tail -3 | sed "s/^/$hn /"; }
 export -f run_one
 ls -d $ROOT/house_* | head -$HOUSES | xargs -P $PAR -I{} bash -c 'run_one {}'
