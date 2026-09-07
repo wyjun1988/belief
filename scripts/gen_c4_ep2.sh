@@ -7,7 +7,7 @@ HSSD_DATASET=${HSSD_DATASET:-$HOME/hssd-hab/hssd-hab-uncluttered.scene_dataset_c
 export KMP_DUPLICATE_LIB_OK=TRUE; mkdir -p "$OUT2"; i=0
 for SC in $(cat "$SCENES"); do
   if [ $i -ge $FROM ] && [ $i -lt $TO ]; then
-    H1="$OUT/house_$(printf %04d $((OFFSET + i)))"; H2="$OUT2/house_$(printf %04d $((OFFSET + i + 100)))"
+    H1="$OUT/house_$(printf %04d $((OFFSET + i)))"; H2="$OUT2/house_$(printf %04d $((OFFSET + i + ${EP_OFF:-100})))"   # EP_OFF: 에피소드 번호 오프셋 (ep2=100 · ep3(③ 목적지 사전확률판)=200 — seq·작업본·캐시 이름 충돌 방지)
     NMV=$($K -c "import json; print(len(json.load(open('$H1/gt.json'))['moves']))" 2>/dev/null || echo 0)
     if [ "$NMV" -ge 1 ] && [ ! -f "$H2/gt.json" ]; then
       echo "=== $H2 ← $SC (ep1 이동 $NMV) $(date +%H:%M) ==="

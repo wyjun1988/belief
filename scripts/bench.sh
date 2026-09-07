@@ -26,6 +26,7 @@ export INST_SEL=${INST_SEL:-bearing}        # 후보 인스턴스: 방위 각도
 export VIS_GT=${VIS_GT:-0}                # GT 가시성 제거(§152): 인스턴스 선택=검증통과 프레임 투영 다수결 · 부재 분할점=ABS_SPLIT
 export ABS_SPLIT=${ABS_SPLIT:-half}       # "마지막 목격"(GT)에 의존하지 않는 분할
 export ABS_SPOT=${ABS_SPOT:-initmap}       # 부재 게이트의 "자리" = 고른 초기맵 인스턴스(무GT). gt 는 GT 원위치(2026-09-07 까지의 표) — ep2 에서 ③ 버킷 ±1 차이
+export ROI_DIST=${ROI_DIST:-1.5}; export ROI_BOX=${ROI_BOX:-64}; export ROI_MODE=${ROI_MODE:-and}   # 질의 범위(사용자 결정 2026-09-07 19:20): 스캔·라이브에서 ≤1.5 m 로 본 적 있고 지도 GT 박스 ≥64 px 인 물체만. 끄려면 ROI_DIST=0 ROI_BOX=0
 export ROOM_GROUPS=${ROOM_GROUPS:-1}      # 열린 공간은 한 방(사용자 결정 2026-09-04, §149): <house>/room_groups.json 있으면 그룹 단위 채점      # 방위차 최대 쌍 삼각측량 우선 (v3c ② 0.542→0.583·거짓인계 0.25→0.12, v2.2 무해 — 2026-09-03 챔피언 편입)
 export PRIOR_JSON=${PRIOR_JSON:-data/hssd_move.json}   # HSSD 어휘 (thor_prior 는 전부 미등록이었다)
 PY=${PY:-$HOME/kx-venv/bin/python}

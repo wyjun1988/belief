@@ -113,7 +113,7 @@ if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
 # ── 재료 사다리 (AUDIT_20260902 조치1): 어떤 GT 가 들어갔는지 사람이 아니라 코드가 찍는다 ──
 _LG = os.environ.get("LOC_GEO", "0") == "1"
 _ANCH_EX = float(os.environ.get("ANCH_EX", "0.80")); _ANCH_TY = float(os.environ.get("ANCH_TY", "0.10")); _ANCH_DP = int(os.environ.get("ANCH_DP", "2"))
-LADDER = "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:%s · 카메라방:%s%s · 사전확률:%s · c0창:%s%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
+LADDER = ("[RoI ≤%sm %s ≥%spx] " % (os.environ.get("ROI_DIST", "-"), os.environ.get("ROI_MODE", "or"), os.environ.get("ROI_BOX", "-")) if (float(os.environ.get("ROI_DIST", "0")) > 0 or float(os.environ.get("ROI_BOX", "0")) > 0) else "") + "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:%s · 카메라방:%s%s · 사전확률:%s · c0창:%s%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
     "GT" if SG_INIT == "gt" else "검출",
     "SfM" if POSE is not None else "GT(apos)",
     # POSE_JSONL 이 있으면 live 의 apos·yaw 가 SfM 값으로 덮인다 → LOC_YAW_GT=1 경로가 읽는 m["yaw"] 는 SfM yaw 다
@@ -246,9 +246,24 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         im = {t: r for t, (w, r) in best.items()}
     moves = sorted(g["moves"], key=lambda m: m["t"])
     cnt = Counter(v["type"] for v in g["gt0"].values())
+    # 관심 물체(RoI) 범위: 사용자가 하루 중 가까이 간 물체만 묻는다(사용자 결정 2026-09-07) — 스캔(map) 또는 라이브에서 GT 거리 ≤ ROI_DIST m 로 본 적이 있어야 질의 대상.
+    _ROI = float(os.environ.get("ROI_DIST", "0")); _ROIB = float(os.environ.get("ROI_BOX", "0")); _ROIM = os.environ.get("ROI_MODE", "or")   # ROI_BOX: 지도 프레임 GT 박스 최대변 ≥ px · ROI_MODE: or=가깝거나 크면 · and=가깝고 크면
+    def _roi_ok(oid_):
+        if _ROI <= 0 and _ROIB <= 0: return True
+        near = big = False
+        for m_ in (g.get("map") or []):
+            if (m_.get("dist") or {}).get(oid_, 99) <= _ROI: near = True
+            b_ = (m_.get("box") or {}).get(oid_)
+            if b_ and len(b_) == 4 and max(b_[2] - b_[0], b_[3] - b_[1]) >= _ROIB: big = True
+        for m_ in live.values():
+            if (m_.get("dist") or {}).get(oid_, 99) <= _ROI: near = True
+        if _ROI <= 0: return big
+        if _ROIB <= 0: return near
+        return (near and big) if _ROIM == "and" else (near or big)
     for j, oid in enumerate(QT):
         v0 = g["gt0"][oid]
         if not v0["room"] or cnt[v0["type"]] > 1 or v0["type"] not in vocab: continue
+        if not _roi_ok(oid): continue
         ti = vocab.index(v0["type"])
         mv = [x for x in moves if x["oid"] == oid]
         tgt = mv[-1]["to"] if mv else v0["room"]
@@ -568,6 +583,10 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                         if _cc and _cc[0][1] >= min(2, C0_MIN) and _cc[0][0] != record:
                             alt = _cc[0][0]
                         if os.environ.get("C0_DIAG") == "1": _dg.update(proj_rooms=_rms)
+                if alt is None and os.environ.get("C0_CAMROOM", "0") == "1" and len(_pick) >= C0_MIN:
+                    # 투영(포즈+거리)이 없거나 기록 방으로 떨어졌을 때: 검증 통과 프레임의 **카메라방**(임베딩) 다수결이 기록과 다르면 그 방을 채택 (2026-09-07 시험)
+                    _cr = Counter(arm[i2] for i2 in _pick if arm[i2]); _top = _cr.most_common(1)
+                    if _top and _top[0][1] >= min(2, C0_MIN) and _top[0][0] != record: alt = _top[0][0]
                 if os.environ.get("C0_DIAG") == "1" and "_dg" in dir():
                     _dg.update(alt=alt, geo=_geo is not None); print("C0_DIAG " + json.dumps(_dg, ensure_ascii=False), flush=True)
         if record is None:
@@ -589,7 +608,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             for i in range(len(ts)):
                 m = live[ts[i]]
                 if m.get("yaw") is None or m.get("apos") is None: continue
-                if arm[i] != record: continue
+                _rg = os.environ.get("ABS_ROOMGATE", "1")     # 1: 임베딩 카메라방 == 기록 방 · pose: PnP 포즈를 평면도 폴리곤에 넣은 방 == 기록 방(포즈 있는 프레임만 이 자리에 오므로 무GT) · 0: 없음
+                if _rg == "1" and arm[i] != record: continue   # 기록=GT 사다리에서 ③ 19건이 여기서 빠졌다(2026-09-07)
+                if _rg == "pose" and _geo is not None and _grp(_room_pt((m["apos"][0], m["apos"][1]))) != record: continue
                 dx = spot[0] - m["apos"][0]; dz = spot[2] - m["apos"][1]
                 if np.hypot(dx, dz) > ABS_DIST: continue
                 b = np.degrees(np.arctan2(dx, dz))

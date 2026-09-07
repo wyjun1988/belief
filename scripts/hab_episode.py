@@ -33,6 +33,8 @@ ap.add_argument("--move", default=None,
 ap.add_argument("--outdoor", type=float, default=0.0,
                 help="이동 중 이 비율은 **집 밖**(outdoor/balcony/porch/garage)으로 — "
                      "'가방에 넣어 나갔다' 시나리오. 답은 '밖'이 되어야 한다")
+ap.add_argument("--c3-dest", default="prior", choices=["prior", "far_low"],
+                help="③ 목적지: prior=목적지 사전확률(유형 먼저, 인스턴스 균등; 2026-09-07 기본) · far_low=가장 먼 저체류 방(종전 — belief 와 정반대라 인계분 정답 0.04)")
 ap.add_argument("--case3", type=float, default=0.5,
                 help="이동 중 이 비율을 **경우③ 대본**으로: 이동 후 배회에서 목적지 방을 제외하고 "
                      "원래 방을 한 번 강제 재방문. 나머지는 경우② 대본(목적지 방 강제 방문). "
@@ -316,8 +318,18 @@ for i2, oid in enumerate(cands[:args.moves]):
         # 5차에서도 hallway 로 갔다: 저체류(≤0.35) 방이 통로뿐이면 제외가 비어 통로로 되돌아갔다 → 통로 제외를 **먼저**, 체류 문턱은 그 다음
         _open = ("hallway", "corridor", "entryway", "entry", "stair", "landing", "foyer")
         _in2 = [r for r in _in if not any(k in _rtype(r) for k in _open)] or _in
-        _low = [r for r in _in2 if _dw.get(_rtype(r), 0.1) <= 0.35] or _in2    # 실외는 ④ 몫 — ③ 목적지에서 제외
-        tgt = max(_low, key=lambda r: float(np.linalg.norm(cen[r] - cen[obj_room[oid]])))
+        if args.c3_dest == "far_low":
+            _low = [r for r in _in2 if _dw.get(_rtype(r), 0.1) <= 0.35] or _in2    # 실외는 ④ 몫 — ③ 목적지에서 제외
+            tgt = max(_low, key=lambda r: float(np.linalg.norm(cen[r] - cen[obj_room[oid]])))
+        else:
+            # 2026-09-07 사용자 결정(a): ③ 목적지도 **목적지 사전확률**로 — belief 가 맞힐 수 있는 분포. 재목격은 excluded_rooms(카메라 경로) 로만 막는다.
+            # 표본은 **유형 먼저**(P(유형) = 사전확률, 없는 유형 0.02) → 그 유형의 방 인스턴스 균등 — 평가기 belief(사전확률/인스턴스 수)와 같은 규약.
+            dd = (MOVE or {}).get("dest", {}).get(objs[oid]["type"], {}) if MOVE else {}
+            _byt = {}
+            for r in _in2: _byt.setdefault(_rtype(r), []).append(r)
+            _ts = sorted(_byt); _wt = np.array([dd.get(t, 0.02) for t in _ts], float)
+            _t = _ts[int(rng.choice(len(_ts), p=_wt / _wt.sum()))] if _wt.sum() > 0 else rng.choice(_ts)
+            tgt = rng.choice(_byt[_t])
     plan[int(rng.integers(args.frames // 5, args.frames * 3 // 5))] = (oid, tgt, role)
 print("이동 계획 %d건 (③대본 %d)" % (len(plan), sum(1 for v in plan.values() if v[2] == "c3")), flush=True)
 excluded_rooms = set()      # ③ 대본: 이동 후 배회에서 제외할 목적지 방
