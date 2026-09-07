@@ -37,7 +37,8 @@ def s_ac(cp, a, b):
     lg = logits(cp, "Which is in this image: (A) %s, (B) %s, or (C) neither? Answer only A, B, or C." % (a, b))
     return float(lg[IDS["A"]] - max(float(lg[IDS["B"]]), float(lg[IDS["C"]])))
 
-RETR = os.environ.get("RETR", "clip")          # clip: 문맥 top-N · pose: PnP 포즈 기하(자리 향함) · both: 합집합(기하 우선, 부족분 clip)
+RETR = os.environ.get("RETR", "clip")          # clip: 문맥 top-N · pose: PnP 포즈 기하(자리 향함) · both: 합집합(기하 우선, 부족분 clip) · nbr: 자리 주변 정적 개체(exemplar)가 같이 보이는 프레임 · posenbr: pose ∪ nbr (카메라방 게이트 없음)
+AXP = os.environ.get("AX_PREFIX"); NBR_R = float(os.environ.get("NBR_R", "2.0")); NBR_TH = float(os.environ.get("NBR_TH", "0.03")); NBR_MIN = int(os.environ.get("NBR_MIN", "2"))
 POSES = collections.defaultdict(dict)
 if os.environ.get("POSE_JSONL"):
     for l in open(os.path.expanduser(os.environ["POSE_JSONL"])):
@@ -70,6 +71,10 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     im = json.load(open(os.path.join(hdr, os.environ.get("INITMAP_FILE", "initmap_owl.json")))); inst = collections.defaultdict(list)
     for it in im: inst[it["type"]].append((it["w"], grp(it.get("room")), it.get("pos")))
     arm = np.array([grp(rooms[hn].get(int(t), live[int(t)].get("room"))) for t in ts])
+    _XSc = _XA = None
+    if RETR in ("nbr", "posenbr") and AXP and os.path.exists(AXP + hn + ".npz"):
+        _zx = np.load(AXP + hn + ".npz", allow_pickle=True); _XA = list(_zx["anch"]); _XSc = _zx["s"] - np.median(_zx["s"], axis=0, keepdims=True)
+        _stat = g.get("scene_meta", {}).get("static", {})
     lv = {int(os.path.basename(p)[:-4]): p for p in glob.glob(os.path.join(hdr, "live", "*.jpg"))}
     cnt = collections.Counter(v["type"] for v in g["gt0"].values()); moved = {m["oid"] for m in g["moves"]}
     n_obj = 0
@@ -84,8 +89,36 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                and abs((math.degrees(math.atan2(spot[0]-m["apos"][0], spot[1]-m["apos"][1])) - m["yaw"] + 180) % 360 - 180) <= CTX_ANG]
         rec = dict(house=hn, oid=oid, type=v0["type"], record=record, n_map_facing=len(fac), late=[], early=[])
         inroom = [i for i in range(len(ts)) if arm[i] == record]
-        geo = [i for i in inroom if int(ts[i]) in POSES[hn] and facing(POSES[hn][int(ts[i])]["apos"][0], POSES[hn][int(ts[i])]["apos"][1], POSES[hn][int(ts[i])]["yaw"], spot)] if RETR in ("pose", "both") else []
+        allf = list(range(len(ts)))
+        if RETR in ("nbr", "posenbr"):
+            # 카메라방 게이트 없이: 자리 NBR_R m 안의 정적 개체(스캔) 중 NBR_MIN 개 이상이 exemplar 로 같이 보이는 프레임 (사용자 제안 2026-09-07 — 카메라 위치가 아니라 주변 물체 조합)
+            nbr_c = [_XA.index(k) for k, v in _stat.items() if _XA and k in _XA and v.get("pos") and math.hypot(v["pos"][0] - spot[0], v["pos"][2] - spot[1]) <= NBR_R] if _XSc is not None else []
+            nbrf = [i for i in allf if nbr_c and int(np.sum(_XSc[i, nbr_c] >= NBR_TH)) >= NBR_MIN]
+            geo = [i for i in allf if int(ts[i]) in POSES[hn] and facing(POSES[hn][int(ts[i])]["apos"][0], POSES[hn][int(ts[i])]["apos"][1], POSES[hn][int(ts[i])]["yaw"], spot)] if RETR == "posenbr" else []
+            rec["n_nbr_static"] = len(nbr_c); rec["n_nbrf"] = len(nbrf)
+        else:
+            geo = [i for i in inroom if int(ts[i]) in POSES[hn] and facing(POSES[hn][int(ts[i])]["apos"][0], POSES[hn][int(ts[i])]["apos"][1], POSES[hn][int(ts[i])]["yaw"], spot)] if RETR in ("pose", "both") else []
+            nbrf = []
         rec["n_geo"] = len(geo)
+        if RETR in ("nbr", "posenbr"):
+            cand = sorted(set(geo) | set(nbrf), key=lambda i: ts[i]); sim = np.zeros(len(ts))
+            picks = [("late", i) for i in cand[-K_LATE:]] + [("early", i) for i in cand[:-K_LATE][:K_EARLY]] if len(cand) >= 1 else []
+            for role, i in picks:
+                t = int(ts[i])
+                if t not in lv: continue
+                img = Image.open(lv[t]).convert("RGB"); W, H = img.size
+                if BXa is not None:
+                    bcx, bcy, bw, bh = [float(x) * max(W, H) for x in BXa[i, ti]]; h2 = max(48, int(max(bw, bh) * 0.65)); cx, cy = bcx, bcy
+                else:
+                    cx = (P[i, ti] % pw + .5) / pw * W; cy = (P[i, ti] // pw + .5) / ph * H; h2 = max(64, W // 6)
+                a = words(v0["type"]); order = np.argsort(-S[i, :nT]); b = words(vocab[int(order[1] if order[0] == ti else order[0])])
+                sc = []
+                for hh in (h2, max(h2 * 2, W // 4)):
+                    img.crop((max(0, int(cx)-hh), max(0, int(cy)-hh), min(W, int(cx)+hh), min(H, int(cy)+hh))).resize((336, 336)).save(TMP, quality=92)
+                    sc.append(round(s_ac(TMP, a, b), 3))
+                rec[role].append([t, sc[0], sc[1], 0.0, int(i in geo), int(i in nbrf)])
+            out.write(json.dumps(rec) + "\n"); out.flush(); n_obj += 1
+            continue
         if fac or (RETR == "pose" and geo):
             sim = (El[ts.astype(int)] @ Em[fac].T).max(1) if fac else np.zeros(len(ts))
             if RETR == "pose": cand = geo

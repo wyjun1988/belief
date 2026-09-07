@@ -130,7 +130,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                                                  mode="bilinear", align_corners=False)[:, 0]
         for k, i in enumerate(bi): zmap[i] = pd[k].cpu().numpy()
     def kfac(cx, cy, W, H):
-        f = W / 2.0
+        f = float(os.environ.get("FRAME_FX", "0")) or W / 2.0   # FRAME_FX: 픽셀 초점거리(OG 1036) · 기본 hfov 90°
         xh = (cx - W / 2.0) / f; yh = (cy - H / 2.0) / f
         return float(np.sqrt(xh ** 2 + (np.cos(TILT) - yh * np.sin(TILT)) ** 2))
     def zpatch(Z, cx, cy, h2):

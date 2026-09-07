@@ -11,7 +11,9 @@ ap.add_argument("--yaw-sign", type=float, default=1.0)
 a = ap.parse_args(); hd = os.path.realpath(a.house); g = json.load(open(os.path.join(hd, "gt.json")))
 maps = sorted(f for f in os.listdir(os.path.join(hd, "map")) if f.endswith(".jpg")); lives = sorted(f for f in os.listdir(os.path.join(hd, "live")) if f.endswith(".jpg"))
 assert len(g["map"]) == len(maps); live = {m["t"]: m for m in g["live"]} if isinstance(g["live"], list) else g["live"]
-W, H = Image.open(os.path.join(hd, "map", maps[0])).size; fx = W / 2.0
+W, H = Image.open(os.path.join(hd, "map", maps[0])).size; fx = W / 2.0; cx0, cy0 = W / 2.0, H / 2.0
+_intr = (g.get("scene_meta") or {}).get("intrinsics")          # OG(og_episode) 는 scene_meta.intrinsics {W,H,fx,cx,cy} 를 준다 (hfov 63.4°) — 있으면 그것을, 없으면 정사각 hfov 90°(HSSD)
+if _intr and _intr.get("fx"): fx, cx0, cy0 = float(_intr["fx"]), float(_intr.get("cx", W / 2.0)), float(_intr.get("cy", H / 2.0))
 os.makedirs(os.path.join(a.out, "rgb"), exist_ok=True); os.makedirs(os.path.join(a.out, "pose"), exist_ok=True)
 def Twc(apos, yaw_deg, pitch_deg=0.0):
     x, z = apos; sx = -1.0 if a.mirror else 1.0; x = sx * x
@@ -31,6 +33,6 @@ for f in lives:
     os.path.exists(os.path.join(a.out, "rgb", "%06d.jpg" % k)) or os.link(os.path.join(hd, "live", f), os.path.join(a.out, "rgb", "%06d.jpg" % k))
     rows.append(Twc(m["apos"], m["yaw"], m.get("pitch", 0.0))); k += 1
 open(os.path.join(a.out, "pose", "poses.txt"), "w").write("\n".join(" ".join("%.9g" % v for v in T.reshape(-1)) for T in rows) + "\n")
-json.dump(dict(width=W, height=H, fps=1.0, fx=fx, fy=fx, cx=W / 2.0, cy=H / 2.0, distortion_model="none", source="hssd gt.json (apos, yaw, pitch) mirror=%d" % a.mirror, n_map=n_map, house=os.path.basename(hd)),
+json.dump(dict(width=W, height=H, fps=1.0, fx=fx, fy=fx, cx=cx0, cy=cy0, distortion_model="none", source="%s gt.json (apos, yaw, pitch) mirror=%d" % ("og" if _intr else "hssd", a.mirror), n_map=n_map, house=os.path.basename(hd)),
           open(os.path.join(a.out, "camera_info.json"), "w"), indent=1)
 print("→ %s · 스캔(map) %d · 라이브 %d · fx %.0f · --scan-end %d" % (a.out, n_map, k - n_map, fx, n_map))

@@ -103,7 +103,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     TX, MK = o.text_embeds, (ti["input_ids"][:, 0] > 0)
     polys = g["scene_meta"]["polys"]
     GEO = os.environ.get("INITMAP_GEO", "1") == "1" and mp and mp[0].get("apos")
-    Wf = float(os.environ.get("FRAME_W", "768")); Ff = Wf / 2
+    Wf = float(os.environ.get("FRAME_W", "768")); Ff = float(os.environ.get("FRAME_FX", "0")) or Wf / 2   # FRAME_FX: 픽셀 초점거리(OG 1280×720·hfov 63.4° → 1036). 기본 W/2 = hfov 90°(HSSD)
     def pbx(cx): return np.degrees(np.arctan((cx - Wf / 2) / Ff))
     def room_pt(pt):
         hits = [r for r, pl in polys.items() if _pip(pt, pl)]

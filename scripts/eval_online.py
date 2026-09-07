@@ -340,7 +340,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             polys, stp, byt = _geo
             m = live[ts[i]]; ap = m.get("apos")
             if ap is None: return None
-            FF = FRAME_W / 2.0
+            FF = float(os.environ.get("FRAME_FX", "0")) or FRAME_W / 2.0   # FRAME_FX: 픽셀 초점거리(OG 1036) · 기본 hfov 90°
             def pb(cx): return np.degrees(np.arctan((cx - FRAME_W/2.0) / FF))
             def br(dx, dz): return np.degrees(np.arctan2(dx, dz))
             def pxof(pi): return (pi % pw + .5) / pw * FRAME_W
@@ -583,6 +583,21 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                         if _cc and _cc[0][1] >= min(2, C0_MIN) and _cc[0][0] != record:
                             alt = _cc[0][0]
                         if os.environ.get("C0_DIAG") == "1": _dg.update(proj_rooms=_rms)
+                if alt is None and os.environ.get("C0_NBRROOM", "0") == "1" and len(_pick) >= C0_MIN and _geo is not None and "_XSc" in dir():
+                    # 목격 프레임에 **같이 보이는 정적 물체(개체 exemplar, 스캔에서 방 알려짐)** 의 방 다수결 → 물체의 방 (사용자 제안 2026-09-07: 카메라 위치 대신 주변 물체 조합).
+                    # 타입 패치와 화면상 가까운 개체에 가중(같은 화면 구역 = 같은 방일 확률↑).
+                    _vote = Counter(); _thx = float(os.environ.get("NBR_TH", "0.03")); _topk = int(os.environ.get("NBR_TOPK", "6"))
+                    for i2 in _pick:
+                        _sc = _XSc[i2]; _ord = np.argsort(-_sc)[:_topk]; _px, _py = P[i2, ti] % pw, P[i2, ti] // pw
+                        for c_ in _ord:
+                            if _sc[c_] < _thx: continue
+                            _rm_ = sm["static"].get(_axids[c_], {}).get("room")
+                            if not _rm_: continue
+                            _d_ = np.hypot(_XPp[i2, c_] % pw - _px, _XPp[i2, c_] // pw - _py)
+                            _vote[_rm_] += float(_sc[c_]) / (1.0 + _d_ / 8.0)
+                    if _vote:
+                        _r0, _w0 = _vote.most_common(1)[0]
+                        if _r0 != record and _w0 >= float(os.environ.get("NBR_MINW", "0.05")): alt = _r0
                 if alt is None and os.environ.get("C0_CAMROOM", "0") == "1" and len(_pick) >= C0_MIN:
                     # 투영(포즈+거리)이 없거나 기록 방으로 떨어졌을 때: 검증 통과 프레임의 **카메라방**(임베딩) 다수결이 기록과 다르면 그 방을 채택 (2026-09-07 시험)
                     _cr = Counter(arm[i2] for i2 in _pick if arm[i2]); _top = _cr.most_common(1)
@@ -644,7 +659,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     m2 = live[ts[i]]
                     dx2 = spot[0] - m2["apos"][0]; dz2 = spot[2] - m2["apos"][1]
                     db2 = (np.degrees(np.arctan2(dx2, dz2)) - m2["yaw"] + 180) % 360 - 180
-                    u = FRAME_W / 2 + np.tan(np.radians(np.clip(db2, -80, 80))) * FRAME_W / 2
+                    u = FRAME_W / 2 + np.tan(np.radians(np.clip(db2, -80, 80))) * (float(os.environ.get("FRAME_FX", "0")) or FRAME_W / 2)
                     pu = (P[i, ti] % pw + .5) / pw * FRAME_W
                     return abs(pu - u) < 130
                 if len(_e) >= ABS_MINE and len(_l) >= ABS_MINL:
