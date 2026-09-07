@@ -15,7 +15,8 @@ import argparse, json, os, sys, time
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from kx.depth.pose_stitch import umeyama  # noqa: E402
-import pycolmap  # noqa: E402
+try: import pycolmap  # noqa: E402
+except ImportError: pycolmap = None   # --from-poses(외부 포즈 정렬·평가)만 쓰면 pycolmap 이 없어도 된다 (RTX 2026-09-07)
 
 ap = argparse.ArgumentParser()
 ap.add_argument("house")
@@ -56,7 +57,10 @@ names_map = ["map/" + f for f in maps]; names_live = ["live/" + f for f in lives
 from PIL import Image
 W, H = Image.open(os.path.join(hd, "map", maps[0])).size; fx = W / 2.0          # hfov 90° 핀홀
 db = os.path.join(work, "db.db"); T0 = time.time()
-DEV = pycolmap.Device.cuda if a.gpu else pycolmap.Device.cpu
+DEV = None
+if not a.from_poses:
+    assert pycolmap is not None, "pycolmap 필요 (COLMAP 재구성 경로)"
+    DEV = pycolmap.Device.cuda if a.gpu else pycolmap.Device.cpu
 def log(*x): print("[%5.0fs] " % (time.time() - T0) + " ".join(str(v) for v in x), flush=True)
 
 if a.from_poses:

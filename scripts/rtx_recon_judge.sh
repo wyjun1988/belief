@@ -13,6 +13,13 @@ RESN=${RESN:-518}           # VGGT 해상도. 96GB 면 전체 지도(300~500장)
 K=${K:-1}                   # 1 = house 첫 채에서 DA 척도 상수를 GT sim3 스케일로 추정, 아니면 고정값(HSSD 0.468)
 mkdir -p $VG $CR $(dirname $RES); cd "$(dirname "$0")/.."
 say() { echo "$(date '+%m-%d %H:%M') $*" | tee -a $RES; }
+evalpose() { # <house_dir> <raw.jsonl> <outdir> <hn>: [진단] GT sim3 · [실제] 지점 라벨 정렬 — 출력 전체를 로그로 남기고, 실패하면 꼬리 3줄을 결과에 적는다
+  local h=$1 raw=$2 od=$3 hn=$4
+  python scripts/sfm_reloc.py $h --from-poses $raw --scale gt --align gt --work $od/${hn}_gt --out /tmp/x_$hn.jsonl > $od/eval_gt_$hn.log 2>&1 \
+    && grep -aE "정렬\(|커버리지" $od/eval_gt_$hn.log | sed 's/^/  [진단] /' >> $RES || { say "FAIL 진단 정렬 $hn (로그 $od/eval_gt_$hn.log)"; tail -3 $od/eval_gt_$hn.log | sed 's/^/      /' >> $RES; }
+  python scripts/sfm_reloc.py $h --from-poses $raw --scale da --align sites --work $od/$hn --out $od/pose_$hn.jsonl > $od/eval_sites_$hn.log 2>&1 \
+    && grep -aE "라벨 정렬|커버리지" $od/eval_sites_$hn.log | sed 's/^/  [실제] /' >> $RES || { say "FAIL 실제 정렬 $hn (로그 $od/eval_sites_$hn.log)"; tail -3 $od/eval_sites_$hn.log | sed 's/^/      /' >> $RES; }
+}
 HOUSES=$(ls -d $OG4/house_* 2>/dev/null); N=$(echo "$HOUSES" | wc -w | tr -d ' ')
 [ "$N" -ge 1 ] || { echo "집 없음: $OG4"; exit 2; }
 say "# RTX 재구성 판정 (채 $N · live 표본 1/$LSTEP · VGGT ${RESN}px) — FAIL 은 단계 실패"
@@ -32,8 +39,7 @@ say "## 2. VGGT $N채 — 지도 전부 + live 표본 한 통과 → [진단] GT
 for h in $HOUSES; do hn=$(basename $h)
   [ -s $VG/raw_$hn.jsonl ] || python scripts/vggt_reloc.py $h --global-live-step $LSTEP --map-max 0 --res $RESN --da-k $K --out $VG/raw_$hn.jsonl > $VG/$hn.log 2>&1 || say "FAIL VGGT $hn (로그 $VG/$hn.log)"
   echo "### VGGT $hn" >> $RES; grep -aE "전역 통과|→" $VG/$hn.log 2>/dev/null | tail -2 | sed 's/^/  /' >> $RES
-  python scripts/sfm_reloc.py $h --from-poses $VG/raw_$hn.jsonl --scale gt --align gt --work $VG/${hn}_gt --out /tmp/x.jsonl 2>&1 | grep -aE "정렬\(|커버리지" | sed 's/^/  [진단] /' >> $RES
-  python scripts/sfm_reloc.py $h --from-poses $VG/raw_$hn.jsonl --scale da --align sites --work $VG/$hn --out $VG/pose_$hn.jsonl 2>&1 | grep -aE "라벨 정렬|커버리지" | sed 's/^/  [실제] /' >> $RES
+  evalpose $h $VG/raw_$hn.jsonl $VG $hn
 done
 
 if [ -n "$CUT3R_ROOT" ] && [ -n "$CUT3R_CKPT" ]; then
@@ -42,8 +48,7 @@ if [ -n "$CUT3R_ROOT" ] && [ -n "$CUT3R_CKPT" ]; then
     [ -s $CR/self_$hn.log ] || python scripts/cut3r_reloc.py $h --cut3r-root $CUT3R_ROOT --model-path $CUT3R_CKPT --selfcheck > $CR/self_$hn.log 2>&1 || say "FAIL CUT3R 자가검사 $hn (로그 $CR/self_$hn.log)"
     [ -s $CR/raw_$hn.jsonl ] || python scripts/cut3r_reloc.py $h --cut3r-root $CUT3R_ROOT --model-path $CUT3R_CKPT --live-step $LSTEP --da-k $K --out $CR/raw_$hn.jsonl > $CR/$hn.log 2>&1 || say "FAIL CUT3R $hn (로그 $CR/$hn.log — OOM 이면 --size 224 또는 --max-frames 800)"
     echo "### CUT3R $hn" >> $RES; grep -aE "자가검사|이동 중앙" $CR/self_$hn.log 2>/dev/null | tail -1 | sed 's/^/  /' >> $RES; grep -aE "세션 완료|DA 척도|→" $CR/$hn.log 2>/dev/null | tail -3 | sed 's/^/  /' >> $RES
-    python scripts/sfm_reloc.py $h --from-poses $CR/raw_$hn.jsonl --scale gt --align gt --work $CR/${hn}_gt --out /tmp/x.jsonl 2>&1 | grep -aE "정렬\(|커버리지" | sed 's/^/  [진단] /' >> $RES
-    python scripts/sfm_reloc.py $h --from-poses $CR/raw_$hn.jsonl --scale da --align sites --work $CR/$hn --out $CR/pose_$hn.jsonl 2>&1 | grep -aE "라벨 정렬|커버리지" | sed 's/^/  [실제] /' >> $RES
+    evalpose $h $CR/raw_$hn.jsonl $CR $hn
   done
 else
   say "## 3. CUT3R 건너뜀 (CUT3R_ROOT/CUT3R_CKPT 미지정)"
