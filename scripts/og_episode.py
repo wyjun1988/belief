@@ -122,6 +122,8 @@ ap.add_argument("--detour", type=float, default=0.85,
                 help="probability that a visit routes via an extra waypoint, to keep "
                      "the episode walking rather than pivoting in place")
 ap.add_argument("--smoke", action="store_true")
+ap.add_argument("--gate", default="full", choices=["full", "map"],
+                help="full: SPEC 게이트 전부 · map: 재구성 판정용 — 경우 수·프레임 수 게이트를 건너뛰고 지도 밀도는 설정값(--map-sites x 방향 수)으로 검사 (2026-09-07)")
 a = ap.parse_args()
 if a.frames < 1200 and not a.smoke:
     raise SystemExit("need --frames >=1200 (or --smoke)")
@@ -1613,25 +1615,27 @@ print(json.dumps(audit, ensure_ascii=False), flush=True)
 
 fails = []
 if not a.smoke:
-    if len(live) < min(1200, frames_requested):
+    if a.gate == "full" and len(live) < min(1200, frames_requested):
         fails.append("frames %d < %d" % (len(live), min(1200, frames_requested)))
     if not (a.min_rooms <= len(rooms) <= a.max_rooms):
         fails.append("%d rooms in scope, want %d..%d" % (len(rooms), a.min_rooms, a.max_rooms))
     for t in need:
         if t not in {rtype[r] for r in rooms}:
             fails.append("no %s in scope" % t)
-    if ok1 < a.case1:
-        fails.append("case1 %d < %d" % (ok1, a.case1))
-    if ok2 < a.case2:
-        fails.append("case2 %d < %d" % (ok2, a.case2))
-    if ok3 < a.case3:
-        fails.append("case3 %d < %d" % (ok3, a.case3))
-    if ok4 < a.case4:
-        fails.append("case4 %d < %d" % (ok4, a.case4))
+    if a.gate == "full":
+        if ok1 < a.case1:
+            fails.append("case1 %d < %d" % (ok1, a.case1))
+        if ok2 < a.case2:
+            fails.append("case2 %d < %d" % (ok2, a.case2))
+        if ok3 < a.case3:
+            fails.append("case3 %d < %d" % (ok3, a.case3))
+        if ok4 < a.case4:
+            fails.append("case4 %d < %d" % (ok4, a.case4))
     _mpr = [sum(1 for m in mapping if m["room"] == r) for r in rooms]
-    if _mpr and min(_mpr) < 24:
+    _want = 24 if a.gate == "full" else max(2, a.map_sites * (360 // max(5, a.map_step)))   # 종전: 24 고정(3 지점 x 8 방향) — 보행형 지도(--map-sites 1 --map-step 180)에서는 항상 탈락했다
+    if _mpr and min(_mpr) < _want:
         fails.append("mapping walk density: %d frames in the thinnest room "
-                     "(SPEC 3 wants >=24 = 3 sites x 8 headings)" % min(_mpr))
+                     "(wants >=%d = %d sites x %d headings%s)" % (min(_mpr), _want, a.map_sites, 360 // max(5, a.map_step), "; SPEC 3" if a.gate == "full" else "; --gate map"))
     if yaw_audit["median_abs_error_deg"] is None or yaw_audit["median_abs_error_deg"] > 0.5:
         fails.append("yaw median abs error %s deg" % yaw_audit["median_abs_error_deg"])
     if route_fail:
