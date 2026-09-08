@@ -73,7 +73,7 @@ for hd in hds:
         for p in pts:
             if int(p[5]) not in ks and int(p[5]) < len(mfs): ks.append(int(p[5]))
             if len(ks) >= KSCAN: break
-        votes = collections.defaultdict(float)
+        votes = collections.defaultdict(float); scan_fr = []          # scan_fr: 타겟이 앵커 옆에 있던 스캔 프레임(전반 증거 = 기록 자체)
         for k in ks:
             im = Image.open(mfs[k]).convert("RGB"); W, H = im.size; det = owl_multi(im, [v0["type"]] + rtypes)
             tb = det.get(v0["type"])
@@ -87,11 +87,11 @@ for hd in hds:
                     if d <= ADJ and (best is None or d < best[0]): best = (d, at, ab)
             if best is None: continue
             e = clip_emb([crop(im, best[2])])[0]; m = match(e, best[1])
-            if m and m[0][1] >= TAU: votes[m[0][0]] += m[0][1]
+            if m and m[0][1] >= TAU: votes[m[0][0]] += m[0][1]; scan_fr.append([int(k)] + [round(v, 1) for v in tb] + [m[0][0]])
         if not votes:
             out.write(json.dumps(rec) + "\n"); continue
         aid = max(votes, key=votes.get); ainfo = next(r for r in reg if r["id"] == aid); at = ainfo["type"]; aroom = grp(ainfo.get("room")); aidx = vocab.index(at) if at in vocab[:nT] else None
-        rec.update(anchor_id=aid, anchor_type=at, anchor_room=aroom, reg_sim=round(votes[aid] / max(1, len(ks)), 3)); n_anch += 1
+        rec.update(anchor_id=aid, anchor_type=at, anchor_room=aroom, reg_sim=round(votes[aid] / max(1, len(ks)), 3), scan_frames=[f[:5] for f in scan_fr if f[5] == aid]); n_anch += 1
         if aidx is None or aroom is None:
             out.write(json.dumps(rec) + "\n"); continue
         # (2) 라이브 문맥 프레임: 카메라방 == 앵커 방 · 타입 검출 · 같은 인스턴스

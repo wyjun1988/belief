@@ -108,6 +108,16 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     img.crop((max(0, int(cx)-hh), max(0, int(cy)-hh), min(W, int(cx)+hh), min(H, int(cy)+hh))).resize((336, 336)).save(TMP, quality=92)
                     sc.append(round(s_ac(TMP, a, b), 3))
                 rec[role].append([t, sc[0], sc[1], round(float(f[5]), 3), 1])
+            # 전반 증거가 모자라면 **스캔 프레임**(타겟이 그 앵커 옆에 있던 기록 장면)을 전반 행으로 — 기록 자체가 "거기 있었다"는 증거다. t 는 음수로 표시.
+            for f in ((ac or {}).get("scan_frames") or [])[:max(0, K_EARLY - len(rec["early"]))]:
+                mp_ = os.path.join(hdr, "map", "%04d.jpg" % int(f[0]))
+                if not os.path.exists(mp_): continue
+                img = Image.open(mp_).convert("RGB"); W, H = img.size; x0, y0, x1, y1 = f[1:5]; cx, cy = (x0 + x1) / 2, (y0 + y1) / 2; h2 = max(48, int(max(x1 - x0, y1 - y0) * 0.65))
+                a = words(v0["type"]); b = words(vocab[int(np.argsort(-S[0, :nT])[1])]); sc = []
+                for hh in (h2, max(h2 * 2, W // 4)):
+                    img.crop((max(0, int(cx)-hh), max(0, int(cy)-hh), min(W, int(cx)+hh), min(H, int(cy)+hh))).resize((336, 336)).save(TMP, quality=92)
+                    sc.append(round(s_ac(TMP, a, b), 3))
+                rec["early"].append([-1000 - int(f[0]), sc[0], sc[1], 1.0, 1])
             out.write(json.dumps(rec) + "\n"); out.flush(); n_obj += 1
             continue
         if RETR in ("nbr", "posenbr"):
