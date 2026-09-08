@@ -347,6 +347,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             if os.environ.get("LOC_YAW_GT") == "1" and m.get("yaw") is not None:
                 # 사다리 ①: 포즈 = 시뮬 제공물. ⚠️ 이 분기는 2026-09-02 밤까지 **없었다** — "포즈:GT" 로
                 # 표기된 HSSD 판 전부가 실제로는 앵커 투표(구 게이트)로 돌았다 (§129 정정).
+                if os.environ.get("C0_BEARING_GT") == "1" and (m.get("ctr") or {}).get(oid):   # 사다리 진단용: 화면 안 위치를 GT 중심으로 (OWL 패치 대신)
+                    return ap, float(m["yaw"]) + pb(float(m["ctr"][oid][0]))
                 return ap, float(m["yaw"]) + pb(pxof(P[i, ti]))
             if os.environ.get("YAW_ORDER") == "motion_first":
                 # 이동 중이면 진행 방향을 yaw 로 먼저 쓴다 (v2.2 실측: 오차 중앙 0.8°·<10° 0.86 — 투표 3.4°·0.67 보다
@@ -528,7 +530,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 alt = None                          # 실점수 있는 타겟은 실경로가 판정
                 _pas = [(int(e[0]), e[1]) for e in _rr
                         if e[1] >= VTH and (len(e) < 3 or e[2] >= VTH2)]
-                if len(_pas) >= 4:                  # exnew 외형 게이트
+                if len(_pas) >= 4 and os.environ.get("C0_QSGATE", "1") == "1":                  # exnew 외형 게이트 (C0_QSGATE=0 으로 끔 — 이동 후 프레임은 exemplar 와 달라 보여 걸러질 수 있다, 2026-09-08 진단)
                     _qv = [QS[i2, j] for i2, _s in _pas]
                     _qm = float(np.median(_qv))
                     _pas = [(i2, s_) for (i2, s_), q in zip(_pas, _qv) if q >= _qm] or _pas
