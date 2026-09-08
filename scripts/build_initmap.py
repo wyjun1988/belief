@@ -185,7 +185,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     # ── 인스턴스 분리: 투영점을 군집화해 **타입당 여러 방**을 허용 ──
     # 실제 주거는 의자·책이 여러 방에 흩어진다. 타입당 방 1개로 접으면 그 사실이
     # 통째로 사라진다(2026-09-01). 군집 반경 CLU m, 점수합 상위 MAXI 개까지.
-    if raw_: json.dump(raw_, open(os.path.join(os.path.realpath(hd), "initmap_raw.json"), "w"))
+    if raw_: json.dump(raw_, open(os.path.join(os.path.realpath(hd), os.environ.get("INITMAP_RAW_OUT", "initmap_raw.json")), "w"))   # INITMAP_RAW_OUT: 임계 변형판이 기존 raw 를 덮어쓰지 않도록
     CLU = float(os.environ.get("INITMAP_CLUSTER", "2.0"))
     MAXI = int(os.environ.get("INITMAP_MAXINST", "3"))
     inst_out = []

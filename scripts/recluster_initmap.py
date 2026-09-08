@@ -4,7 +4,7 @@
 산출 형식은 build_initmap 과 같다: [{type, room, w, pos:[x,z], n}] (w = 군집 점수합, 순위는 --rank 로 정렬해 저장)."""
 import argparse, json, glob, os, math, numpy as np
 ap = argparse.ArgumentParser(); ap.add_argument("root"); ap.add_argument("--out", default="initmap_owl_rc.json"); ap.add_argument("--clu", type=float, default=2.0)
-ap.add_argument("--th", type=float, default=0.12); ap.add_argument("--rank", default="max", choices=["sum", "max", "views", "views_sum", "nvw"]); ap.add_argument("--minv", type=int, default=1); ap.add_argument("--maxi", type=int, default=3)
+ap.add_argument("--raw", default="initmap_raw.json"); ap.add_argument("--th", type=float, default=0.12); ap.add_argument("--rank", default="max", choices=["sum", "max", "views", "views_sum", "nvw"]); ap.add_argument("--minv", type=int, default=1); ap.add_argument("--maxi", type=int, default=3)
 a = ap.parse_args()
 def _pip(pt, poly):
     x, z = pt; ins = False; n = len(poly)
@@ -19,7 +19,7 @@ def room_of(pt, polys):
 KEY = {"sum": lambda c: c["w"], "max": lambda c: c["mx"], "views": lambda c: (c["nv"], c["mx"]), "views_sum": lambda c: c["nv"] * c["mx"] + 1e-3 * c["w"], "nvw": lambda c: math.sqrt(c["nv"]) * c["w"]}
 n_h = 0
 for hd in sorted(glob.glob(os.path.join(a.root, "house_*"))):
-    hdr = os.path.realpath(hd); rf = hdr + "/initmap_raw.json"
+    hdr = os.path.realpath(hd); rf = os.path.join(hdr, a.raw)
     if not os.path.exists(rf): continue
     raw = json.load(open(rf)); polys = json.load(open(hdr + "/gt.json"))["scene_meta"]["polys"]; out = []
     for t, pts in raw.items():
