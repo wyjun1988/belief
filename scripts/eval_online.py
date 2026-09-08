@@ -112,8 +112,13 @@ if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
 
 # ── 재료 사다리 (AUDIT_20260902 조치1): 어떤 GT 가 들어갔는지 사람이 아니라 코드가 찍는다 ──
 _LG = os.environ.get("LOC_GEO", "0") == "1"
+# 고정 앵커 씬그래프(사용자 제안 2026-09-08, §166-25 GT 상한 0.95): 이동성 낮은 가구 타입만 앵커. 타겟 박스 옆(화면 인접·박스 안)의
+# 앵커 검출 → 그 타입의 초기맵 인스턴스 방 → 타겟 방. 앵커 인스턴스는 초기맵 w 지배(ANCH_SEL=dom) 또는 카메라방 일치(cam)로 고른다.
+_ANCH_TYPES = [t.strip() for t in os.environ.get("ANCH_TYPES", "bed,couch,table,cabinet,shelves,chest of drawers,wardrobe,counter,tv,toilet,fridge,shower,bathtub,washer dryer,bench,floor lamp,stand,sink,fireplace,dishwasher").split(",") if t.strip()]
+_VANCH_N = [0, 0, 0]      # (집 수, 앵커 인스턴스 수, 명부 있는 집 수)
+_AROOM_GT = os.environ.get("ANCH_ROOM", "initmap") == "gt"       # 앵커 방 출처: initmap(무GT) · gt(⚠️ 인스턴스 식별 상한 사다리)
 _ANCH_EX = float(os.environ.get("ANCH_EX", "0.80")); _ANCH_TY = float(os.environ.get("ANCH_TY", "0.10")); _ANCH_DP = int(os.environ.get("ANCH_DP", "2"))
-LADDER = ("[RoI ≤%sm %s ≥%spx] " % (os.environ.get("ROI_DIST", "-"), os.environ.get("ROI_MODE", "or"), os.environ.get("ROI_BOX", "-")) if (float(os.environ.get("ROI_DIST", "0")) > 0 or float(os.environ.get("ROI_BOX", "0")) > 0) else "") + "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:%s · 카메라방:%s%s · 사전확률:%s · c0창:%s%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
+LADDER = ("[RoI ≤%sm %s ≥%spx] " % (os.environ.get("ROI_DIST", "-"), os.environ.get("ROI_MODE", "or"), os.environ.get("ROI_BOX", "-")) if (float(os.environ.get("ROI_DIST", "0")) > 0 or float(os.environ.get("ROI_BOX", "0")) > 0) else "") + "초기맵:%s · 위치:%s · 포즈:%s · 거리:%s · 검증:%s · vis:%s · 카메라방:%s%s · 사전확률:%s · c0창:%s%s%s%s%s · 앵커게이트:%.2f/%.2f/%d%s · 부재:%s" % (
     "GT" if SG_INIT == "gt" else "검출",
     "SfM" if POSE is not None else "GT(apos)",
     # POSE_JSONL 이 있으면 live 의 apos·yaw 가 SfM 값으로 덮인다 → LOC_YAW_GT=1 경로가 읽는 m["yaw"] 는 SfM yaw 다
@@ -123,10 +128,10 @@ LADDER = ("[RoI ≤%sm %s ≥%spx] " % (os.environ.get("ROI_DIST", "-"), os.envi
     "GT(인스턴스선택·부재분할)" if _VISGT else "검출(경우분류만 GT)",
     ("검색" if os.environ.get("ROOM_JSONL") else "SfM" if POSE is not None else "GT"), "(열린공간 병합)" if os.environ.get("ROOM_GROUPS") == "1" else "",
     os.path.basename(PRIOR_JSON), os.environ.get("C0_WIN", "3"), "(광선만)" if os.environ.get("C0_RAYPICK") == "1" else "",
-    ("(≤%sm)" % os.environ.get("C0_MAXD")) if os.environ.get("C0_MAXD") else "", "(방위다양)" if os.environ.get("C0_DIVERSE") == "1" else "", _ANCH_EX, _ANCH_TY, _ANCH_DP,
+    ("(≤%sm)" % os.environ.get("C0_MAXD")) if os.environ.get("C0_MAXD") else "", ("(앵커:%s/%s%s%s)" % (os.environ.get("C0_ANCHOR"), os.environ.get("ANCH_SEL", "dom"), "·VLM명부" if os.environ.get("ANCH_SRC") == "vlm" else "", "·앵커방:GT⚠️" if _AROOM_GT else "")) if os.environ.get("C0_ANCHOR", "0") != "0" else "", "(방위다양)" if os.environ.get("C0_DIVERSE") == "1" else "", _ANCH_EX, _ANCH_TY, _ANCH_DP,
     (" · yaw:이동방향우선(정지시 투표)" if os.environ.get("YAW_ORDER") == "motion_first" else " · yaw대체:이동방향" if os.environ.get("YAW_FALLBACK") == "motion" else ""),
     ((("기하(%s)" % os.environ.get("ABS_MODE", "spot")) + (" 자리:GT⚠️" if os.environ.get("ABS_SPOT", "gt") == "gt" else " 자리:초기맵")) if ABS_GEO else "점수마진") + (" +검증기부재(%s)" % os.environ.get("ABS_VERIFY_MODE", "or") if os.environ.get("ABS_VERIFY_JSONL") else ""))
-_NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT", "위치:GT", "자리:GT"))   # 자리:GT = 부재 게이트가 GT 물체 원위치를 씀(2026-09-07 발견)
+_NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT", "위치:GT", "자리:GT", "앵커방:GT"))   # 자리:GT = 부재 게이트가 GT 물체 원위치를 씀(2026-09-07 발견)
 _PHANTOM = json.load(open(os.environ["PHANTOM_JSON"])) if os.environ.get("PHANTOM_JSON") else None
 _PH_SKIP = [0]
 if _PHANTOM: LADDER += " · 유령제외:%d집" % len(_PHANTOM)
@@ -144,6 +149,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     za = np.load(fa, allow_pickle=True); zq = np.load(fq, allow_pickle=True)
     S, P, ph, pw, ts = za["s"], za["p"], int(za["ph"]), int(za["pw"]), za["ts"]
     vocab, nT = list(za["vocab"]), int(za["nT"])
+    BX = za["bx"].astype(np.float32) if "bx" in za.files else None      # 앵커 프레임 타입별 OWL 박스 (cx, cy, w, h; 0~1) — 고정 앵커 분기(C0_ANCHOR)
+    _AIDX = {t: vocab.index(t) for t in _ANCH_TYPES if t in vocab[:nT]}
     QT, QS, STx = list(zq["tg"]), zq["si"], zq["st"]
     g = json.load(open(hd + "/gt.json")); sm = g.get("scene_meta")
     if not sm: continue
@@ -248,6 +255,15 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             if i2.get("pos"):        # 인스턴스판: 타입당 여러 (방, 좌표)
                 im_inst.setdefault(i2["type"], []).append((i2["pos"], i2["room"], i2["w"]))
         im = {t: r for t, (w, r) in best.items()}
+    # VLM 앵커 명부(ANCH_SRC=vlm, scripts/anchor_crops.py → anchor_vlm_mlx.py): 통과 인스턴스만 앵커 후보 — 타입은 검출 어휘(박스 있는 타겟 타입)로 제한
+    _VANCH = {}
+    if os.environ.get("ANCH_SRC", "initmap") == "vlm":
+        _vf = os.path.join(os.path.realpath(hd), os.environ.get("ANCH_FILE", "anchors_vlm.json"))
+        if os.path.exists(_vf):
+            for _a in json.load(open(_vf)):
+                if _a.get("anchor") and _a.get("pos"): _VANCH.setdefault(_a["type"], []).append((_a["pos"], _grp(_a.get("room")), _a["w"]))
+        _AIDX = {t: vocab.index(t) for t in _VANCH if t in vocab[:nT]}
+        _VANCH_N[0] += 1; _VANCH_N[1] += sum(len(v) for v in _VANCH.values()); _VANCH_N[2] += os.path.exists(_vf)
     moves = sorted(g["moves"], key=lambda m: m["t"])
     _ph = set((_PHANTOM.get(hn) or {}).get("phantom") or []) | set((_PHANTOM.get(hn) or {}).get("hosts") or []) if _PHANTOM else set()
     cnt = Counter(v["type"] for o, v in g["gt0"].items() if o not in _ph)   # 타입 유일성도 렌더된 물체 기준
@@ -592,6 +608,42 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                         if _cc and _cc[0][1] >= min(2, C0_MIN) and _cc[0][0] != record:
                             alt = _cc[0][0]
                         if os.environ.get("C0_DIAG") == "1": _dg.update(proj_rooms=_rms)
+                _amode = os.environ.get("C0_ANCHOR", "0")     # 0 · first(앵커가 있으면 앵커가 정한다) · fallback(투영이 못 정했을 때만)
+                if _amode != "0" and len(_pick) >= C0_MIN and (_amode == "first" or alt is None) and BX is not None and ti < nT:
+                    _ath = float(os.environ.get("ANCH_STH", "0.15")); _ar = float(os.environ.get("ANCH_R", "0.25")); _adom = float(os.environ.get("ANCH_DOM", "2.0"))
+                    _asel = os.environ.get("ANCH_SEL", "dom"); _avote = Counter(); _adg = []
+                    for i2 in _pick:
+                        _tb = BX[i2, ti]
+                        if _tb[2] <= 0: continue
+                        _bestA = None
+                        for _t, _j in _AIDX.items():
+                            if S[i2, _j] < _ath: continue
+                            _ab = BX[i2, _j]; _d = float(np.hypot(_ab[0] - _tb[0], _ab[1] - _tb[1]))
+                            if abs(_tb[0] - _ab[0]) <= _ab[2] / 2 and abs(_tb[1] - _ab[1]) <= _ab[3] / 2: _d = 0.0   # 타겟 중심이 앵커 박스 안(테이블 위 노트북)
+                            if _d > _ar: continue
+                            _insts = sorted((_VANCH.get(_t) if _VANCH else im_inst.get(_t)) or [], key=lambda c3: -c3[2])
+                            _room = None
+                            if _AROOM_GT:
+                                # ⚠️ GT 사다리: 앵커 인스턴스를 완벽히 알아본다고 가정 — 타겟의 실제 위치에 가장 가까운 그 타입 실물의 방
+                                _tp = (mv[-1].get("pos") if mv and mv[-1].get("pos") else v0.get("pos"))
+                                _reals = [(np.hypot(vv["pos"][0] - _tp[0], vv["pos"][-1] - _tp[-1]), vv["room"]) for oo, vv in sm["static"].items() if vv["type"] == _t and oo not in _ph and vv.get("pos") and vv.get("room")] if _tp is not None else []
+                                if _reals: _room = min(_reals)[1]
+                                if _room is None: continue
+                            if not _insts and not _AROOM_GT: continue
+                            if _room is None and _asel == "cam" and arm[i2]:
+                                _cm = [c3 for c3 in _insts if c3[1] == arm[i2]]
+                                if _cm: _room = _cm[0][1]
+                            if _room is None and (len(_insts) == 1 or _insts[0][2] >= _adom * _insts[1][2]): _room = _insts[0][1]
+                            if _room is None: continue
+                            if _bestA is None or _d < _bestA[0]: _bestA = (_d, _room, _t)
+                        if _bestA: _avote[_bestA[1]] += 1; _adg.append((int(ts[i2]), _bestA[2], _bestA[1], round(_bestA[0], 3)))
+                    if _avote:
+                        _r0, _w0 = _avote.most_common(1)[0]
+                        if _w0 >= min(2, C0_MIN):
+                            if _amode == "first": alt = _r0 if _r0 != record else None
+                            elif _r0 != record: alt = _r0
+                    if os.environ.get("ANCH_DIAG") == "1":
+                        print("ANCH_DIAG " + json.dumps(dict(house=hn, oid=oid, record=record, votes=dict(_avote), alt=alt, tgt=tgt, frames=_adg), ensure_ascii=False), flush=True)
                 if alt is None and os.environ.get("C0_NBRROOM", "0") == "1" and len(_pick) >= C0_MIN and _geo is not None and "_XSc" in dir():
                     # 목격 프레임에 **같이 보이는 정적 물체(개체 exemplar, 스캔에서 방 알려짐)** 의 방 다수결 → 물체의 방 (사용자 제안 2026-09-07: 카메라 위치 대신 주변 물체 조합).
                     # 타입 패치와 화면상 가까운 개체에 가중(같은 화면 구역 = 같은 방일 확률↑).
@@ -778,6 +830,7 @@ print("  정지 지도(t=0 GT)        %.3f" % np.mean(res["static"]))
 print("  **기록(갱신 후)**         **%.3f**" % np.mean(res["rec"]))
 print("  **최종 답(부재분기 포함)** **%.3f**" % np.mean(res["sys"]))
 if _PHANTOM: print("  유령 물체 제외 %d개 (PHANTOM_JSON=%s)" % (_PH_SKIP[0], os.environ.get("PHANTOM_JSON")))
+if os.environ.get("ANCH_SRC") == "vlm": print("  VLM 앵커 명부: %d/%d 집 · 앵커 인스턴스 %d" % (_VANCH_N[2], _VANCH_N[0], _VANCH_N[1]))
 print("  top-1+2(후보 2개 누적 — 답변형식 지표, 증거능력 아님) %.3f"
       % np.mean(res.get("sys2", [0])))
 print("  이동만: 기록 %.3f · 최종 %.3f (n=%d)"
