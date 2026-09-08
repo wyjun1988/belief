@@ -50,6 +50,10 @@ rooms = collections.defaultdict(dict)
 if RJ:
     for l in open(RJ):
         r = json.loads(l); rooms[r["house"]][r["t"]] = r["room"]
+ACTX = {}                                    # RETR=anchor: anchor_ctx.py 의 문맥 프레임(앵커 인스턴스 박스) — 포즈 없이 "옛 자리" 프레임을 찾는다 (§166-29)
+if RETR == "anchor":
+    for _l in open(os.path.expanduser(os.environ["ANCHOR_CTX_JSONL"])):
+        _r = json.loads(_l); ACTX[(_r["house"], _r["oid"])] = _r
 done = set()
 if os.path.exists(OUTJ):
     for l in open(OUTJ):
@@ -90,6 +94,22 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         rec = dict(house=hn, oid=oid, type=v0["type"], record=record, n_map_facing=len(fac), late=[], early=[])
         inroom = [i for i in range(len(ts)) if arm[i] == record]
         allf = list(range(len(ts)))
+        if RETR == "anchor":
+            ac = ACTX.get((hn, oid)); tidx = {int(t_): i_ for i_, t_ in enumerate(ts)}
+            fr_ = sorted([f for f in (ac["frames"] if ac else []) if int(f[0]) in tidx and int(f[0]) in lv], key=lambda f: f[0])
+            rec.update(anchor_id=(ac or {}).get("anchor_id"), anchor_room=(ac or {}).get("anchor_room"), n_ctx=len(fr_))
+            picks = [("late", f) for f in fr_[-K_LATE:]] + [("early", f) for f in fr_[:-K_LATE][:K_EARLY]]
+            for role, f in picks:
+                t = int(f[0]); i = tidx[t]; img = Image.open(lv[t]).convert("RGB"); W, H = img.size
+                x0, y0, x1, y1 = f[1:5]; cx, cy = (x0 + x1) / 2, (y0 + y1) / 2; h2 = max(48, int(max(x1 - x0, y1 - y0) * 0.6))   # 앵커 박스 크기의 크롭(그 위·옆) + 넓은 크롭
+                a = words(v0["type"]); order = np.argsort(-S[i, :nT]); b = words(vocab[int(order[1] if order[0] == ti else order[0])])
+                sc = []
+                for hh in (h2, max(h2 * 2, W // 4)):
+                    img.crop((max(0, int(cx)-hh), max(0, int(cy)-hh), min(W, int(cx)+hh), min(H, int(cy)+hh))).resize((336, 336)).save(TMP, quality=92)
+                    sc.append(round(s_ac(TMP, a, b), 3))
+                rec[role].append([t, sc[0], sc[1], round(float(f[5]), 3), 1])
+            out.write(json.dumps(rec) + "\n"); out.flush(); n_obj += 1
+            continue
         if RETR in ("nbr", "posenbr"):
             # 카메라방 게이트 없이: 자리 NBR_R m 안의 정적 개체(스캔) 중 NBR_MIN 개 이상이 exemplar 로 같이 보이는 프레임 (사용자 제안 2026-09-07 — 카메라 위치가 아니라 주변 물체 조합)
             nbr_c = [_XA.index(k) for k, v in _stat.items() if _XA and k in _XA and v.get("pos") and math.hypot(v["pos"][0] - spot[0], v["pos"][2] - spot[1]) <= NBR_R] if _XSc is not None else []
