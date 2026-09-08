@@ -48,6 +48,9 @@ ap.add_argument("--map-sites", type=int, default=1,
                 help="매핑워크: 방당 촬영 지점 수 (최원점 샘플링으로 흩뿌림). 초기 등록은 일회성이라 무겁게 가도 "
                      "된다 — 지점 1개·6방향(36장/채)은 겹침이 없어 다시점 일치가 불가능했다 (2026-09-03)")
 ap.add_argument("--map-step", type=int, default=60, help="매핑워크 방향 간격(°). 45 면 8방향")
+ap.add_argument("--map-near", type=int, default=0,
+                help="근접 패스: 방마다 이동성 물체 최대 K개를 골라 --map-near-dist m 앞(시선 확보 보행점)에서 그 물체를 향해 촬영(정면·±25°). 스캔이 작은 물체를 크게 보게 한다(2026-09-08, RoI ≥64px 표본용)")
+ap.add_argument("--map-near-dist", type=float, default=1.0, help="근접 패스 거리(m)")
 ap.add_argument("--map-travel", type=float, default=0.0,
                 help="지점 사이를 걸으며 N m 마다 프레임 기록(0=끔). 제자리 회전만으로는 시차가 없어 SfM·피드포워드가 "
                      "지도를 못 세운다(매핑 128장 중 4~7장만 등록). SPEC 3-b 와 같은 취지.")
@@ -491,7 +494,21 @@ for r, pl in polys.items():
     sites = [_cands[0]]
     while len(sites) < min(args.map_sites, len(_cands)):
         sites.append(max(_cands, key=lambda q: min(np.hypot(q[0]-s_[0], q[2]-s_[2]) for s_ in sites)))
-    for mp_pt in sites: _allsites.append((r, mp_pt))
+    for mp_pt in sites: _allsites.append((r, mp_pt, None))
+    if args.map_near > 0:
+        # 근접 패스: 이 방의 이동성 물체(사전확률 mobility ≥0.1, 없으면 전부) 중 K개 → check_goals 로 D m 앞 시선 확보 보행점 → 물체를 향한 3 방향
+        _mobp = (MOVE or {}).get("mobility", {}) if MOVE else {}
+        _cand_o = [o for o, v in objs.items() if _pip((float(v["pos"][0]), float(v["pos"][2])), pl) and (not _mobp or _mobp.get(v["type"], 0.3) >= 0.1)]
+        rng.shuffle(_cand_o); _added = 0
+        for o in _cand_o:
+            if _added >= args.map_near: break
+            _pos3 = np.array(objs[o]["pos"], float); oid_for_check = None
+            _g = check_goals(_pos3, 1, args.map_near_dist, avoid_visible=False, n_ang=24)
+            if not _g: continue
+            _near = np.array(_g[0][1][1], float); _dv = _pos3 - _near
+            _yaw = float(np.degrees(np.arctan2(-_dv[0], -_dv[2])) % 360)           # 촬영 규약: f = (-sin yaw, 0, -cos yaw)
+            _allsites.append((r, _near, [(_yaw - 25) % 360, _yaw, (_yaw + 25) % 360])); _added += 1
+        if _added: print("  근접 패스 %s: %d 물체 (%.1f m)" % (r, _added, args.map_near_dist), flush=True)
 
 # 촬영 포즈 목록: 지점 회전 + (선택) 지점 사이 이동 프레임. 순서는 탐욕 최근접 경로.
 _ord, _rem = [], list(range(len(_allsites)))
@@ -503,8 +520,8 @@ while _rem:
         _rem.remove(_k); _ord.append(_k)
 _poses = []
 for _si, _k in enumerate(_ord):
-    _r, _pt = _allsites[_k]
-    for _yy in range(0, 360, args.map_step): _poses.append((_r, _pt, float(_yy)))
+    _r, _pt, _yws = _allsites[_k]
+    for _yy in (_yws if _yws is not None else range(0, 360, args.map_step)): _poses.append((_r, _pt, float(_yy)))
     if args.map_travel > 0 and _si + 1 < len(_ord):
         _nxt = _allsites[_ord[_si + 1]][1]
         _path = habitat_sim.ShortestPath(); _path.requested_start = _pt; _path.requested_end = _nxt
@@ -521,8 +538,9 @@ for _si, _k in enumerate(_ord):
                     _poses.append((_r, sim.pathfinder.snap_point(_q), _hd))
                     _d += args.map_travel
                 _acc = (_acc + _seg) % args.map_travel
-print("매핑 포즈 %d (지점 %d · 이동프레임 %d · 간격 %.2fm)" % (
-    len(_poses), len(_allsites), len(_poses) - len(_allsites) * len(range(0, 360, args.map_step)), args.map_travel), flush=True)
+_nrot = sum(len(_x[2]) if _x[2] is not None else len(range(0, 360, args.map_step)) for _x in _allsites)
+print("매핑 포즈 %d (지점 %d · 근접 지점 %d · 이동프레임 %d · 간격 %.2fm)" % (
+    len(_poses), len(_allsites), sum(1 for _x in _allsites if _x[2] is not None), len(_poses) - _nrot, args.map_travel), flush=True)
 for _mpz in _poses:
     if True:
         r, mp_pt, yy = _mpz
