@@ -122,6 +122,16 @@ assert sim.pathfinder.is_loaded, "navmesh 미로드"
 _root = os.path.dirname(os.path.abspath(args.dataset))
 scj = glob.glob(os.path.join(_root, "**", args.scene + ".scene_instance.json"), recursive=True)
 assert scj, "scene_instance.json 못 찾음"
+# ⚠️ 2026-09-08: glob 은 scenes/(cluttered) 를 먼저 집는데 sim 은 데이터셋 설정의 scene_instances.paths
+# (uncluttered 설정이면 scenes-uncluttered/) 를 로드한다. 두 목록이 다르면 렌더에 없는 물체(38%)가
+# gt0·질의·이동에 들어갔다(§166-25 유령 물체). 설정이 가리키는 디렉터리의 파일을 우선한다.
+try:
+    _dsj = json.load(open(args.dataset)); _sp = (_dsj.get("scene_instances") or {}).get("paths", {}).get(".json", [])
+    _pref = [f for f in scj if any(os.path.normpath(os.path.join(_root, d)) in os.path.normpath(f) for d in _sp)]
+    if _pref: scj = _pref + [f for f in scj if f not in _pref]
+except Exception as _e:
+    print("⚠ 데이터셋 설정에서 scene_instances 경로 못 읽음: %s" % _e, flush=True)
+print("scene_instance: %s" % scj[0], flush=True)
 inst = json.load(open(scj[0]))
 HASH = {}
 for mf in glob.glob(os.path.join(_root, "metadata", "fpmodels*.csv")):
@@ -201,6 +211,8 @@ def obj_handle(oid):
     if pool:
         h, d = min(((h, float(np.hypot(t[0]-p0[0], t[2]-p0[2]))) for h, t in pool), key=lambda x: x[1])
         return h if d < 1.5 else None
+    if _HBY: return None      # 템플릿 풀이 있는데 자기 템플릿 핸들이 없다 = sim 에 없는 물체. 다른 템플릿 핸들로 대체하면
+                              # 받침 가구를 대신 옮기고 GT 좌표까지 덮어써 '쌍둥이'가 된다(§166-25) → 대응 없음
     h, d = min(((h, float(np.linalg.norm(t - p0))) for h, t in _H), key=lambda x: x[1])
     return h if d < 0.35 else None
 
@@ -362,6 +374,11 @@ for _oid in objs:
         _o = rom.get_object_by_handle(_h)
         if _o is not None: OBJID[_oid] = _o.object_id
 print("물체 %d 중 rigid 핸들 대응 %d" % (len(objs), len(OBJID)), flush=True)
+if _HBY and len(OBJID) < len(objs):
+    _drop = [o for o in objs if o not in OBJID]
+    print("⚠ rigid 핸들 없는 물체 %d개 제외(렌더에 없음): %s" % (len(_drop), ", ".join(_drop[:6]) + (" …" if len(_drop) > 6 else "")), flush=True)
+    for o in _drop: objs.pop(o); obj_room.pop(o, None); state.pop(o, None); gt0.pop(o, None)
+    plan = {k: v for k, v in plan.items() if v[0] in objs}; plan_oids = {v[0] for v in plan.values()}
 for _oid, _id in OBJID.items():
     try:
         _p = [float(v) for v in rom.get_object_by_id(_id).translation]

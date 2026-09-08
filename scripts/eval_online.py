@@ -127,6 +127,10 @@ LADDER = ("[RoI ≤%sm %s ≥%spx] " % (os.environ.get("ROI_DIST", "-"), os.envi
     (" · yaw:이동방향우선(정지시 투표)" if os.environ.get("YAW_ORDER") == "motion_first" else " · yaw대체:이동방향" if os.environ.get("YAW_FALLBACK") == "motion" else ""),
     ((("기하(%s)" % os.environ.get("ABS_MODE", "spot")) + (" 자리:GT⚠️" if os.environ.get("ABS_SPOT", "gt") == "gt" else " 자리:초기맵")) if ABS_GEO else "점수마진") + (" +검증기부재(%s)" % os.environ.get("ABS_VERIFY_MODE", "or") if os.environ.get("ABS_VERIFY_JSONL") else ""))
 _NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT", "위치:GT", "자리:GT"))   # 자리:GT = 부재 게이트가 GT 물체 원위치를 씀(2026-09-07 발견)
+_PHANTOM = json.load(open(os.environ["PHANTOM_JSON"])) if os.environ.get("PHANTOM_JSON") else None
+_PH_SKIP = [0]
+if _PHANTOM: LADDER += " · 유령제외:%d집" % len(_PHANTOM)
+else: LADDER += " · 유령제외:없음⚠️"
 print("재료 사다리 → " + LADDER, flush=True)
 if _NGT:
     print("⚠️  GT 재료 %d종 포함 — 이 수치를 '무GT' 라 부르지 말 것" % _NGT, flush=True)
@@ -245,7 +249,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 im_inst.setdefault(i2["type"], []).append((i2["pos"], i2["room"], i2["w"]))
         im = {t: r for t, (w, r) in best.items()}
     moves = sorted(g["moves"], key=lambda m: m["t"])
-    cnt = Counter(v["type"] for v in g["gt0"].values())
+    _ph = set((_PHANTOM.get(hn) or {}).get("phantom") or []) | set((_PHANTOM.get(hn) or {}).get("hosts") or []) if _PHANTOM else set()
+    cnt = Counter(v["type"] for o, v in g["gt0"].items() if o not in _ph)   # 타입 유일성도 렌더된 물체 기준
     # 관심 물체(RoI) 범위: 사용자가 하루 중 가까이 간 물체만 묻는다(사용자 결정 2026-09-07) — 스캔(map) 또는 라이브에서 GT 거리 ≤ ROI_DIST m 로 본 적이 있어야 질의 대상.
     _ROI = float(os.environ.get("ROI_DIST", "0")); _ROIB = float(os.environ.get("ROI_BOX", "0")); _ROIM = os.environ.get("ROI_MODE", "or")   # ROI_BOX: 지도 프레임 GT 박스 최대변 ≥ px · ROI_MODE: or=가깝거나 크면 · and=가깝고 크면
     def _roi_ok(oid_):
@@ -260,8 +265,10 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         if _ROI <= 0: return big
         if _ROIB <= 0: return near
         return (near and big) if _ROIM == "and" else (near or big)
+    _PH_SKIP[0] += sum(1 for oid in QT if oid in _ph)
     for j, oid in enumerate(QT):
         v0 = g["gt0"][oid]
+        if oid in _ph: continue                       # 유령 물체(렌더에 없음, §166-25) 는 질의에서 뺀다
         if not v0["room"] or cnt[v0["type"]] > 1 or v0["type"] not in vocab: continue
         if not _roi_ok(oid): continue
         ti = vocab.index(v0["type"])
@@ -770,6 +777,7 @@ print("  재료: " + LADDER)
 print("  정지 지도(t=0 GT)        %.3f" % np.mean(res["static"]))
 print("  **기록(갱신 후)**         **%.3f**" % np.mean(res["rec"]))
 print("  **최종 답(부재분기 포함)** **%.3f**" % np.mean(res["sys"]))
+if _PHANTOM: print("  유령 물체 제외 %d개 (PHANTOM_JSON=%s)" % (_PH_SKIP[0], os.environ.get("PHANTOM_JSON")))
 print("  top-1+2(후보 2개 누적 — 답변형식 지표, 증거능력 아님) %.3f"
       % np.mean(res.get("sys2", [0])))
 print("  이동만: 기록 %.3f · 최종 %.3f (n=%d)"
