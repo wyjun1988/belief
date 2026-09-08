@@ -72,12 +72,16 @@ if os.environ.get("ABS_VERIFY_JSONL"):
         if os.environ.get("ABSV_GEOONLY", "0") == "1": late_ = [x for x in late_ if len(x) > 4 and x[4]]          # 기하(포즈) 자리 프레임만 — CLIP 문맥 프레임은 물체를 못 보는 비율 89%(c3, §166-18)
         elif ABSV_GEOFIRST and sum((x[4] if len(x) > 4 else 0) for x in late_) >= 2: late_ = [x for x in late_ if len(x) > 4 and x[4]]
         if len(late_) < ABSV_MINL: return None
+        _early = list(r_["early"])
+        if os.environ.get("ABSV_TAILMODE", "0") == "1":
+            # 이동 시각을 모르므로 후반 창 안에서 '있다→없다' 로 바뀌었을 수 있다: 마지막 MINL 장만 '없다' 를 요구하고 그 앞 장은 전반 증거로 돌린다 (§166-29 2판)
+            late_ = sorted(late_, key=lambda x: x[0]); _early = _early + late_[:-ABSV_MINL]; late_ = late_[-ABSV_MINL:]
         if sum(x[ci] > ABSV_TP for x in late_) > 0: return False
         _emin = float(os.environ.get("ABSV_EARLY_MIN", "0"))          # 이른 자리 프레임의 최고 점수가 이 값 이상이어야(있었다는 명확한 증거) 부재를 인정
         if _emin > 0:
-            if not r_["early"]: return None
-            if max(x[ci] for x in r_["early"]) < _emin: return False
-        if ABSV_EARLY and r_["early"] and sum(x[ci] > ABSV_TP for x in r_["early"]) == 0: return False
+            if not _early: return None
+            if max(x[ci] for x in _early) < _emin: return False
+        if ABSV_EARLY and _early and sum(x[ci] > ABSV_TP for x in _early) == 0: return False
         return True
 GDEP = None
 _GSTRICT = os.environ.get("GEO_STRICT", "1") == "1"   # GEO_DEPTH 가 있으면 GT 거리로 후퇴하지 않는다(기권) — 사다리 표기를 사실로

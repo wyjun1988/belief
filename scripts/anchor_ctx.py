@@ -10,7 +10,7 @@ from transformers import Owlv2Processor, Owlv2ForObjectDetection, CLIPModel, CLI
 ROOT = os.environ.get("THOR_ROOT", "data/hssd150_all"); A3P = os.path.expanduser(os.environ.get("A3_PREFIX")); RJ = os.environ.get("ROOM_JSONL"); OUTJ = os.environ.get("OUT_JSONL", "/tmp/anchor_ctx.jsonl")
 HOUSES = os.environ.get("HOUSES", "").split(); PHJ = os.environ.get("PHANTOM_JSON", os.path.join(ROOT, "phantom_ids.json"))
 S_TH = float(os.environ.get("ANCH_STH", "0.15")); ADJ = float(os.environ.get("ANCH_R", "0.25")); TAU = float(os.environ.get("ANCH_TAU", "0.8")); MARGIN = float(os.environ.get("ANCH_MARGIN", "0.03")); KSCAN = int(os.environ.get("K_SCAN", "3"))
-EDGE = float(os.environ.get("ANCH_EDGE", "0.01")); BIG = float(os.environ.get("ANCH_BIG", "0.5"))   # 1판 진단(§166-29): 큰 앵커(카운터·테이블)의 일부만 보인 프레임에서 거짓 부재 → 경계에 잘린 박스는 제외(아주 크면 허용)
+EDGE = float(os.environ.get("ANCH_EDGE", "0.01")); BIG = float(os.environ.get("ANCH_BIG", "0.5")); MINSZ = float(os.environ.get("ANCH_MINSIZE", "0.25"))   # 앵커가 멀면(박스 작으면) 작은 타겟이 안 보여 거짓 부재 → 박스 최대변 ≥ 0.25 프레임   # 1판 진단(§166-29): 큰 앵커(카운터·테이블)의 일부만 보인 프레임에서 거짓 부재 → 경계에 잘린 박스는 제외(아주 크면 허용)
 def same_words(a, b): return bool(set(a.split()) & set(b.split()))                                  # "table lamp" vs "floor lamp": 앵커가 타겟과 닮아 거짓 존재(③ 7건 중 4건)
 DEV = "mps" if torch.backends.mps.is_available() else "cpu"
 op = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble"); on = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to(DEV).eval()
@@ -118,6 +118,7 @@ for hd in hds:
             img_sz = 768; cx, cy, bw, bh = [float(x) * img_sz for x in BX[i, aidx]]
             _x0, _y0, _x1, _y1 = cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2
             if max(bw, bh) < BIG * img_sz and (_x0 <= EDGE * img_sz or _y0 <= EDGE * img_sz or _x1 >= (1 - EDGE) * img_sz or _y1 >= (1 - EDGE) * img_sz): continue   # 잘린 앵커: 타겟 자리가 화면 밖일 수 있다
+            if max(bw, bh) < MINSZ * img_sz: continue
             rec["frames"].append([int(ts[i]), round(cx - bw / 2, 1), round(cy - bh / 2, 1), round(cx + bw / 2, 1), round(cy + bh / 2, 1), round(m[0][1], 3)])
         n_fr += len(rec["frames"]); out.write(json.dumps(rec) + "\n"); out.flush()
     print("%s: 타겟 %d · 기록 앵커 있음 %d · 문맥 프레임 %d (%.0fs)" % (hn, n_obj, n_anch, n_fr, time.time() - T0), flush=True)
