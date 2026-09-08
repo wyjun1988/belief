@@ -9,7 +9,9 @@ from PIL import Image
 from transformers import Owlv2Processor, Owlv2ForObjectDetection, CLIPModel, CLIPProcessor
 ROOT = os.environ.get("THOR_ROOT", "data/hssd150_all"); A3P = os.path.expanduser(os.environ.get("A3_PREFIX")); RJ = os.environ.get("ROOM_JSONL"); OUTJ = os.environ.get("OUT_JSONL", "/tmp/anchor_ctx.jsonl")
 HOUSES = os.environ.get("HOUSES", "").split(); PHJ = os.environ.get("PHANTOM_JSON", os.path.join(ROOT, "phantom_ids.json"))
-S_TH = float(os.environ.get("ANCH_STH", "0.15")); ADJ = float(os.environ.get("ANCH_R", "0.25")); TAU = float(os.environ.get("ANCH_TAU", "0.75")); MARGIN = float(os.environ.get("ANCH_MARGIN", "0.02")); KSCAN = int(os.environ.get("K_SCAN", "3"))
+S_TH = float(os.environ.get("ANCH_STH", "0.15")); ADJ = float(os.environ.get("ANCH_R", "0.25")); TAU = float(os.environ.get("ANCH_TAU", "0.8")); MARGIN = float(os.environ.get("ANCH_MARGIN", "0.03")); KSCAN = int(os.environ.get("K_SCAN", "3"))
+EDGE = float(os.environ.get("ANCH_EDGE", "0.01")); BIG = float(os.environ.get("ANCH_BIG", "0.5"))   # 1판 진단(§166-29): 큰 앵커(카운터·테이블)의 일부만 보인 프레임에서 거짓 부재 → 경계에 잘린 박스는 제외(아주 크면 허용)
+def same_words(a, b): return bool(set(a.split()) & set(b.split()))                                  # "table lamp" vs "floor lamp": 앵커가 타겟과 닮아 거짓 존재(③ 7건 중 4건)
 DEV = "mps" if torch.backends.mps.is_available() else "cpu"
 op = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble"); on = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to(DEV).eval()
 cm = CLIPModel.from_pretrained("openai/clip-vit-base-patch16").to(DEV).eval(); cpp = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
@@ -80,18 +82,22 @@ for hd in hds:
             if not tb or tb[0][1] < 0.1: continue
             tb = tb[0][0]; best = None
             for at in rtypes:
-                if at == v0["type"]: continue          # 타겟 자신(가구 타겟)은 앵커가 아니다
+                if at == v0["type"] or same_words(at, v0["type"]): continue          # 타겟 자신·닮은 타입은 앵커가 아니다
                 for ab, sc in det.get(at, []):
                     if sc < S_TH: continue
                     d = adj(tb, ab) / max(W, H)
                     if d <= ADJ and (best is None or d < best[0]): best = (d, at, ab)
             if best is None: continue
             e = clip_emb([crop(im, best[2])])[0]; m = match(e, best[1])
-            if m and m[0][1] >= TAU: votes[m[0][0]] += m[0][1]; scan_fr.append([int(k)] + [round(v, 1) for v in tb] + [m[0][0]])
+            if m and m[0][1] >= TAU:
+                ab = best[2]; rx = ((tb[0] + tb[2]) / 2 - ab[0]) / max(1e-6, ab[2] - ab[0]); ry = ((tb[1] + tb[3]) / 2 - ab[1]) / max(1e-6, ab[3] - ab[1])   # 앵커 박스 안 타겟 상대 위치
+                votes[m[0][0]] += m[0][1]; scan_fr.append([int(k)] + [round(v, 1) for v in tb] + [m[0][0], round(float(np.clip(rx, -0.5, 1.5)), 3), round(float(np.clip(ry, -0.5, 1.5)), 3)])
         if not votes:
             out.write(json.dumps(rec) + "\n"); continue
         aid = max(votes, key=votes.get); ainfo = next(r for r in reg if r["id"] == aid); at = ainfo["type"]; aroom = grp(ainfo.get("room")); aidx = vocab.index(at) if at in vocab[:nT] else None
-        rec.update(anchor_id=aid, anchor_type=at, anchor_room=aroom, reg_sim=round(votes[aid] / max(1, len(ks)), 3), scan_frames=[f[:5] for f in scan_fr if f[5] == aid]); n_anch += 1
+        _sf = [f for f in scan_fr if f[5] == aid]
+        rec.update(anchor_id=aid, anchor_type=at, anchor_room=aroom, reg_sim=round(votes[aid] / max(1, len(ks)), 3), scan_frames=[f[:5] for f in _sf],
+                   rel=[round(float(np.mean([f[6] for f in _sf])), 3), round(float(np.mean([f[7] for f in _sf])), 3)] if _sf else None); n_anch += 1
         if aidx is None or aroom is None:
             out.write(json.dumps(rec) + "\n"); continue
         # (2) 라이브 문맥 프레임: 카메라방 == 앵커 방 · 타입 검출 · 같은 인스턴스
@@ -110,6 +116,8 @@ for hd in hds:
             if not m or m[0][0] != aid or m[0][1] < TAU: continue
             if not single and len(m) > 1 and m[0][1] - m[1][1] < MARGIN: continue
             img_sz = 768; cx, cy, bw, bh = [float(x) * img_sz for x in BX[i, aidx]]
+            _x0, _y0, _x1, _y1 = cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2
+            if max(bw, bh) < BIG * img_sz and (_x0 <= EDGE * img_sz or _y0 <= EDGE * img_sz or _x1 >= (1 - EDGE) * img_sz or _y1 >= (1 - EDGE) * img_sz): continue   # 잘린 앵커: 타겟 자리가 화면 밖일 수 있다
             rec["frames"].append([int(ts[i]), round(cx - bw / 2, 1), round(cy - bh / 2, 1), round(cx + bw / 2, 1), round(cy + bh / 2, 1), round(m[0][1], 3)])
         n_fr += len(rec["frames"]); out.write(json.dumps(rec) + "\n"); out.flush()
     print("%s: 타겟 %d · 기록 앵커 있음 %d · 문맥 프레임 %d (%.0fs)" % (hn, n_obj, n_anch, n_fr, time.time() - T0), flush=True)
