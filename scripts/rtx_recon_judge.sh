@@ -17,7 +17,7 @@ evalpose() { # <house_dir> <raw.jsonl> <outdir> <hn>: [진단] GT sim3 · [실�
   local h=$1 raw=$2 od=$3 hn=$4
   python scripts/sfm_reloc.py $h --from-poses $raw --scale gt --align gt --work $od/${hn}_gt --out /tmp/x_$hn.jsonl > $od/eval_gt_$hn.log 2>&1 \
     && grep -aE "정렬\(|커버리지" $od/eval_gt_$hn.log | sed 's/^/  [진단] /' >> $RES || { say "FAIL 진단 정렬 $hn (로그 $od/eval_gt_$hn.log)"; tail -3 $od/eval_gt_$hn.log | sed 's/^/      /' >> $RES; }
-  python scripts/sfm_reloc.py $h --from-poses $raw --scale da --align sites --work $od/$hn --out $od/pose_$hn.jsonl > $od/eval_sites_$hn.log 2>&1 \
+  python scripts/sfm_reloc.py $h --from-poses $raw --scale da --align sites --site-scale ${SITE_SCALE:-step:${MAP_STEP:-0.1}} --work $od/$hn --out $od/pose_$hn.jsonl > $od/eval_sites_$hn.log 2>&1 \
     && grep -aE "라벨 정렬|커버리지" $od/eval_sites_$hn.log | sed 's/^/  [실제] /' >> $RES || { say "FAIL 실제 정렬 $hn (로그 $od/eval_sites_$hn.log)"; tail -3 $od/eval_sites_$hn.log | sed 's/^/      /' >> $RES; }
 }
 HOUSES=$(ls -d $OG4/house_* 2>/dev/null); N=$(echo "$HOUSES" | wc -w | tr -d ' ')

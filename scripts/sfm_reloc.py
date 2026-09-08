@@ -34,6 +34,7 @@ ap.add_argument("--scale", default="gt", choices=["gt", "da"], help="척도 출�
 ap.add_argument("--da-k", type=float, default=0.468, help="GT/DA 척도 상수 (HSSD 렌더 4채 중앙 0.468, 집별 ±5%%). 새 렌더러(OG)는 1채로 재보정")
 ap.add_argument("--da-n", type=int, default=40)
 ap.add_argument("--reject-outside", action="store_true", help="[기본 OFF — 4채 벤치 0.829→0.805] 정렬 뒤 어느 방 폴리곤에도 들어가지 않는 live 프레임을 기권 처리 — 유령 복제(잘못 등록된 사본)를 GT 없이 거른다. 평면도는 사용자 입력")
+ap.add_argument("--site-scale", default="auto", help="--align sites 의 척도: auto=외부 포즈(--from-poses)면 0.25~4 배 격자 탐색(학습식 재구성기는 미터가 아니다 — LoGeR ×3.8·CUT3R ×1.8, 2026-09-08) · 1=고정 · 숫자=그 값 고정")
 ap.add_argument("--align", default="gt", choices=["gt", "sites"], help="회전·병진 출처: gt=GT 맵포즈 sim3 · sites=등록 때 붙인 지점 라벨이 평면도 폴리곤 안에 들어가게(GT 좌표 불사용; 척도는 --scale da 필수)")
 ap.add_argument("--fast", action="store_true", help="전역 BA 를 덜 자주(1.1→1.3배)·반복 절반 — live 등록 시간 단축(정확도는 4채에서 대조할 것)")
 ap.add_argument("--redo-map", action="store_true", help="DB(특징·매칭)는 두고 재구성만 다시 — 매퍼 노브 실험용")
@@ -264,46 +265,82 @@ def align_by_labels():
     # up → +y 회전
     v = np.cross(up, [0, 1.0, 0]); c = float(np.dot(up, [0, 1.0, 0])); vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
     Rg = np.eye(3) + vx + vx @ vx / (1 + c) if c > -0.999 else np.diag([1, -1, -1.0])
-    sites = [(S_FIX * (Rg @ P[nm][0]), m["room"]) for nm, m in zip(names_map, gm) if nm in P and m["room"] in polys]
-    cams = [S_FIX * (Rg @ P[nm][0]) for nm in P if nm.startswith("live/")]
-    cams = np.array(cams)[:: max(1, len(cams) // 200)]
+    sites = [(Rg @ P[nm][0], m["room"]) for nm, m in zip(names_map, gm) if nm in P and m["room"] in polys]   # 척도 전
+    cams = [Rg @ P[nm][0] for nm in P if nm.startswith("live/")]
+    cams = np.array(cams)[:: max(1, len(cams) // 200)] if cams else np.zeros((0, 3))
     pc = {r: np.mean(np.array(pl)[:, [0, -1]], 0) for r, pl in polys.items()}
-    # 정렬 탐색: 중심 맞춤 ±1m 격자는 방 크기가 제각각인 집에서 참값을 놓친다(20채 중 14채 실패, yaw 60~130°).
-    # → **대응 1개 가설**: (지점 s, 그 지점 라벨 방의 중심) 하나가 변환을 정하고, 나머지 지점이 제 방에 들어가는 수로 채점.
+    # 벡터화 point-in-polygon (방마다 그 방 라벨 지점만 검사) — 척도 격자까지 돌리려면 순수 파이썬 pip 는 너무 느리다
+    _PL = {r: np.array([[q[0], q[-1]] for q in pl], float) for r, pl in polys.items()}
+    _IDX = {r: np.array([i for i, (_, rr) in enumerate(sites) if rr == r], int) for r in polys}
+    _IDX = {r: ix for r, ix in _IDX.items() if len(ix)}
+    def _inside(pts, poly):
+        x, z = pts[:, 0], pts[:, 1]; ins = np.zeros(len(pts), bool); n = len(poly)
+        for i in range(n):
+            x1, z1 = poly[i]; x2, z2 = poly[(i + 1) % n]
+            m_ = ((z1 > z) != (z2 > z)) & (x < (x2 - x1) * (z - z1) / (z2 - z1 + 1e-12) + x1)
+            ins ^= m_
+        return ins
     def _score(sp2, tt):
-        return sum(pip_((q[0] + tt[0], q[1] + tt[1]), polys[r]) for q, (_, r) in zip(sp2, sites))
+        q = sp2 + tt
+        return int(sum(_inside(q[ix], _PL[r]).sum() for r, ix in _IDX.items()))
+    def _cams_in(cp2, tt):
+        if not len(cp2): return 0
+        q = cp2 + tt; ok = np.zeros(len(q), bool)
+        for r in _PL: ok |= _inside(q, _PL[r])
+        return int(ok.sum())
+    # 척도: 외부 포즈(학습식 재구성기)는 미터가 아니다 → 격자 탐색. S_FIX 는 어댑터 단위 그대로(1.0) 들어온다.
+    _step_mode = False
+    if a.site_scale == "auto": _scales = list(np.exp(np.linspace(np.log(0.25), np.log(4.0), 25))) if a.from_poses else [1.0]
+    elif a.site_scale.startswith("step:"):
+        # 척도 = 스캔 프로토콜의 걸음(영상형 매핑워크 --map-travel, m/프레임) ÷ 재구성 지도 프레임의 연속 걸음 중앙값.
+        # GT 가 아니라 촬영 규약 상수(프레임률처럼). 회전만 하는 프레임(걸음 ≈0)은 중앙값의 20% 미만으로 걸러 뺀다.
+        # 실측(OG 4채 2026-09-08): LoGeR 3.80 vs GT sim3 3.79 · CUT3R 1.69 vs 1.84. 실데이터(걸음 불균일)는 DA 척도로 대체할 것.
+        _stepm = float(a.site_scale.split(":", 1)[1])
+        _cm = [P[nm][0] for nm in names_map if nm in P]
+        _st = np.linalg.norm(np.diff(np.array(_cm), axis=0), axis=1) if len(_cm) > 2 else np.array([1.0])
+        _st = _st[_st > 0.2 * np.median(_st)] if len(_st) else _st
+        _scales = [_stepm / max(float(np.median(_st)), 1e-6)]; _step_mode = True
+        log("걸음 척도: 규약 %.3f m/프레임 ÷ 재구성 걸음 중앙 %.4f = %.3f" % (_stepm, float(np.median(_st)), _scales[0]))
+    else: _scales = [float(a.site_scale)]
+    _scales = [S_FIX * sc for sc in _scales]; _sf = S_FIX
     best = None
     _sub = list(range(0, len(sites), max(1, len(sites) // 40)))       # 가설은 최대 40지점만 (비용 절감)
+    _S0 = np.array([p for p, _ in sites])
     for mirror in (False, True):
         Mm = np.diag([-1.0, 1.0, 1.0]) if mirror else np.eye(3)
         for yaw in np.arange(0, 360, 3.0):
             y = np.radians(yaw); Ry = np.array([[np.cos(y), 0, np.sin(y)], [0, 1, 0], [-np.sin(y), 0, np.cos(y)]]) @ Mm
-            sp = np.array([Ry @ p for p, _ in sites])[:, [0, 2]]
-            for k in _sub:
-                tt = pc[sites[k][1]] - sp[k]
-                sc = _score(sp, tt)
-                if best is None or sc > best[0]: best = (sc, yaw, mirror, Ry, tt)
-    sc, yaw, mirror, Ry, tt = best
-    # 국소 정제 (yaw ±3° / 0.5°, 이동 ±0.6m / 0.15m) — 동점이면 live 카메라가 폴리곤 안에 드는 수로 가른다
+            sp1 = (_S0 @ Ry.T)[:, [0, 2]]
+            for sc_ in _scales:
+                sp = sc_ * sp1
+                for k in _sub:
+                    tt = pc[sites[k][1]] - sp[k]
+                    sc = _score(sp, tt)
+                    if best is None or sc > best[0]: best = (sc, yaw, mirror, Ry, tt, sc_)
+    sc, yaw, mirror, Ry, tt, _sf = best
+    # 국소 정제 (yaw ±3° / 0.5°, 이동 ±0.6m / 0.15m, 척도 ±15% / 5%) — 동점이면 live 카메라가 폴리곤 안에 드는 수로 가른다
+    _sgrid = [1 + 0.02 * i for i in range(-2, 3)] if _step_mode else ([1.0] if len(_scales) == 1 else [1 + 0.05 * i for i in range(-3, 4)])
     for _ in range(2):
         cand = []
         Mm = np.diag([-1.0, 1.0, 1.0]) if mirror else np.eye(3)
         for dy in np.arange(-3, 3.01, 0.5):
             y = np.radians(yaw + dy); Ry2 = np.array([[np.cos(y), 0, np.sin(y)], [0, 1, 0], [-np.sin(y), 0, np.cos(y)]]) @ Mm
-            sp = np.array([Ry2 @ p for p, _ in sites])[:, [0, 2]]
-            cp = np.array([Ry2 @ q for q in cams])[:, [0, 2]] if len(cams) else np.zeros((0, 2))   # --map-only: live 0장
-            for dx in np.arange(-0.6, 0.61, 0.15):
-                for dz in np.arange(-0.6, 0.61, 0.15):
-                    t2 = tt + [dx, dz]
-                    k2 = (_score(sp, t2), sum(any(pip_((q[0] + t2[0], q[1] + t2[1]), pl) for pl in polys.values()) for q in cp))
-                    cand.append((k2, yaw + dy, Ry2, t2))
-        k, yaw, Ry, tt = max(cand, key=lambda c: c[0])
-    R_ = Ry @ Rg; t_ = np.array([tt[0], 1.5 - S_FIX * float(np.mean([(R_ @ P[nm][0])[1] for nm in P])), tt[1]])
-    log("라벨 정렬: 지점 %d/%d 이 제 방 폴리곤 안 · live 카메라 폴리곤 안 %d/%d · yaw %.1f° · 미러 %s" % (k[0], len(sites), k[1], len(cams), yaw, mirror))
-    return R_, t_, mirror
+            for sm in _sgrid:
+                s2 = _sf * sm
+                sp = s2 * (_S0 @ Ry2.T)[:, [0, 2]]
+                cp = s2 * (cams @ Ry2.T)[:, [0, 2]] if len(cams) else np.zeros((0, 2))   # --map-only: live 0장
+                for dx in np.arange(-0.6, 0.61, 0.15):
+                    for dz in np.arange(-0.6, 0.61, 0.15):
+                        t2 = tt + [dx, dz]
+                        k2 = (_score(sp, t2), _cams_in(cp, t2))
+                        cand.append((k2, yaw + dy, Ry2, t2, s2))
+        k, yaw, Ry, tt, _sf = max(cand, key=lambda c: c[0])
+    R_ = Ry @ Rg; t_ = np.array([tt[0], 1.5 - _sf * float(np.mean([(R_ @ P[nm][0])[1] for nm in P])), tt[1]])
+    log("라벨 정렬: 지점 %d/%d 이 제 방 폴리곤 안 · live 카메라 폴리곤 안 %d/%d · yaw %.1f° · 미러 %s · 척도 %.3f" % (k[0], len(sites), k[1], len(cams), yaw, mirror, _sf))
+    return R_, t_, mirror, _sf
 best = None
 if a.align == "sites":
-    R3, T3, mirror = align_by_labels(); S3 = S_FIX; M = np.eye(3)   # 미러는 R3 안에 포함
+    R3, T3, mirror, S3 = align_by_labels(); M = np.eye(3)   # 미러는 R3 안에 포함 · S3 = 라벨 정렬이 고른 척도(외부 포즈면 탐색값)
     al = (S3 * (R3 @ src.T)).T + T3; rms = float(np.sqrt(((al - dst) ** 2).sum(1).mean())); INL = float((np.linalg.norm(al - dst, axis=1) < 0.5).mean())
     log("(대조) GT 맵포즈 대비: rms %.3fm · 0.5m 이내 %.2f" % (rms, INL)); s = S3
 else:
