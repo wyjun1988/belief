@@ -37,17 +37,21 @@ for f in glob.glob(HS + "/scenes/*.scene_instance.json"):
             if i in used_i or j in used_j: continue
             used_i.add(i); used_j.add(j)
         ph.update(oid for i, (oid, _) in enumerate(items) if i not in used_i)
-    scenes[sc] = ({o for o, _, _ in a}, ph)
+    # 수정판 생성기(2026-09-08 이후)는 uncluttered 목록 순서로 id 를 매긴다 → 그 순서의 id 집합도 함께 두고, 집마다 더 잘 맞는 쪽으로 판정한다
+    scenes[sc] = ({o for o, _, _ in a}, ph, {o for o, _, _ in b})
 res = {}; tot = collections.Counter()
 for hd in sorted(glob.glob(os.path.join(root, "house_*"))):
     hn = os.path.basename(hd); gp = os.path.join(os.path.realpath(hd), "gt.json")
     if not os.path.exists(gp): continue
     g = json.load(open(gp)); keys = set(g["gt0"])
-    sc, jac = max(((s, len(keys & v[0]) / max(1, len(keys | v[0]))) for s, v in scenes.items()), key=lambda x: x[1])
-    ph = sorted(scenes[sc][1] & keys); mv = [x["oid"] for x in g["moves"]]; mvph = [o for o in mv if o in scenes[sc][1]]
+    sc, jac, mode = max((((s, len(keys & v[0]) / max(1, len(keys | v[0])), "cluttered")) for s, v in scenes.items()) +
+                        [((s, len(keys & v[2]) / max(1, len(keys | v[2])), "uncluttered")) for s, v in scenes.items()], key=lambda x: x[1])
+    if mode == "uncluttered": phset = set()          # 생성기가 uncluttered 목록을 읽었다 = 전부 렌더됨 → 유령 없음
+    else: phset = scenes[sc][1]
+    ph = sorted(phset & keys); mv = [x["oid"] for x in g["moves"]]; mvph = [o for o in mv if o in phset]
     # 유령 이동의 '숙주': 생성기가 유령 대신 같은 좌표(핸들 대체)의 실물 가구를 옮겼다 → 그 실물의 GT(안 움직임)도 틀리므로 같이 뺀다
-    hosts = sorted({o for p_ in mvph for o, v in g["gt0"].items() if o not in scenes[sc][1] and v["pos"] == g["gt0"][p_]["pos"]})
-    res[hn] = dict(scene=sc, jaccard=round(jac, 3), n_obj=len(keys), phantom=ph, moves_phantom=mvph, hosts=hosts)
+    hosts = sorted({o for p_ in mvph for o, v in g["gt0"].items() if o not in phset and v["pos"] == g["gt0"][p_]["pos"]})
+    res[hn] = dict(scene=sc, jaccard=round(jac, 3), n_obj=len(keys), phantom=ph, moves_phantom=mvph, hosts=hosts, id_order=mode)
     tot["hosts"] += len(hosts)
     tot["obj"] += len(keys); tot["ph"] += len(ph); tot["mv"] += len(mv); tot["mvph"] += len(res[hn]["moves_phantom"])
     if jac < 0.9: print("⚠ %s 장면 매칭 낮음 %s %.2f" % (hn, sc, jac))
