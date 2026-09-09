@@ -22,6 +22,7 @@ ap.add_argument("--house-name", default=None, help="--live-list 의 키(기본: 
 ap.add_argument("--pose-out", default=None, help="eval_online POSE_JSONL 형식 {house,t,apos,yaw,inl,ratio} 로 출력")
 ap.add_argument("--hssd-mirror", type=int, default=0, help="hssd_to_seq_reloc 가 x 를 뒤집어 만든 seq 이면 1 — apos·yaw 를 gt 프레임으로 되돌린다")
 ap.add_argument("--min-ratio", type=float, default=0.0, help="--pose-out 게이트: 인라이어/2D-3D 비율 하한(반복 구조 장면용)")
+ap.add_argument("--room-json", default=None, help="검색 후보 보강(2026-09-10): {scan:[지도 프레임별 방], live:{t: 방}} — 전역 top-k 에 '같은 방' top-k 를 합친다. 옛 자리를 가까이서 본 라이브 프레임이 전역 검색에서 놓치는 문제(§166-37)")
 a = ap.parse_args(); T0 = time.time()
 def log(*x): print("[%5.0fs] " % (time.time() - T0) + " ".join(str(v) for v in x), flush=True)
 seq = a.seq.rstrip("/"); os.makedirs(a.work, exist_ok=True)
@@ -128,7 +129,18 @@ def emb(names, tag):
         out.append((e / e.norm(dim=-1, keepdim=True)).float().cpu().numpy())
     E = np.concatenate(out); np.save(cf, E); return E
 t1 = time.time(); SE = emb([rec.images[i].name for i in scan_ids], "scan"); LE = emb(live, "live"); t_emb = (time.time() - t1) / max(len(live), 1)
-sim = LE @ SE.T; top = np.argsort(-sim, axis=1)[:, :a.topk]
+sim = LE @ SE.T; top = [list(r) for r in np.argsort(-sim, axis=1)[:, :a.topk]]
+if a.room_json:
+    _rj = json.load(open(a.room_json)); _sr = _rj.get("scan", []); _lr = _rj.get("live", {}); _n_add = 0
+    for li, nm in enumerate(live):
+        _t = idx[nm] - a.scan_end; _room = _lr.get(str(int(_t)))
+        if not _room: continue
+        _same = [j for j in range(len(scan_ids)) if j * a.scan_step < len(_sr) and _sr[j * a.scan_step] == _room]
+        if not _same: continue
+        _order = sorted(_same, key=lambda j: -sim[li, j])[:a.topk]
+        for j in _order:
+            if j not in top[li]: top[li].append(j); _n_add += 1
+    log("방 후보 보강: 라이브 %d장에 같은 방 후보 %d개 추가 (평균 %.1f)" % (len(live), _n_add, _n_add / max(1, len(live))))
 # ── 기술자 직접 매칭 + PnP ──
 desc_cache = {}; kp_cache = {}
 def desc(iid):
