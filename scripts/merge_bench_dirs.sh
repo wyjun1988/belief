@@ -10,6 +10,7 @@ for pair in "$@"; do D=${pair%%:*}; B=${pair##*:}; B=$(eval echo $B)
   for f in $B/cache/hs2_*_house_*.npz; do [ -e "$f" ] && ln -s "$f" "$BC/cache/$(basename $f)"; done
   [ -f $B/scores/t1_floor0.8_d40.jsonl ] && cat $B/scores/t1_floor0.8_d40.jsonl >> $BC/scores/t1_floor0.8_d40.jsonl
   [ -f $B/scores/geo_depth_nogt.jsonl ] && cat $B/scores/geo_depth_nogt.jsonl >> $BC/scores/geo_depth_nogt.jsonl
+  [ -f $B/scores/abs_verify_rc_both.jsonl ] && cat $B/scores/abs_verify_rc_both.jsonl >> $BC/scores/abs_verify_rc_both.jsonl   # 부재 검증기 산출도 합친다 (2026-09-09)
   [ -f $B/scores/room_embed_clip.jsonl ] && cat $B/scores/room_embed_clip.jsonl >> $BC/scores/room_embed_clip.jsonl
   P=$B/pnp/pose_all.jsonl; [ -f $B/pnp_anc/pose_all.jsonl ] && P=$B/pnp_anc/pose_all.jsonl; [ -f $P ] && cat $P >> $BC/pnp/pose_all.jsonl
   echo "  $D ← $(ls -d $D/house_* | wc -l | tr -d ' ')채 · 캐시 $(ls $B/cache/hs2_a_*.npz 2>/dev/null | wc -l | tr -d ' ')"
