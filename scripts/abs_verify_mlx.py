@@ -93,6 +93,24 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                and abs((math.degrees(math.atan2(spot[0]-m["apos"][0], spot[1]-m["apos"][1])) - m["yaw"] + 180) % 360 - 180) <= CTX_ANG]
         rec = dict(house=hn, oid=oid, type=v0["type"], record=record, n_map_facing=len(fac), late=[], early=[])
         inroom = [i for i in range(len(ts)) if arm[i] == record]
+        # ABS_ROOMGATE=either: 평가기와 같은 규약 — 임베딩 카메라방 **또는** PnP 포즈를 평면도 폴리곤에 넣은 방이 기록방이면 통과 (2026-09-10, §166-38:
+        # 옛 자리를 문 너머로 보는 프레임은 임베딩이 옆방을 골라 29/29 가 게이트에서 빠졌다). 0: 게이트 없음.
+        _rg = os.environ.get("ABS_ROOMGATE", "1"); _polys = (g.get("scene_meta") or {}).get("polys") or {}
+        if _rg in ("either", "0") and _polys:
+            def _pip_(pt, poly):
+                x, z = pt; ins = False; n_ = len(poly)
+                for k_ in range(n_):
+                    x1, z1 = poly[k_][0], poly[k_][-1]; x2, z2 = poly[(k_ + 1) % n_][0], poly[(k_ + 1) % n_][-1]
+                    if (z1 > z) != (z2 > z) and x < (x2 - x1) * (z - z1) / (z2 - z1 + 1e-12) + x1: ins = not ins
+                return ins
+            def _room_at_(pt):
+                for r_, pl in _polys.items():
+                    pls = pl if (pl and isinstance(pl[0][0], (list, tuple))) else [pl]
+                    if any(_pip_(pt, q) for q in pls): return grp(r_)
+                return None
+            _pose_room = {i: _room_at_(POSES[hn][int(ts[i])]["apos"]) for i in range(len(ts)) if int(ts[i]) in POSES[hn]}
+            if _rg == "either": inroom = [i for i in range(len(ts)) if arm[i] == record or _pose_room.get(i) == record]
+            else: inroom = list(range(len(ts)))
         allf = list(range(len(ts)))
         if RETR == "anchor":
             ac = ACTX.get((hn, oid)); tidx = {int(t_): i_ for i_, t_ in enumerate(ts)}
@@ -104,10 +122,12 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 x0, y0, x1, y1 = f[1:5]; rel = (ac or {}).get("rel")
                 # 크롭 중심 = 스캔에서 타겟이 있던 앵커 박스 내 상대 위치(있으면) · 크기 = 앵커 박스의 0.45 (작은 크롭) / 앵커 박스 전체(넓은 크롭)
                 cx, cy = ((x0 + rel[0] * (x1 - x0), y0 + rel[1] * (y1 - y0)) if rel else ((x0 + x1) / 2, (y0 + y1) / 2)); h2 = max(48, int(max(x1 - x0, y1 - y0) * 0.45))
+                cx = min(max(cx, 0.0), float(W)); cy = min(max(cy, 0.0), float(H))     # 상대 위치가 화면 밖을 가리킬 수 있다(앵커 박스가 잘린 경우) → 클램프
                 a = words(v0["type"]); order = np.argsort(-S[i, :nT]); b = words(vocab[int(order[1] if order[0] == ti else order[0])])
                 sc = []
                 for hh in (h2, max(int(max(x1 - x0, y1 - y0) * 0.65), W // 4)):
-                    img.crop((max(0, int(cx)-hh), max(0, int(cy)-hh), min(W, int(cx)+hh), min(H, int(cy)+hh))).resize((336, 336)).save(TMP, quality=92)
+                    _x0, _y0 = max(0, int(cx) - hh), max(0, int(cy) - hh); _x1, _y1 = min(W, max(int(cx) + hh, _x0 + 16)), min(H, max(int(cy) + hh, _y0 + 16))
+                    img.crop((_x0, _y0, _x1, _y1)).resize((336, 336)).save(TMP, quality=92)
                     sc.append(round(s_ac(TMP, a, b), 3))
                 rec[role].append([t, sc[0], sc[1], round(float(f[5]), 3), 1])
             # 전반 증거가 모자라면 **스캔 프레임**(타겟이 그 앵커 옆에 있던 기록 장면)을 전반 행으로 — 기록 자체가 "거기 있었다"는 증거다. t 는 음수로 표시.
@@ -116,8 +136,10 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 if not os.path.exists(mp_): continue
                 img = Image.open(mp_).convert("RGB"); W, H = img.size; x0, y0, x1, y1 = f[1:5]; cx, cy = (x0 + x1) / 2, (y0 + y1) / 2; h2 = max(48, int(max(x1 - x0, y1 - y0) * 0.65))
                 a = words(v0["type"]); b = words(vocab[int(np.argsort(-S[0, :nT])[1])]); sc = []
+                cx = min(max(cx, 0.0), float(W)); cy = min(max(cy, 0.0), float(H))
                 for hh in (h2, max(h2 * 2, W // 4)):
-                    img.crop((max(0, int(cx)-hh), max(0, int(cy)-hh), min(W, int(cx)+hh), min(H, int(cy)+hh))).resize((336, 336)).save(TMP, quality=92)
+                    _x0, _y0 = max(0, int(cx) - hh), max(0, int(cy) - hh); _x1, _y1 = min(W, max(int(cx) + hh, _x0 + 16)), min(H, max(int(cy) + hh, _y0 + 16))
+                    img.crop((_x0, _y0, _x1, _y1)).resize((336, 336)).save(TMP, quality=92)
                     sc.append(round(s_ac(TMP, a, b), 3))
                 rec["early"].append([-1000 - int(f[0]), sc[0], sc[1], 1.0, 1])
             out.write(json.dumps(rec) + "\n"); out.flush(); n_obj += 1
