@@ -3,7 +3,7 @@
 입력 구조: <root>/<MAP>/{01_unchanged,02_relocated,03_absent,11_ego_coverage_scan}/<episode>/{ego.mp4, annotations.jsonl,
 observed_graph_updates.jsonl, ground_truth_updates.jsonl, scene_graph.json, entities.json, scenario.json}
   python scripts/newsim_to_gt.py incoming/new_sim data/newsim [--stride 15]
-좌표: Unreal 왼손(X앞·Y오른쪽·Z위, cm) → 우리(x=Y, y=Z, z=-X, m) · yaw_ours = -yaw_unreal (fwd=(-sinθ,0,-cosθ) 규약).
+좌표: Unreal 왼손(X앞·Y오른쪽·Z위, cm) → 우리(x=-Y, y=Z, z=-X, m; 평가기의 x-미러 프레임) · yaw_ours = yaw_unreal + 180 (b=atan2(dx,dz) 규약).
 미러(좌우)는 GT 박스 중심과 투영을 비교해 집마다 자동 판정해 _mirror 에 적는다."""
 import os, sys, json, re, glob, math, argparse, collections, numpy as np
 ap = argparse.ArgumentParser(); ap.add_argument("root"); ap.add_argument("out"); ap.add_argument("--stride", type=int, default=15)
@@ -27,14 +27,14 @@ def norm_type(cls):
     SING = {"books": "book", "plates": "plate", "mugs": "mug", "cups": "cup", "jars": "jar", "bowls": "bowl", "chairs": "chair", "pillows": "pillow", "magazines": "magazine", "flowers": "flower", "tiles": "tile", "candles": "candle", "figures": "figure", "paintings": "painting", "pictures": "picture", "glasses": "glass"}
     keep = [SING.get(t, t) for t in keep]
     return " ".join(keep[-2:]) if len(keep) >= 2 and len(keep[-2]) <= 9 else keep[-1]
-def ours(p):   # cm (X,Y,Z) → m (x=Y, y=Z, z=-X)
-    return [p[1] / 100.0, p[2] / 100.0, -p[0] / 100.0]
-def yaw_ours(yaw_u): return (-yaw_u) % 360.0
+def ours(p):   # cm (X,Y,Z) → m (x=-Y, y=Z, z=-X). 평가기 좌표계는 HSSD gt.json 과 같은 x-미러(왼손) 프레임: 방위 b=atan2(dx,dz), fwd=(sin θ, cos θ), rgt=(cos θ, -sin θ)
+    return [-p[1] / 100.0, p[2] / 100.0, -p[0] / 100.0]
+def yaw_ours(yaw_u): return (yaw_u + 180.0) % 360.0    # UE fwd=(cos ψ, sin ψ) → 우리 (x,z)=(-sin ψ, -cos ψ) = (sin θ, cos θ) with θ=ψ+180 (2026-09-09 실측: 받침 가구 방위 잔차 -170° 로 확인)
 W, H, FOV = 720, 540, 90.0; FX = (W / 2) / math.tan(math.radians(FOV / 2)); CX, CY = W / 2, H / 2
 def project(cam, yaw, pitch, p, mirror):
     """우리 좌표 카메라(cam[x,y,z], yaw°, pitch°) → 픽셀 (u, v) 와 깊이. 수평 방위만 정확하면 된다(pitch 는 v 에만)."""
     d = np.array(p) - np.array(cam); th = math.radians(yaw); pt = math.radians(pitch)
-    fwd = np.array([-math.sin(th), 0, -math.cos(th)]); rgt = np.array([math.cos(th), 0, -math.sin(th)]); up = np.array([0, 1.0, 0])
+    fwd = np.array([math.sin(th), 0, math.cos(th)]); rgt = np.array([math.cos(th), 0, -math.sin(th)]); up = np.array([0, 1.0, 0])   # 평가기 규약(build_initmap pbx)
     # pitch 적용(아래를 보면 fwd 가 내려감)
     fwd2 = fwd * math.cos(pt) + up * math.sin(pt); up2 = up * math.cos(pt) - fwd * math.sin(pt)
     zc = float(d @ fwd2); xr = float(d @ rgt); yu = float(d @ up2)
