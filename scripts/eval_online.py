@@ -138,6 +138,7 @@ LADDER = ("[RoI ≤%sm %s ≥%spx] " % (os.environ.get("ROI_DIST", "-"), os.envi
 _NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT", "위치:GT", "자리:GT", "앵커방:GT"))   # 자리:GT = 부재 게이트가 GT 물체 원위치를 씀(2026-09-07 발견)
 _PHANTOM = json.load(open(os.environ["PHANTOM_JSON"])) if os.environ.get("PHANTOM_JSON") else None
 _PH_SKIP = [0]
+_BRANK = []      # (정답 방의 belief 순위, 후보 방 수) — ③ 인계 행만
 if _PHANTOM: LADDER += " · 유령제외:%d집" % len(_PHANTOM)
 else: LADDER += " · 유령제외:없음⚠️"
 print("재료 사다리 → " + LADDER, flush=True)
@@ -764,8 +765,11 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         else:
             ans = record
             res["case"]["rec"] += 1
-        _bel2 = max(((_prior(v0["type"], rt[r])/max(nrt[rt[r]],1), r)
-                     for r in rids if r != (alt if alt else record)))[1]
+        _belsc = {r: _prior(v0["type"], rt[r]) / max(nrt[rt[r]], 1) for r in rids if r != (alt if alt else record)}
+        _bel2 = max(_belsc, key=_belsc.get)
+        if fired and alt is None:   # belief 로 답한 행: 정답 방이 belief 순위 몇 위인지 적는다 (§166-34: 1위만 세면 개선이 안 보인다)
+            _ord = sorted(_belsc, key=_belsc.get, reverse=True)
+            _BRANK.append((_ord.index(tgt) + 1 if tgt in _ord else len(_ord) + 1, len(_ord)))
         _ans2 = (record if alt is not None else record if fired else _bel2)
         res.setdefault("sys2", []).append(tgt in (ans, _ans2))
         _br = ("c0" if alt is not None else "c2" if fired else "rec")
@@ -843,6 +847,11 @@ print("  분기: %s" % dict(res["case"]))
 br = res.get("br", Counter())
 ck = res.get("ck", Counter())
 print("  ── 3경우 분해 (GT 기준) ──")
+if _BRANK:
+    _n = len(_BRANK); _r1 = sum(1 for x in _BRANK if x[0] == 1); _r3 = sum(1 for x in _BRANK if x[0] <= 3)
+    print("  belief 순위(③ 인계 %d건): 1위 %d (%.2f) · 3위 이내 %d (%.2f) · 정답 중앙 순위 %d / 후보 방 중앙 %d · 무작위 1위 기대 %.2f"
+          % (_n, _r1, _r1 / _n, _r3, _r3 / _n, sorted(x[0] for x in _BRANK)[_n // 2], sorted(x[1] for x in _BRANK)[_n // 2],
+             float(np.mean([1.0 / x[1] for x in _BRANK]))), flush=True)
 for c3 in ("①이동없음", "②재촬영", "③belief대상", "③확인기회O", "③확인기회X", "③확인기회X(기록방오류)", "③기록없음",
            "③재방문없음", "④집밖반출"):
     tot = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3)
