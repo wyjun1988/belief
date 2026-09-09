@@ -25,6 +25,7 @@ export C0_DIVERSE=${C0_DIVERSE:-1}
 export INST_SEL=${INST_SEL:-bearing}        # 후보 인스턴스: 방위 각도차 투표 × 사전확률 × 검출가중 (§154 — 거리 불필요)
 export VIS_GT=${VIS_GT:-0}                # GT 가시성 제거(§152): 인스턴스 선택=검증통과 프레임 투영 다수결 · 부재 분할점=ABS_SPLIT
 export ABS_SPLIT=${ABS_SPLIT:-half}       # "마지막 목격"(GT)에 의존하지 않는 분할
+export ABS_MOB_ALL=${ABS_MOB_ALL:-0.1}       # 부재 인계(기하 규칙 포함)에 이동성 게이트: 고정 가구(이동성 <0.1)는 인계하지 않는다 — ① 거짓 인계 10→0 (§166-36, 2026-09-09)
 export ABS_SPOT=${ABS_SPOT:-initmap}       # 부재 게이트의 "자리" = 고른 초기맵 인스턴스(무GT). gt 는 GT 원위치(2026-09-07 까지의 표) — ep2 에서 ③ 버킷 ±1 차이
 export ROI_DIST=${ROI_DIST:-1.5}; export ROI_BOX=${ROI_BOX:-64}; export ROI_MODE=${ROI_MODE:-and}
 # 유령 물체 제외(§166-25): 명부가 데이터 루트에 있으면 자동 사용. 없으면 사다리에 '유령제외:없음⚠️' 가 찍힌다. 끄려면 PHANTOM_JSON=""

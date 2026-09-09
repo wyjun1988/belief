@@ -692,6 +692,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 _rg = os.environ.get("ABS_ROOMGATE", "1")     # 1: 임베딩 카메라방 == 기록 방 · pose: PnP 포즈를 평면도 폴리곤에 넣은 방 == 기록 방(포즈 있는 프레임만 이 자리에 오므로 무GT) · 0: 없음
                 if _rg == "1" and arm[i] != record: continue   # 기록=GT 사다리에서 ③ 19건이 여기서 빠졌다(2026-09-07)
                 if _rg == "pose" and _geo is not None and _grp(_room_pt((m["apos"][0], m["apos"][1]))) != record: continue
+                if _rg == "either" and arm[i] != record and not (_geo is not None and _grp(_room_pt((m["apos"][0], m["apos"][1]))) == record): continue   # 임베딩 방 또는 PnP 포즈 방 중 하나라도 기록 방이면 통과 (2026-09-09)
                 dx = spot[0] - m["apos"][0]; dz = spot[2] - m["apos"][1]
                 if np.hypot(dx, dz) > ABS_DIST: continue
                 b = np.degrees(np.arctan2(dx, dz))
@@ -754,6 +755,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         _fv = absv_fired(hn, oid, type_=v0["type"]) if ABSV is not None else None
         if _fv is True and os.environ.get("ABS_VERIFY_MODE", "or") in ("or", "only"): fired = True      # 검증기 부재 규칙 B (2026-09-07)
         if _fv is False and os.environ.get("ABS_VERIFY_MODE", "or") == "only": fired = False
+        _mob_all = float(os.environ.get("ABS_MOB_ALL", "0"))          # 2026-09-09: 기하 부재 규칙에도 이동성 게이트 — 현행 표의 ① 거짓 인계 10건이 전부 고정 가구(천장등·샤워·냉장고)였다
+        if fired and _mob_all > 0 and _MOB and _MOB.get(v0["type"], 0.0) < _mob_all: fired = False
         if fired and alt is not None and os.environ.get("ABS_OVER_C0", "0") == "1": alt = None        # 부재 발화가 목격채택보다 우선 (§166-15 ⓒ)
         if alt is not None:
             ans = alt
