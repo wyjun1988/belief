@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v2 데이터 생성 (2026-09-09): 유령 수정판 생성기 + ③ 목적지 사전확률 대본 + 확장 MOVABLE.
+# v2 데이터 생성 (2026-09-09): 유령 수정판 생성기 + 확장 MOVABLE. ③ 목적지 기본 far_low(안 가는 방 = 재목격 안 됨 → 인계 측정용; 파일럿에서 prior 대본은 ③ 18건 중 대부분이 ② 로 샜다).
 # 종전 115채 벤치는 (a) 렌더에 없는 유령 45%, (b) ③ 목적지를 far_low(사전확률 반대)로 뽑아 belief 측정 불가였다(§166-25·§166-34).
 #   FROM=0 TO=134 OUT=data/hssd_v2 CASE3=0.5 bash scripts/gen_v2.sh
 set -u; cd "$(dirname "$0")/.."
@@ -13,7 +13,7 @@ for SC in $(cat "$SCENES"); do
       echo "=== $H ← $SC $(date +%H:%M) ==="
       $HAB -u scripts/hab_episode.py --scene "$SC" --dataset "$HSSD_DATASET" --move data/hssd_move.json \
         --frames ${FRAMES:-1200} --moves ${MOVES:-8} --case3 ${CASE3:-0.5} --far 0.0 --evidence 3:1.4 --dwell 0 --pace 0.25 --turn 0.5 --scan 35 --max-turn 999 \
-        --map-travel 0.35 --map-sites 1 --map-step 60 --c3-check-dist ${C3DIST:-1.2} --seed $((SEED0 + i)) --out "$H" 2>&1 \
+        --map-travel 0.35 --map-sites 1 --map-step 60 --c3-check-dist ${C3DIST:-1.2} --c3-dest ${C3DEST:-far_low} --seed $((SEED0 + i)) --out "$H" 2>&1 \
         | grep -aE "이동 후보|③ 자격|이동 계획|이동 기록|이동 취소|핸들 없는|Traceback|Error" || echo "  $SC 실패"
       [ -f "$H/gt.json" ] || { echo "  ⚠ gt.json 없음 → 삭제"; rm -rf "$H"; }
     fi
