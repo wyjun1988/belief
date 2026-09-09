@@ -91,7 +91,10 @@ STRUCT = {"wall", "floor", "ceiling", "door", "window", "picture", "curtain", "r
 MOVABLE = ("book", "cushion", "plate", "bowl", "cup", "mug", "lamp", "clock", "vase",
            "basket", "kitchenutensil", "sponge", "toy", "phone", "laptop", "can",
            "box", "picture frame", "plant", "shoe", "bottle", "handbag", "drinkware",
-           "toiletry", "candle", "clothing", "tray", "kettle", "remote", "bag", "hat")
+           "toiletry", "candle", "clothing", "tray", "kettle", "remote", "bag", "hat",
+           # 2026-09-09: ②③ 표본 부족(장면당 후보 중앙 1개·30/93 장면은 0개)의 직접 원인은 "타입 유일 + MOVABLE" 이다.
+           # hssd_move.json 이동성 ≥0.2 이면서 장면에서 자주 **타입 유일**로 나오는 것을 추가 → 후보 93 → 150(같은 93장면), 168장면 전체로는 280.
+           "coffee maker", "stool", "toaster", "blender", "trashcan", "teapot", "pot", "plush toy", "flower")
 
 cfg = habitat_sim.SimulatorConfiguration()
 cfg.scene_id = args.scene
