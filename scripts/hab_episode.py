@@ -312,7 +312,7 @@ for i2, oid in enumerate(cands[:args.moves]):
     others = [r for r in polys if r != obj_room[oid]]
     if not others: continue
     OUT_R = [r for r in others if any(k in _rtype(r) for k in
-                                      ("outdoor", "balcony", "porch", "garage", "yard"))]
+                                      ("outdoor", "balcony", "porch", "garage", "yard", "terrace", "patio"))]
     if OUT_R and i2 >= args.moves - int(args.moves * args.outdoor):
         tgt = rng.choice(OUT_R)                      # 집 밖으로 가져나감
     elif i2 < int(args.moves * args.far):
@@ -332,7 +332,7 @@ for i2, oid in enumerate(cands[:args.moves]):
     if role == "c3":
         _dw = (MOVE or {}).get("dwell", {})
         _in = [r for r in others if not any(k in _rtype(r) for k in
-                                            ("outdoor", "balcony", "porch", "garage", "yard"))] or others
+                                            ("outdoor", "balcony", "porch", "garage", "yard", "terrace", "patio"))] or others
         # ③ 목적지가 복도·현관·계단처럼 **어디서나 보이는 통로**면 이동 뒤 배회 중 새 자리가 눈에 들어와 ② 로 샌다(house_0003: hallway 34프레임)
         # 5차에서도 hallway 로 갔다: 저체류(≤0.35) 방이 통로뿐이면 제외가 비어 통로로 되돌아갔다 → 통로 제외를 **먼저**, 체류 문턱은 그 다음
         _open = ("hallway", "corridor", "entryway", "entry", "stair", "landing", "foyer")

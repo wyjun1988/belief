@@ -36,10 +36,10 @@ for f in sorted(glob.glob("$B/cache/hs2_a_house_*.npz")): out[os.path.basename(f
 json.dump(out, open("$B/q_anchors.json", "w")); print("앵커 목록 %d채 %d장" % (len(out), sum(len(v) for v in out.values())))
 PY
   one() { hn=$1; S=data/seq/c4_$hn; W=$HOME/khcache/hloc-c4/$hn; NM=$($K -c "import json; print(json.load(open('$S/camera_info.json'))['n_map'])" 2>/dev/null)
-    $K -u scripts/reloc_hloc.py $S --scan-end $NM --live-step 1 --work $W --map gt --embed clip --topk 5 --threads 3 --live-list $B/q_anchors.json --house-name $hn \
-      --pose-out $B/pnp/pose_$hn.jsonl --hssd-mirror 1 --min-inliers 50 > $B/pnp/logs/$hn.log 2>&1
+    $K -u scripts/reloc_hloc.py $S --scan-end $NM --live-step 1 --work $W --map gt --embed clip --topk ${TOPK:-5} --threads 3 --live-list $B/q_anchors.json --house-name $hn \
+      --pose-out $B/pnp/pose_$hn.jsonl --hssd-mirror 1 --min-inliers ${MIN_INLIERS:-50} > $B/pnp/logs/$hn.log 2>&1
     echo "  $hn $(grep -aE '라이브 PnP' $B/pnp/logs/$hn.log | sed -E 's/^\[ *[0-9]+s\] //; s/ · 장당.*//' | cut -c1-150)"; }
-  export -f one; export K B
+  export -f one; export K B TOPK MIN_INLIERS
   ls -d $OUT/house_* | xargs -n1 basename | xargs -P $PAR -I{} bash -c 'one {}'
   cat $B/pnp/pose_house_*.jsonl > $B/pnp/pose_all.jsonl; echo "  POSE_JSONL $(wc -l < $B/pnp/pose_all.jsonl)줄"; }
 [ $STEP -le 10 ] && { echo "=== 10. 벤치 D (GT 0) $(date +%H:%M) ==="
