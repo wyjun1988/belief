@@ -437,7 +437,7 @@ def reachable(q):
     return bool(sim.pathfinder.find_path(_p)) and len(_p.points) >= 2
 
 oid_for_check = None
-def check_goals(pos, K, D, avoid_visible=True, n_ang=16):
+def check_goals(pos, K, D, avoid_visible=True, n_ang=16, _retry=True):
     # ③ 대본: 옛 자리를 **보러 가는** 방문. evidence_goals 와 같은 [멀리→가까이] 구조이되 LOS 는 자리(점) 기준.
     # 평가기의 '확인 기회' = 옛 자리 4m 이내·시야 ±35°·2프레임 이상 — 가까운 목적지를 D=2m 로 두면 자연히 만족한다.
     # 1차: 새 자리의 물체가 안 보이는 방향만 → 없으면 2차: 그 조건 없이 (물체가 보이면 ②로 넘어가는 것은 평가기가 가른다)
@@ -456,9 +456,10 @@ def check_goals(pos, K, D, avoid_visible=True, n_ang=16):
         out.append((("pt", np.array(far, float)), ("pt", np.array(near, float))))
         if len(out) >= K: break
     # 새 자리 물체가 보이면 ②(재관측)로 바뀌어 ③ 표본이 사라진다 → 가시 방향 허용 대신 **거리·각도 탐색을 넓힌다**(4차: 2/4채가 ② 로 샘)
-    if not out and avoid_visible:
+    if not out and avoid_visible and _retry:
+        # 2026-09-09: 넓힌 탐색도 비면 그 안에서 또 넓히다 무한 재귀(RecursionError)로 집 전체가 죽었다(v2 12채) → 한 단계만 넓힌다
         for D2 in (2.8, 1.5, 3.5):
-            out = check_goals(pos, K, D2, avoid_visible=True, n_ang=32)
+            out = check_goals(pos, K, D2, avoid_visible=True, n_ang=32, _retry=False)
             if out: break
         if not out: print("  ⚠ ③ 확인 지점 없음(새 자리 물체가 모든 방향에서 보임) → 방 방문으로 후퇴", flush=True)
     return out
