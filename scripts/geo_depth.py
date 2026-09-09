@@ -153,7 +153,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 _pp = int(os.environ.get("SFM_MAXPT", "40"))
                 _idx = _idx[::max(1, len(_idx) // _pp)][:_pp]
                 for _k in _idx:
-                    cx = int(_z["u"][_k] / FRAME_W * W); cy = int(_z["v"][_k] / FRAME_W * H)
+                    _C = max(W, H); cx = int(_z["u"][_k] / FRAME_W * _C); cy = int(_z["v"][_k] / FRAME_W * _C)   # 정방 캔버스 기준(비정방 프레임 패딩, 2026-09-09)
+                    if cx >= W or cy >= H: continue
                     if not (0 <= cx < W and 0 <= cy < H): continue
                     zp = zpatch(Z, cx, cy, c2); zexp = float(_z["d"][_k]) / kfac(cx, cy, W, H)
                     if zp > 0.1 and zexp > 0.1:
@@ -175,7 +176,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             if _c is None or SA[i, _c] < float(os.environ.get("ANCH_TY", "0.10")): continue
             _pe, _pt = int(AXPp[i, k]), int(P[i, _c]); _dp = int(os.environ.get("ANCH_DP", "2"))
             if abs(_pe % pw - _pt % pw) > _dp or abs(_pe // pw - _pt // pw) > _dp: continue
-            cx = int((AXPp[i, k] % pw + .5) / pw * W); cy = int((AXPp[i, k] // pw + .5) / ph * H)
+            _C = max(W, H); cx = int((AXPp[i, k] % pw + .5) / pw * _C); cy = int((AXPp[i, k] // pw + .5) / ph * _C)
+            if cx >= W or cy >= H: continue
             zp = zpatch(Z, cx, cy, c2)
             d_map = float(np.hypot(stp[a][0] - ap[0], stp[a][1] - ap[1]))
             zexp = d_map / kfac(cx, cy, W, H)
@@ -215,7 +217,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         if i not in zmap: continue
         Z = zmap[i]; H, W = Z.shape
         if cell is None: cell = W // pw
-        cx = int((P[i, ti] % pw + .5) / pw * W); cy = int((P[i, ti] // pw + .5) / ph * H)
+        _C = max(W, H); cx = int((P[i, ti] % pw + .5) / pw * _C); cy = int((P[i, ti] // pw + .5) / ph * _C)
+        if cx >= W or cy >= H: cx, cy = min(cx, W - 1), min(cy, H - 1)
         k_ = kfac(cx, cy, W, H)
         zp = zpatch(Z, cx, cy, max(4, cell // 2))
         d_raw = zp * k_

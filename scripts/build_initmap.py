@@ -147,8 +147,11 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 cx = (P_[c] % pw + .5) / pw * Wf
                 b = yaw + pbx(cx)
                 if _DAD:                                    # 거리: 패치 안 SfM 점 중앙값(≥3개) → 없으면 DA 깊이(5×5 중앙값). GT 물체 매칭 없음
-                    _Hm, _Wm = im.size[1], im.size[0]
-                    _cy = (P_[c] // pw + .5) / ph * _Hm; _cxp = cx / Wf * _Wm
+                    _Hm, _Wm = im.size[1], im.size[0]; _Cm = max(_Hm, _Wm)
+                    # OWLv2 는 비정방 이미지를 정방 캔버스(긴 변)로 패딩한다 → 패치 행/열은 캔버스 기준. 720×540 에서 _Hm 로 나누면 세로가 0.75 배로 눌려
+                    # 엉뚱한 행의 깊이를 읽었다(새 시뮬레이터 초기맵 자리 오차 중앙 3.6 m, 2026-09-09). 패딩 영역(캔버스 밖)은 버린다.
+                    _cy = (P_[c] // pw + .5) / ph * _Cm; _cxp = cx / Wf * _Cm
+                    if _cy >= _Hm or _cxp >= _Wm: continue
                     d_ = None
                     if _MPTS is not None and k in _MPTS:
                         _u, _v, _d = _MPTS[k]; _sel = (np.abs(_u - _cxp) < 48) & (np.abs(_v - _cy) < 48)
