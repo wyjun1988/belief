@@ -135,7 +135,12 @@ for mp in maps:
         if not a.no_frames:
             n_l = extract(os.path.join(ep, "ego.mp4"), list(range(len(cams))), os.path.join(hd, "live"), "%06d.jpg")
             n_m = extract(os.path.join(scan, "ego.mp4"), idxs, os.path.join(hd, "map"), "%04d.jpg")
-        else: n_l = n_m = -1
+        else:
+            n_l = len(glob.glob(os.path.join(hd, "live", "*.jpg"))); n_m = len(glob.glob(os.path.join(hd, "map", "*.jpg")))
+        # mp4 의 실제 디코딩 프레임 수가 메타보다 적을 수 있다(vol8_02 스캔: 489 예상 → 실제 추출 수만큼) → gt 의 map/live 를 추출된 장수로 자른다
+        if 0 <= n_m < len(payload["map"]): payload["map"] = payload["map"][:n_m]
+        if 0 <= n_l < len(payload["live"]): payload["live"] = payload["live"][:n_l]; payload["T"] = n_l
+        json.dump(payload, open(os.path.join(hd, "gt.json"), "w"), ensure_ascii=False)
         cnt = collections.Counter(v["type"] for v in gt0.values()); uniq = sum(1 for v in gt0.values() if cnt[v["type"]] == 1)
         if moves: print("   증거 물체 %s → 타입 '%s' · 집 안 같은 타입 %d개%s" % (oid, gt0[oid]["type"], cnt[gt0[oid]["type"]], "" if cnt[gt0[oid]["type"]] == 1 else "  ⚠️ 타입 유일 아님 → 현재 평가기는 질의에서 제외"), flush=True)
         summary.append((hn, len(gt0), uniq, len(moves), n_m, n_l, mirror, payload["_mirror_err"]))

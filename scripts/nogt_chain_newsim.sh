@@ -4,7 +4,8 @@
 #   지도 포즈 출처: MAP_POSE_DIR 비우면 GT 스캔 포즈(gt.json map apos/yaw) · CUT3R 포즈로 하려면 MAP_POSE_DIR=~/khcache/cut3r_v (<dir>/<house>/map_pose_<house>.jsonl, 아래 9-b 참고)
 #   차이: 1·2·4 단계 없음(HSSD 라벨 수정·자가검사·habitat 방 그룹) · 초점거리 FRAME_FX(scene_meta.intrinsics) · 기울기 TILT=0 · 미러 MIRROR(기본 0) · 검증기 = HF Qwen(exp_t1_verify_pipeline) · 사전확률 OG 어휘 없음(→ 균등, belief 무의미)
 set -u; cd "$(dirname "$0")/.."
-OUT=${OUT:-data/newsim}; B=${BENCH_DIR:-$HOME/khcache/bench-newsim}; STEP=${STEP:-3}; PAR=${PAR:-2}; K=${PY:-$HOME/kx-venv/bin/python}; MIRROR=${MIRROR:-0}
+OUT=${OUT:-data/newsim}; B=${BENCH_DIR:-$HOME/khcache/bench-newsim}; STEP=${STEP:-3}; PAR=${PAR:-2}; K=${PY:-$HOME/kx-venv/bin/python}; MIRROR=${MIRROR:-1}
+TOPK=${TOPK:-20}; MIN_INLIERS=${MIN_INLIERS:-20}     # 2026-09-09: 새 시뮬레이터(720×540·흰 벽)는 CLIP 검색 top5·인라이어 50 에서 등록 37% → top20·20 에서 68%, 옛 자리 향한 프레임도 등록됨
 MLX=${MLX:-$HOME/mlx-venv/bin/python}
 export KMP_DUPLICATE_LIB_OK=TRUE OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
 H0=$(ls -d $OUT/house_* | head -1); read FW FX <<< "$($K -c "import json,sys; i=json.load(open('$H0/gt.json')).get('scene_meta',{}).get('intrinsics') or {}; print(i.get('W',1280), i.get('fx', i.get('W',1280)/2))")"
@@ -38,11 +39,11 @@ for f in sorted(glob.glob("$B/cache/hs2_a_house_*.npz")): out[os.path.basename(f
 json.dump(out, open("$B/q_anchors.json", "w")); print("앵커 목록 %d채 %d장" % (len(out), sum(len(v) for v in out.values())))
 PY
   one() { hn=$1; S=data/seq/newsim_$hn; W=$HOME/khcache/hloc-newsim/$hn; NM=$($K -c "import json; print(json.load(open('$S/camera_info.json'))['n_map'])" 2>/dev/null)
-    $K -u scripts/reloc_hloc.py $S --scan-end $NM --live-step 1 --work $W --map gt --embed clip --topk 5 --threads 4 --live-list $B/q_anchors.json --house-name $hn \
-      --pose-out $B/pnp/pose_$hn.jsonl --hssd-mirror $MIRROR --min-inliers 50 > $B/pnp/logs/$hn.log 2>&1
+    $K -u scripts/reloc_hloc.py $S --scan-end $NM --live-step 1 --work $W --map gt --embed clip --topk $TOPK --threads 4 --live-list $B/q_anchors.json --house-name $hn \
+      --pose-out $B/pnp/pose_$hn.jsonl --hssd-mirror $MIRROR --min-inliers $MIN_INLIERS > $B/pnp/logs/$hn.log 2>&1
     echo "  $hn $(grep -aE 'GT 포즈 삼각측량|라이브 PnP' $B/pnp/logs/$hn.log | sed -E 's/^\[ *[0-9]+s\] //; s/ · 장당.*//' | tr '\n' ' ' | cut -c1-200)"
     :; }
-  export -f one; export K B MIRROR
+  export -f one; export K B MIRROR TOPK MIN_INLIERS
   ls -d $OUT/house_* | xargs -n1 basename | xargs -P $PAR -I{} bash -c 'one {}'
   cat $B/pnp/pose_house_*.jsonl > $B/pnp/pose_all.jsonl; echo "  POSE_JSONL $(wc -l < $B/pnp/pose_all.jsonl)줄"
   echo "  ⚠️ '삼각측량 지도' 줄의 재투영 오차가 2 px 를 넘으면 MIRROR 를 바꿔(0↔1) 9단계만 다시 (좌표 손 규약)."
