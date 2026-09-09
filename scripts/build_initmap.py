@@ -134,6 +134,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         if GEO:
             # 검출 패치 → 방위 → (GT 거리) → 지도 투영 → 방
             P_ = torch.sigmoid(lg).argmax(1)[0].int().cpu().numpy()
+            _SG = torch.sigmoid(lg)[0].float().cpu().numpy()          # (패치, 타입) — raw 에 패치의 최상위 타입·마진을 남긴다 (P0-D, 2026-09-10)
             ap = mp[k]["apos"]
             if ap is None: continue
             yaw = float(mp[k]["yaw"])
@@ -171,7 +172,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     d_ = dmap[o_near]
                 pt = [ap[0] + d_ * np.sin(np.radians(b)), ap[1] + d_ * np.cos(np.radians(b))]
                 pts_.setdefault(v, []).append((pt, float(s[c]), (float(ap[0]), float(ap[1]))))
-                if os.environ.get("INITMAP_RAW") == "1": raw_.setdefault(v, []).append([round(float(pt[0]), 3), round(float(pt[1]), 3), round(float(s[c]), 4), round(float(ap[0]), 3), round(float(ap[1]), 3), int(k)])
+                if os.environ.get("INITMAP_RAW") == "1":
+                    _row = _SG[P_[c]]; _o = np.argsort(-_row); _top = int(_o[0]); _m = float(_row[c] - (_row[_o[1]] if _top == c else _row[_top]))
+                    raw_.setdefault(v, []).append([round(float(pt[0]), 3), round(float(pt[1]), 3), round(float(s[c]), 4), round(float(ap[0]), 3), round(float(ap[1]), 3), int(k), _top, round(_m, 4)])
                 rr = room_pt(pt)
                 # ⚠️ 거리 감쇠·관측수 가중은 **역효과**였다 (0.583→0.551, 2026-09-01):
                 # 둘 다 "가까이·자주 보인 것" 을 우대해 **관측자 방 편향을 되살린다** —
