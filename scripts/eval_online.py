@@ -138,6 +138,7 @@ LADDER = ("[RoI ≤%sm %s ≥%spx] " % (os.environ.get("ROI_DIST", "-"), os.envi
 _NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT", "위치:GT", "자리:GT", "앵커방:GT"))   # 자리:GT = 부재 게이트가 GT 물체 원위치를 씀(2026-09-07 발견)
 _PHANTOM = json.load(open(os.environ["PHANTOM_JSON"])) if os.environ.get("PHANTOM_JSON") else None
 _PH_SKIP = [0]
+if os.environ.get("ROWS_OUT"): open(os.path.expanduser(os.environ["ROWS_OUT"]), "w").close()   # 행 덤프는 실행마다 새로 (append 라 사슬 재실행 때 누적됐다, 2026-09-09)
 _BRANK = []      # (정답 방의 belief 순위, 후보 방 수) — ③ 인계 행만
 if _PHANTOM: LADDER += " · 유령제외:%d집" % len(_PHANTOM)
 else: LADDER += " · 유령제외:없음⚠️"
