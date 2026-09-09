@@ -24,7 +24,7 @@ for hd in sorted(glob.glob(os.path.join(a.root, "house_*"))):
     raw = json.load(open(rf)); polys = json.load(open(hdr + "/gt.json"))["scene_meta"]["polys"]; out = []
     for t, pts in raw.items():
         cl = []
-        for x, z, s, ax, az, k in sorted(pts, key=lambda p: -p[2]):
+        for x, z, s, ax, az, k in (p[:6] for p in sorted(pts, key=lambda p: -p[2])):     # raw 는 2026-09-10 부터 [.., top, margin] 두 필드가 더 붙는다
             if s < a.th: continue
             hit = next((i for i, c in enumerate(cl) if math.hypot(x - c["c"][0], z - c["c"][1]) <= a.clu), None)
             if hit is None: cl.append(dict(c=np.array([x, z]), w=s, n=1, vs=[(ax, az)], mx=s))
