@@ -44,8 +44,8 @@ for hd in sorted(glob.glob(os.path.join(root, "house_*"))):
     hn = os.path.basename(hd); gp = os.path.join(os.path.realpath(hd), "gt.json")
     if not os.path.exists(gp): continue
     g = json.load(open(gp)); keys = set(g["gt0"])
-    sc, jac, mode = max((((s, len(keys & v[0]) / max(1, len(keys | v[0])), "cluttered")) for s, v in scenes.items()) +
-                        [((s, len(keys & v[2]) / max(1, len(keys | v[2])), "uncluttered")) for s, v in scenes.items()], key=lambda x: x[1])
+    sc, jac, mode = max([(s, len(keys & v[0]) / max(1, len(keys | v[0])), "cluttered") for s, v in scenes.items()] +
+                        [(s, len(keys & v[2]) / max(1, len(keys | v[2])), "uncluttered") for s, v in scenes.items()], key=lambda x: x[1])
     if mode == "uncluttered": phset = set()          # 생성기가 uncluttered 목록을 읽었다 = 전부 렌더됨 → 유령 없음
     else: phset = scenes[sc][1]
     ph = sorted(phset & keys); mv = [x["oid"] for x in g["moves"]]; mvph = [o for o in mv if o in phset]
