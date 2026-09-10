@@ -51,6 +51,12 @@ if os.environ.get("VERIFY_JSONL"):
         _d = json.loads(_l)
         VSC[(_d["house"], _d["oid"])] = _d["scored"]
     print("실검증 %d타겟" % len(VSC), flush=True)
+BUNDLE = None                                 # ②③ 묶음 판정(bundle_verdict_mlx.py, 2026-09-10 사용자 제안): 게이트 대신 VLM 한 번의 답 {at_spot, spot_seen, else_t, conf}
+if os.environ.get("BUNDLE_JSONL"):
+    BUNDLE = {}
+    for _l in open(os.path.expanduser(os.environ["BUNDLE_JSONL"])):
+        _r = json.loads(_l); BUNDLE[(_r["house"], _r["oid"])] = _r
+    BUNDLE_MIN_SPOT = int(os.environ.get("BUNDLE_MIN_SPOT", "2")); print("  묶음 판정 BUNDLE_JSONL %d행 · 모드 %s" % (len(BUNDLE), os.environ.get("BUNDLE_MODE", "both")))
 ABSV = None                                   # ③ 검증기 부재(abs_verify_mlx.py 산출): {(house, oid): {late:[[t, s_box, s_wide, sim, geo]], early:[...]}}
 if os.environ.get("ABS_VERIFY_JSONL"):
     ABSV = {}
@@ -756,6 +762,15 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         _fv = absv_fired(hn, oid, type_=v0["type"]) if ABSV is not None else None
         if _fv is True and os.environ.get("ABS_VERIFY_MODE", "or") in ("or", "only"): fired = True      # 검증기 부재 규칙 B (2026-09-07)
         if _fv is False and os.environ.get("ABS_VERIFY_MODE", "or") == "only": fired = False
+        if BUNDLE is not None and (hn, oid) in BUNDLE:                     # 묶음 판정: abs = 부재 발화를 답으로 대체 · c0 = "다른 데서 보임" 을 채택으로
+            _bd = BUNDLE[(hn, oid)]; _bmode = os.environ.get("BUNDLE_MODE", "both"); _nsp = len(_bd.get("spot_seen") or [])
+            if _bmode in ("abs", "both"):
+                if _bd.get("at_spot") == "no" and _nsp >= BUNDLE_MIN_SPOT: fired = True
+                elif _bd.get("at_spot") == "yes" and _nsp >= 1: fired = False
+                elif os.environ.get("BUNDLE_ONLY", "0") == "1": fired = False
+            if _bmode in ("c0", "both") and _bd.get("else_t") is not None and (alt is None or os.environ.get("BUNDLE_OVER", "0") == "1"):
+                _er = live.get(int(_bd["else_t"]), {}).get("room")
+                if _er and _er != record and (_bd.get("conf") == "high" or os.environ.get("BUNDLE_LOWCONF", "0") == "1"): alt = _er
         _mob_all = float(os.environ.get("ABS_MOB_ALL", "0"))          # 2026-09-09: 기하 부재 규칙에도 이동성 게이트 — 현행 표의 ① 거짓 인계 10건이 전부 고정 가구(천장등·샤워·냉장고)였다
         if fired and _mob_all > 0 and _MOB and _MOB.get(v0["type"], 0.0) < _mob_all: fired = False
         if fired and alt is not None and os.environ.get("ABS_OVER_C0", "0") == "1": alt = None        # 부재 발화가 목격채택보다 우선 (§166-15 ⓒ)
