@@ -83,11 +83,11 @@
     <div class="tbl"><table>
       <tr><th>벤치</th><th class="num">전체</th><th class="num">① 이동없음</th><th class="num">② 재촬영</th><th>③ 이동+미재촬영 (우리 몫 = 인계)</th><th>④ 집밖</th></tr>
       <tr><td><strong>HSSD 115채</strong> (기준 표)</td><td class="num"><strong>0.781</strong></td><td class="num">0.818</td><td class="num">0.615 <span class="pill acc">RoI 0.688</span></td><td>확인기회O 9 → 인계 <strong>4 (0.44)</strong> · 거짓 인계 <strong>0</strong> · 무인계 준수 1.00</td><td>—</td></tr>
-      <tr><td>HSSD v2 파일럿 12채 (far_low)</td><td class="num">0.641</td><td class="num">0.700</td><td class="num">0.529</td><td>확인기회O 2 → 인계 1 (나머지: 거짓 채택 1 · 프레임&lt;2 1 · 인스턴스 선택 3)</td><td class="num">0.25 (n=4)</td></tr>
+      <tr><td>HSSD v2 파일럿 12채 (far_low) — 9/10 오후 포즈 정정판*</td><td class="num">0.650</td><td class="num">0.711</td><td class="num">0.647 <span class="pill acc">채택정답 0.80</span></td><td>확인기회O 3 → 인계 1 (나머지: 검증기 거짓 존재 3 · 프레임&lt;2 1)</td><td class="num">0.25 (n=4)</td></tr>
       <tr><td>OmniGibson 12채 (RTX)</td><td class="num">0.522</td><td class="num">0.619</td><td class="num">0.400</td><td>확인기회O 14 → 인계 3 (0.21) · 인계 3건 전부 정답</td><td>—</td></tr>
       <tr><td>AIUE 새 시뮬레이터 6채</td><td class="num">—</td><td class="num">0.560</td><td class="num">질의 없음*</td><td>확인기회 1 → 인계 <strong>1/1</strong></td><td>—</td></tr>
     </table></div>
-    <p>*증거 물체가 집 안에서 타입 유일이 아니라(머그 17개·책 28개) 질의에서 빠진다 — 요청서 §2. 9/5 기준선은 115채 0.669 · ① 0.714 · ② 0.440 이었다. ① 이 전체 행의 93% 라 평균은 곧 ① 점수다 — 앞으로 보고는 ①/②/③ 를 따로 적는다.</p>
+    <p>*파일럿 행은 9/10 오후 정정판이다: PnP seq 디렉터리가 집 이름만으로 키워져 v2b 파일럿이 v2 파일럿의 라이브 프레임으로 포즈를 계산하고 있었다(포즈 ≤0.5 m 4% → 정정 후 0.81, §166-45). 이 주에 보고했던 파일럿 ② 0.529(채택정답 0.43)·③ 확인기회 2 와 "③ 병목 = PnP 커버리지" 는 오염된 포즈 위의 수치였고, 정정 후 병목은 검증기의 거짓 존재(3/6)로 옮겨진다. 115채·OG·AIUE 는 무관. AIUE 는 증거 물체가 집 안에서 타입 유일이 아니라(머그 17개·책 28개) 질의에서 빠진다 — 요청서 §2. 9/5 기준선은 115채 0.669 · ① 0.714 · ② 0.440 이었다. ① 이 전체 행의 93% 라 평균은 곧 ① 점수다 — 앞으로 보고는 ①/②/③ 를 따로 적는다.</p>
   </section>
 
   <section>
@@ -96,7 +96,8 @@
       <tr><th>적용한 것</th><th>어디에</th><th>수치 변화</th><th>판정</th></tr>
       <tr><td><strong>유령 물체 제거</strong> — 생성기가 cluttered 목록을 읽고 sim 은 uncluttered 를 로드해 gt0 의 45% 가 렌더에 없었다. 명부(<code>phantom_census.py</code>)로 제외 + 생성기 수정</td><td>115채 채점</td><td class="num">0.676 → <strong>0.777</strong> · ① 0.72→0.81 · ② 0.38→<strong>0.62</strong></td><td><span class="pill good">채택</span> 자 교정</td></tr>
       <tr><td><strong>이동성 게이트</strong> — 기하 부재 규칙에도 <code>ABS_MOB_ALL=0.1</code>; 거짓 인계 10건이 전부 천장등·냉장고 같은 고정 가구였다</td><td>115채 ③</td><td class="num">0.777 → 0.781 · 거짓 인계 <strong>10 → 0</strong> · 인계 4 유지</td><td><span class="pill good">채택</span> 기본값</td></tr>
-      <tr><td><strong>PnP 같은 방 후보 보강</strong>(<code>--room-json</code>) + 검증기·평가기 방 게이트 <code>either</code></td><td>파일럿 ③</td><td class="num">확인기회 0 → 2 · 인계 0 → <strong>1</strong> · ① 0.700 유지 (top20 은 ① −0.03)</td><td><span class="pill good">채택</span></td></tr>
+      <tr><td><strong>PnP 같은 방 후보 보강</strong>(<code>--room-json</code>) + 검증기·평가기 방 게이트 <code>either</code> — 정정 포즈로 재측정</td><td>파일럿 ③</td><td class="num">either: 전체 0.641 → 0.650 · ② 0.588 → 0.647 · 확인기회 0 → 3 · 인계 0 → <strong>1</strong></td><td><span class="pill good">채택</span> 재검증 필요(115채)</td></tr>
+      <tr><td><strong>seq 디렉터리 충돌 수정</strong> — 같은 집 이름의 다른 데이터셋이 옛 라이브 프레임으로 PnP 를 돌리던 것(데이터셋별 키로)</td><td>파일럿 전부</td><td class="num">포즈 ≤0.5 m 0.04 → <strong>0.81</strong> · ② 채택정답 0.43 → 0.80</td><td><span class="pill good">자 교정</span></td></tr>
       <tr><td><strong>기록 GT 사다리</strong> — 초기맵만 GT 로</td><td>115채</td><td class="num">0.777 → <strong>0.939</strong> · ① 0.991 · ② −2건 · ③ 0건</td><td><span class="pill acc">레버 확인</span> ①전용</td></tr>
       <tr><td><strong>초기맵 인스턴스 재순위 6종</strong> — 검출 통계·CLIP 텍스트·다시점 일관성·4B VLM 택1·광선 잔차·타입 마진</td><td>파일럿 ①</td><td class="num">방 정답 0.65 → 최고 0.67 (CLIP 텍스트) · 벤치 ① 0.700 → 0.733 · 상한 0.87</td><td><span class="pill warn">≤ +2 pt</span> 국소 신호 소진</td></tr>
       <tr><td><strong>검출 임계 0.12 → 0.06</strong></td><td>HSSD / OG</td><td class="num">HSSD 0.777 → 0.777 · OG 0.567 → <strong>0.627</strong></td><td><span class="pill acc">OG 만 채택</span></td></tr>
@@ -157,7 +158,7 @@
       <div class="body">
         <h3>P0 소진, 새 시뮬레이터 결함 발견, 묶음 판정 기각</h3>
         <ul>
-          <li><strong>파일럿 ③ 깔때기.</strong> PnP 변형 4종 중 "같은 방 후보 보강"만 ①·② 를 지키며 포즈 +87. either 게이트로 확인기회 2 · 인계 1. 남은 ③ 실패의 최대 항목은 초기맵 인스턴스 선택(3/6) (§166-38).</li>
+          <li><strong>파일럿 ③ 깔때기 → 오후에 뒤집힘.</strong> 새벽 결론(PnP 변형·either 게이트·확인기회 2·"인스턴스 선택 3/6", §166-38)은 오염된 포즈 위의 것이었다. seq 디렉터리 충돌을 고치고 다시 재니 ② 채택정답 0.43 → 0.80, ③ 확인기회 3 → 인계 1, 남은 실패는 검증기 거짓 존재 3 (§166-45).</li>
           <li><strong>P0 재순위 6종.</strong> 전부 +2 pt 이하(§166-39~41). 파일럿 ① 0.70 vs 115채 0.80 은 같은 장면에서 질의 구성 차이(§166-42).</li>
           <li><strong>새 시뮬레이터(AIUE) 6채.</strong> 변환기(좌표 규약 x=−Y, z=−X, yaw=ψ+180)·사슬 통과, 카메라방 0.87, ③ 인계 1/1. ① 0.464 의 절반이 "렌더 잡음"으로 보였으나 — 전처리 5종이 0 이고, 실체는 <strong>스캔 영상이 주석보다 1,668장 짧은 인코더 정지</strong>. DP 정렬기로 복원하자 vol8_02 ① 0.352 → 0.581. 개선 요청서 7항 갱신(<a href="NEWSIM_REQUEST_20260910.md">NEWSIM_REQUEST</a>).</li>
           <li><strong>묶음 판정(제안 실험).</strong> 후보 9장을 4B 에 한 번에 → ① 90건 중 31건을 "없다", 80건에 "다른 방에서 보인다" — 게이트가 막던 거짓 양성 그대로. 4B 로는 기각, 9B+ 는 RTX 에 넘김(§166-43).</li>
