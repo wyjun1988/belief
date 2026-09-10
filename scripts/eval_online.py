@@ -57,6 +57,10 @@ if os.environ.get("BUNDLE_JSONL"):
     for _l in open(os.path.expanduser(os.environ["BUNDLE_JSONL"])):
         _r = json.loads(_l); BUNDLE[(_r["house"], _r["oid"])] = _r
     BUNDLE_MIN_SPOT = int(os.environ.get("BUNDLE_MIN_SPOT", "2")); print("  묶음 판정 BUNDLE_JSONL %d행 · 모드 %s" % (len(BUNDLE), os.environ.get("BUNDLE_MODE", "both")))
+# 이동성 사전확률(PRIOR_JSON mobility) — 부재 검증기·기하 부재 게이트(ABS_MOB_ALL) 둘 다 쓴다. 2026-09-10 RTX 9-15: ABS_VERIFY_JSONL 없이 ABS_MOB_ALL>0 이면 _MOB 미정의로 죽던 것을 항상 정의
+try: _MOB = json.load(open(os.environ.get("PRIOR_JSON", "data/thor_prior.json"))).get("mobility", {})
+except Exception: _MOB = {}
+if not _MOB and float(os.environ.get("ABS_MOB_ALL", "0")) > 0: print("⚠️  PRIOR_JSON mobility 없음 → 이동성 게이트(ABS_MOB_ALL) 비활성", flush=True)
 ABSV = None                                   # ③ 검증기 부재(abs_verify_mlx.py 산출): {(house, oid): {late:[[t, s_box, s_wide, sim, geo]], early:[...]}}
 if os.environ.get("ABS_VERIFY_JSONL"):
     ABSV = {}
@@ -67,8 +71,6 @@ if os.environ.get("ABS_VERIFY_JSONL"):
     ABSV_EARLY = os.environ.get("ABSV_EARLY", "1") == "1" # 이른 자리 프레임에 양성 ≥1 요구(없으면 스캔 관측으로 대신)
     ABSV_MOB = float(os.environ.get("ABSV_MOB", "0.2"))   # 이동성 사전확률(PRIOR_JSON mobility) 이 이 값 미만인 타입(붙박이)은 부재 검사를 하지 않는다
     ABSV_GEOFIRST = os.environ.get("ABSV_GEOFIRST", "1") == "1"   # 기하(포즈) 자리 프레임이 2장 이상이면 그것만 쓴다(문맥 검색은 보충용)
-    try: _MOB = json.load(open(os.environ.get("PRIOR_JSON", "data/thor_prior.json"))).get("mobility", {})   # PRIOR_JSON 변수는 아래에서 정의되므로 env 를 직접 읽는다
-    except Exception: _MOB = {}
     if not _MOB: print("⚠️  ABS_VERIFY: mobility 사전확률 없음 → 붙박이 게이트 비활성", flush=True)
     def absv_fired(hn_, oid_, ci=1, type_=None):
         r_ = ABSV.get((hn_, oid_))
