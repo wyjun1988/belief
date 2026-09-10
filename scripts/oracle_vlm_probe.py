@@ -15,6 +15,7 @@ COT = os.environ.get("COT", "0") == "1"            # 장면별 한 문장 서술
 REFCROP = os.environ.get("REFCROP", "0") == "1"    # 기록 장면의 물체 주변 확대 크롭을 참조 이미지로 추가
 SPOTCROP = os.environ.get("SPOTCROP", "0") == "1"  # 나중 장면마다 자리 주변 확대 크롭 추가(GT 중심 또는 포즈 투영)
 _MOBT = json.load(open("data/hssd_move.json")).get("mobility", {}) if MOBP else {}
+THINK = os.environ.get("THINK", "0") == "1"        # Qwen3.5 thinking 모드(기본은 템플릿이 <think></think> 로 닫아 꺼져 있음, 2026-09-10 확인)
 SELECT_OUT = os.environ.get("SELECT_OUT", "")          # M2: 프레임 선택만 해서 <dir>/select.jsonl + 프레임 복사(RTX 로 보낼 묶음). 모델 안 띄움
 SELECT_IN = os.environ.get("SELECT_IN", "")            # RTX: select.jsonl 이 있는 묶음 디렉터리에서 실행(gt.json 불필요)
 PHJ = os.path.join(ROOT, "phantom_ids.json"); PH = set()
@@ -41,14 +42,18 @@ def prep(path, i, ctr=None):
     if ctr: r = int(0.09 * w); ImageDraw.Draw(im).rectangle([max(0, ctr[0]-r), max(0, ctr[1]-r), min(w-1, ctr[0]+r), min(h-1, ctr[1]+r)], outline=(255, 0, 0), width=max(3, w // 200))
     s = IMG_W / float(w); im = im.resize((IMG_W, max(8, int(h * s)))); p = os.path.join(TMPD, "%02d.jpg" % i); im.save(p, quality=90); return p
 def ask(paths, q):
+    mt = int(os.environ.get("MAXTOK", "3000" if THINK else ("700" if COT else "400")))
     if BACKEND == "mlx":
-        prompt = apply_chat_template(processor, cfg, q, num_images=len(paths)); r = generate(model, processor, prompt, paths, max_tokens=int(os.environ.get("MAXTOK", "700" if COT else "400")), verbose=False, temperature=0.0)
-        return r if isinstance(r, str) else getattr(r, "text", str(r))
-    msgs = [{"role": "user", "content": [{"type": "image"} for _ in paths] + [{"type": "text", "text": q}]}]
-    text = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False); ims = [Image.open(p).convert("RGB") for p in paths]
-    inp = processor(text=[text], images=ims, return_tensors="pt").to(model.device)
-    with torch.no_grad(): out = model.generate(**inp, max_new_tokens=int(os.environ.get("MAXTOK", "700" if COT else "400")), do_sample=False)
-    return processor.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
+        prompt = apply_chat_template(processor, cfg, q, num_images=len(paths), enable_thinking=THINK); r = generate(model, processor, prompt, paths, max_tokens=mt, verbose=False, temperature=0.0)
+        txt = r if isinstance(r, str) else getattr(r, "text", str(r))
+    else:
+        msgs = [{"role": "user", "content": [{"type": "image"} for _ in paths] + [{"type": "text", "text": q}]}]
+        text = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False, enable_thinking=THINK); ims = [Image.open(p).convert("RGB") for p in paths]
+        inp = processor(text=[text], images=ims, return_tensors="pt").to(model.device)
+        with torch.no_grad(): out = model.generate(**inp, max_new_tokens=mt, do_sample=False)
+        txt = processor.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
+    if THINK and "</think>" in txt: txt = txt.split("</think>")[-1]              # 생각 블록은 버리고 최종 답만 파싱
+    return txt
 def run_one(hn, oid, typ, moved, rec_path, ctr0, later_paths, meta, evid=None):
     """선택된 프레임으로 질문 한 번. 변형 A 박스 없음 / B 기록 장면에 GT 중심 박스. PREAMBLE/EVID/MOB/COT/REFCROP/SPOTCROP 로 프롬프트 사다리."""
     a = typ.replace("_", " ").lower(); an = ("a " if a[:1] not in "aeiou" else "an ") + a
@@ -75,7 +80,7 @@ def run_one(hn, oid, typ, moved, rec_path, ctr0, later_paths, meta, evid=None):
          % (an, " (inside the red box)" if VAR == "B" else "", "\n".join(lines), mobl, "The later views are in time order. ", a, cot, " only" if not COT else " on the last line", a))
     txt = ask(paths, q); js = parse(txt) or {}; truth = "no" if moved else "yes"; ans = str(js.get("still_there", "")).lower()
     row = dict(house=hn, oid=oid, type=typ, moved=moved, truth=truth, ans=ans, conf=js.get("confidence"), seen_in=js.get("seen_in"), variant=VAR, model=MODEL,
-               opts=dict(pre=PRE, evid=EVID, mob=MOBP, cot=COT, refcrop=REFCROP, spotcrop=SPOTCROP), raw=txt[:600]); row.update(meta)
+               opts=dict(pre=PRE, evid=EVID, mob=MOBP, cot=COT, refcrop=REFCROP, spotcrop=SPOTCROP, think=THINK), raw=txt[:600]); row.update(meta)
     return row, truth, ans
 def parse(txt):
     for st in [i for i, c in enumerate(txt) if c == "{"]:
