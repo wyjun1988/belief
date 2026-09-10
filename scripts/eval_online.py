@@ -764,9 +764,12 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         if _fv is False and os.environ.get("ABS_VERIFY_MODE", "or") == "only": fired = False
         if BUNDLE is not None and (hn, oid) in BUNDLE:                     # 묶음 판정: abs = 부재 발화를 답으로 대체 · c0 = "다른 데서 보임" 을 채택으로
             _bd = BUNDLE[(hn, oid)]; _bmode = os.environ.get("BUNDLE_MODE", "both"); _nsp = len(_bd.get("spot_seen") or [])
+            _bat = _bd.get("at_spot")
+            if "absent_conf" in _bd:                                              # 타임라인 판정: 확신도 문턱(BUNDLE_TH, ① 행에서 보정)으로 다시 판정
+                _bth = float(os.environ.get("BUNDLE_TH", "70")); _bat = ("no" if float(_bd["absent_conf"]) >= _bth else "yes")
             if _bmode in ("abs", "both"):
-                if _bd.get("at_spot") == "no" and _nsp >= BUNDLE_MIN_SPOT: fired = True
-                elif _bd.get("at_spot") == "yes" and _nsp >= 1: fired = False
+                if _bat == "no" and _nsp >= BUNDLE_MIN_SPOT: fired = True
+                elif _bat == "yes" and (_nsp >= 1 or "absent_conf" in _bd): fired = False
                 elif os.environ.get("BUNDLE_ONLY", "0") == "1": fired = False
             if _bmode in ("c0", "both") and _bd.get("else_t") is not None and (alt is None or os.environ.get("BUNDLE_OVER", "0") == "1"):
                 _er = live.get(int(_bd["else_t"]), {}).get("room")
