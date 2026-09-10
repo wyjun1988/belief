@@ -768,7 +768,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             _bd = BUNDLE[(hn, oid)]; _bmode = os.environ.get("BUNDLE_MODE", "both"); _nsp = len(_bd.get("spot_seen") or [])
             _bat = _bd.get("at_spot")
             if "absent_conf" in _bd:                                              # 타임라인 판정: 확신도 문턱(BUNDLE_TH, ① 행에서 보정)으로 다시 판정
-                _bth = float(os.environ.get("BUNDLE_TH", "70")); _bat = ("no" if float(_bd["absent_conf"]) >= _bth else "yes")
+                _bth = float(os.environ.get("BUNDLE_TH", "70")); _bat = ("no" if float(_bd["absent_conf"]) >= _bth else ("unsure" if _bd.get("at_spot") == "unsure" else "yes"))
+                if _bat == "unsure" and os.environ.get("BUNDLE_UNSURE", "keep") == "keep": _bmode = "none"   # 보류면 기존 규칙(검증기·기하)을 그대로 둔다
             if _bmode in ("abs", "both"):
                 if _bat == "no" and _nsp >= BUNDLE_MIN_SPOT: fired = True
                 elif _bat == "yes" and (_nsp >= 1 or "absent_conf" in _bd): fired = False
