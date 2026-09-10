@@ -28,14 +28,17 @@ HOUSES=$(ls -d $OUT/house_* | wc -l | tr -d ' '); echo "사슬 v2 · $OUT ($HOUS
 [ $STEP -le 8 ] && { echo "=== 8. 거리 (DA) $(date +%H:%M) ==="
   THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ AX_PREFIX=$B/cache/hs2_x_ SCORES=$B/scores/t1_floor0.8_d40.jsonl OUT_JSONL=$B/scores/geo_depth_nogt.jsonl $K -u scripts/geo_depth.py 2>&1 | tail -2; }
 [ $STEP -le 9 ] && { echo "=== 9. 앵커 프레임 PnP (GT 스캔 포즈 지도 · CLIP 검색 · SIFT 직접 매칭) $(date +%H:%M) ==="
-  for H in $OUT/house_*; do hn=$(basename $H); [ -d data/seq/c4_$hn ] || $K scripts/hssd_to_seq_reloc.py $H data/seq/c4_$hn 2>&1 | grep -v Warn | tail -1; done
+  # 2026-09-10 발견: seq·hloc 작업 디렉터리를 집 이름만으로 키우면 **같은 집 이름의 다른 데이터셋**(v2 파일럿 → v2b 파일럿)이 옛 라이브 프레임을 재사용해 PnP 포즈가 다른 영상의 것이 된다
+  #   (v2b 파일럿 PnP 포즈 ≤0.5 m 4%). → 데이터셋 이름(SEQP, 기본 $(basename $OUT))으로 키운다. 옛 이름을 강제하려면 SEQ_PREFIX=c4.
+  SEQP=${SEQ_PREFIX:-$(basename $OUT)}; export SEQP
+  for H in $OUT/house_*; do hn=$(basename $H); [ -d data/seq/${SEQP}_$hn ] || $K scripts/hssd_to_seq_reloc.py $H data/seq/${SEQP}_$hn 2>&1 | grep -v Warn | tail -1; done
   $K - <<PY
 import numpy as np, json, glob, os
 out = {}
 for f in sorted(glob.glob("$B/cache/hs2_a_house_*.npz")): out[os.path.basename(f)[6:-4]] = [int(t) for t in np.load(f, allow_pickle=True)["ts"]]
 json.dump(out, open("$B/q_anchors.json", "w")); print("앵커 목록 %d채 %d장" % (len(out), sum(len(v) for v in out.values())))
 PY
-  one() { hn=$1; S=data/seq/c4_$hn; W=$HOME/khcache/hloc-c4/$hn; NM=$($K -c "import json; print(json.load(open('$S/camera_info.json'))['n_map'])" 2>/dev/null)
+  one() { hn=$1; S=data/seq/${SEQP}_$hn; W=$HOME/khcache/hloc-${SEQP}/$hn; NM=$($K -c "import json; print(json.load(open('$S/camera_info.json'))['n_map'])" 2>/dev/null)
     $K -u scripts/reloc_hloc.py $S --scan-end $NM --live-step 1 --work $W --map gt --embed clip --topk ${TOPK:-5} --threads 3 --live-list $B/q_anchors.json --house-name $hn \
       --pose-out $B/pnp/pose_$hn.jsonl --hssd-mirror 1 --min-inliers ${MIN_INLIERS:-50} > $B/pnp/logs/$hn.log 2>&1
     echo "  $hn $(grep -aE '라이브 PnP' $B/pnp/logs/$hn.log | sed -E 's/^\[ *[0-9]+s\] //; s/ · 장당.*//' | cut -c1-150)"; }
