@@ -1,0 +1,207 @@
+<title>khronos 주간 0910</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #F3F5F7; --ink: #14181D; --ink-2: #4A5561; --rule: #D5DAE0; --card: #FFFFFF;
+    --accent: #0F6E6E; --accent-ink: #0B5252; --accent-wash: #E3F1F0;
+    --good: #2E7D4F; --warn: #B7791F; --bad: #B03A2E; --good-wash: #E6F2EA; --warn-wash: #F7EEDD; --bad-wash: #F6E4E1;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0F1418; --ink: #E6EAEE; --ink-2: #A3ADB8; --rule: #2A333C; --card: #161C22;
+      --accent: #4FB3B3; --accent-ink: #7CCACA; --accent-wash: #12302F;
+      --good: #6FBF8B; --warn: #D9A44A; --bad: #E07A6E; --good-wash: #16291D; --warn-wash: #2E2412; --bad-wash: #2F1A17;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0F1418; --ink: #E6EAEE; --ink-2: #A3ADB8; --rule: #2A333C; --card: #161C22;
+    --accent: #4FB3B3; --accent-ink: #7CCACA; --accent-wash: #12302F;
+    --good: #6FBF8B; --warn: #D9A44A; --bad: #E07A6E; --good-wash: #16291D; --warn-wash: #2E2412; --bad-wash: #2F1A17;
+    color-scheme: dark;
+  }
+  body { background: var(--paper); color: var(--ink); margin: 0;
+         font-family: "IBM Plex Sans KR", -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+         font-size: 15.5px; line-height: 1.65; }
+  .wrap { max-width: 76ch; margin: 0 auto; padding: 40px 24px 72px; display: grid; gap: 36px; }
+  h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.01em; margin: 0; text-wrap: balance; line-height: 1.25; }
+  h2 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.005em; text-wrap: balance; }
+  h3 { font-size: 16px; font-weight: 600; margin: 0; }
+  p { margin: 0; max-width: 68ch; }
+  .eyebrow { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+  .lede { font-size: 17px; color: var(--ink-2); max-width: 64ch; }
+  header { display: grid; gap: 12px; padding-bottom: 28px; border-bottom: 1px solid var(--rule); }
+  .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .stat { background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; display: grid; gap: 4px; }
+  .stat .k { font-family: "IBM Plex Mono", monospace; font-size: 26px; font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .stat .l { font-size: 12.5px; color: var(--ink-2); }
+  .stat.good .k { color: var(--good); } .stat.warn .k { color: var(--warn); } .stat.bad .k { color: var(--bad); }
+  section { display: grid; gap: 14px; }
+  .day { display: grid; grid-template-columns: 88px 1fr; gap: 16px; align-items: start; }
+  .date { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--accent-ink); padding-top: 4px; white-space: nowrap; }
+  .body { display: grid; gap: 12px; min-width: 0; }
+  ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; max-width: 68ch; }
+  li strong { font-weight: 600; }
+  .tbl { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--card); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  th { font-weight: 500; color: var(--ink-2); font-size: 12.5px; letter-spacing: 0.02em; }
+  tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid transparent; }
+  .pill.good { background: var(--good-wash); color: var(--good); }
+  .pill.warn { background: var(--warn-wash); color: var(--warn); }
+  .pill.bad { background: var(--bad-wash); color: var(--bad); }
+  .pill.acc { background: var(--accent-wash); color: var(--accent-ink); }
+  .callout { border-left: 3px solid var(--accent); background: var(--accent-wash); padding: 12px 16px; border-radius: 0 6px 6px 0; display: grid; gap: 6px; }
+  .callout.bad { border-color: var(--bad); background: var(--bad-wash); }
+  code { font-family: "IBM Plex Mono", monospace; font-size: 13px; background: var(--card); border: 1px solid var(--rule); padding: 0 5px; border-radius: 4px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .box { background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; display: grid; gap: 8px; }
+  a { color: var(--accent-ink); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  footer { color: var(--ink-2); font-size: 13px; border-top: 1px solid var(--rule); padding-top: 16px; }
+  @media (max-width: 560px) { .day { grid-template-columns: 1fr; gap: 6px; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">khronos · 2026-09-04 (목) ~ 09-10 (수)</div>
+    <h1>115채 무GT 표를 0.669에서 0.781로 올렸고, 그 이득의 정체를 ①·②·③로 갈라 읽었다</h1>
+    <p class="lede">이번 주의 결론은 세 줄이다. 벤치의 절반이 렌더에 없는 "유령 물체"였고 그걸 걷어내자 ②가 두 배가 됐다. 남은 큰 레버는 초기맵의 인스턴스 선택 하나뿐인데 국소 신호 여섯 종으로는 열리지 않았다. 그리고 목표를 "belief 인계"로 다시 못 박은 뒤 ③은 인계율 0.44·거짓 인계 0으로 읽는다.</p>
+    <div class="strip">
+      <div class="stat good"><div class="k">0.781</div><div class="l">HSSD 115채 무GT 전체 (9/5 0.669 →)<br>① 0.818 · ② 0.615 · 유령 제외·이동성 게이트</div></div>
+      <div class="stat good"><div class="k">0.44 · 0</div><div class="l">③ 확인기회O 9건 중 인계 4<br>① 거짓 인계 10 → 0</div></div>
+      <div class="stat warn"><div class="k">0.939</div><div class="l">기록(초기맵)만 GT로 준 사다리<br>①전용 레버 — ② −2건 · ③ 0건</div></div>
+      <div class="stat warn"><div class="k">3 · 1</div><div class="l">새 벤치 3종 개통(v2 133채·OG 12채·AIUE 6채)<br>+ 시뮬레이터 결함 1 (영상 프레임 정지)</div></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>3+1 결과 — 지금 표 (무GT, 유령 제외)</h2>
+    <div class="tbl"><table>
+      <tr><th>벤치</th><th class="num">전체</th><th class="num">① 이동없음</th><th class="num">② 재촬영</th><th>③ 이동+미재촬영 (우리 몫 = 인계)</th><th>④ 집밖</th></tr>
+      <tr><td><strong>HSSD 115채</strong> (기준 표)</td><td class="num"><strong>0.781</strong></td><td class="num">0.818</td><td class="num">0.615 <span class="pill acc">RoI 0.688</span></td><td>확인기회O 9 → 인계 <strong>4 (0.44)</strong> · 거짓 인계 <strong>0</strong> · 무인계 준수 1.00</td><td>—</td></tr>
+      <tr><td>HSSD v2 파일럿 12채 (far_low)</td><td class="num">0.641</td><td class="num">0.700</td><td class="num">0.529</td><td>확인기회O 2 → 인계 1 (나머지: 거짓 채택 1 · 프레임&lt;2 1 · 인스턴스 선택 3)</td><td class="num">0.25 (n=4)</td></tr>
+      <tr><td>OmniGibson 12채 (RTX)</td><td class="num">0.522</td><td class="num">0.619</td><td class="num">0.400</td><td>확인기회O 14 → 인계 3 (0.21) · 인계 3건 전부 정답</td><td>—</td></tr>
+      <tr><td>AIUE 새 시뮬레이터 6채</td><td class="num">—</td><td class="num">0.560</td><td class="num">질의 없음*</td><td>확인기회 1 → 인계 <strong>1/1</strong></td><td>—</td></tr>
+    </table></div>
+    <p>*증거 물체가 집 안에서 타입 유일이 아니라(머그 17개·책 28개) 질의에서 빠진다 — 요청서 §2. 9/5 기준선은 115채 0.669 · ① 0.714 · ② 0.440 이었다. ① 이 전체 행의 93% 라 평균은 곧 ① 점수다 — 앞으로 보고는 ①/②/③ 를 따로 적는다.</p>
+  </section>
+
+  <section>
+    <h2>무엇을 적용해서 얼마나 움직였나</h2>
+    <div class="tbl"><table>
+      <tr><th>적용한 것</th><th>어디에</th><th>수치 변화</th><th>판정</th></tr>
+      <tr><td><strong>유령 물체 제거</strong> — 생성기가 cluttered 목록을 읽고 sim 은 uncluttered 를 로드해 gt0 의 45% 가 렌더에 없었다. 명부(<code>phantom_census.py</code>)로 제외 + 생성기 수정</td><td>115채 채점</td><td class="num">0.676 → <strong>0.777</strong> · ① 0.72→0.81 · ② 0.38→<strong>0.62</strong></td><td><span class="pill good">채택</span> 자 교정</td></tr>
+      <tr><td><strong>이동성 게이트</strong> — 기하 부재 규칙에도 <code>ABS_MOB_ALL=0.1</code>; 거짓 인계 10건이 전부 천장등·냉장고 같은 고정 가구였다</td><td>115채 ③</td><td class="num">0.777 → 0.781 · 거짓 인계 <strong>10 → 0</strong> · 인계 4 유지</td><td><span class="pill good">채택</span> 기본값</td></tr>
+      <tr><td><strong>PnP 같은 방 후보 보강</strong>(<code>--room-json</code>) + 검증기·평가기 방 게이트 <code>either</code></td><td>파일럿 ③</td><td class="num">확인기회 0 → 2 · 인계 0 → <strong>1</strong> · ① 0.700 유지 (top20 은 ① −0.03)</td><td><span class="pill good">채택</span></td></tr>
+      <tr><td><strong>기록 GT 사다리</strong> — 초기맵만 GT 로</td><td>115채</td><td class="num">0.777 → <strong>0.939</strong> · ① 0.991 · ② −2건 · ③ 0건</td><td><span class="pill acc">레버 확인</span> ①전용</td></tr>
+      <tr><td><strong>초기맵 인스턴스 재순위 6종</strong> — 검출 통계·CLIP 텍스트·다시점 일관성·4B VLM 택1·광선 잔차·타입 마진</td><td>파일럿 ①</td><td class="num">방 정답 0.65 → 최고 0.67 (CLIP 텍스트) · 벤치 ① 0.700 → 0.733 · 상한 0.87</td><td><span class="pill warn">≤ +2 pt</span> 국소 신호 소진</td></tr>
+      <tr><td><strong>검출 임계 0.12 → 0.06</strong></td><td>HSSD / OG</td><td class="num">HSSD 0.777 → 0.777 · OG 0.567 → <strong>0.627</strong></td><td><span class="pill acc">OG 만 채택</span></td></tr>
+      <tr><td><strong>고정 앵커 분기·앵커 문맥 검색</strong>(<code>C0_ANCHOR</code>, <code>RETR=anchor</code>)</td><td>115채 ②③</td><td class="num">0.772 &lt; 0.777 · ② 오르면 ① 이 더 깎임 · 완벽 인스턴스 식별 가정에도 +0.12 상한</td><td><span class="pill bad">닫음</span></td></tr>
+      <tr><td><strong>학습식 스캔 포즈</strong>(VGGT·CUT3R·LoGeR·LingBot, RTX 주말)</td><td>OG 4채</td><td class="num">무GT 정렬 상한 0.54 · 지도포즈판 0.364</td><td><span class="pill bad">닫음</span></td></tr>
+      <tr><td><strong>VLM 인스턴스 진위(9B, 개별 yes/no)</strong></td><td>OG 4채 (RTX)</td><td class="num">1,287 → 944 인스턴스 · 벤치 0.627 그대로</td><td><span class="pill bad">무효</span></td></tr>
+      <tr><td><strong>새 시뮬레이터 프레임 정렬 복원</strong> — 스캔 mp4 7,332장 vs 주석 9,000행(인코더 정지 2×834행); 차분·위상상관 DP 정렬기</td><td>AIUE vol8_02</td><td class="num">① 0.352 → <strong>0.581</strong> (6채 0.464 → 0.560) · 검출 재현율(큰) 0.20 → 0.70</td><td><span class="pill good">복원</span> 시뮬 결함</td></tr>
+      <tr><td><strong>프레임 디노이즈·½해상도·감마 5종</strong> ("자글자글해서 안 잡히나")</td><td>AIUE 6채</td><td class="num">재현율 ±0.02 이내(소폭 하락)</td><td><span class="pill bad">효과 없음</span> 원인은 정렬</td></tr>
+      <tr><td><strong>②③ 묶음 판정</strong> — 후보 프레임 9장을 4B VLM 에 한 번에 (게이트 대신)</td><td>파일럿 12채</td><td class="num">전체 0.641 → 0.573(부재만)·0.333(채택까지) · ① 거짓 인계 1 → <strong>7</strong> · ② 채택정답 0.43 → 0.23</td><td><span class="pill bad">4B 기각</span> 9B+ 는 RTX</td></tr>
+    </table></div>
+    <div class="callout">
+      <strong>읽는 법.</strong> 올린 것은 자(유령)와 게이트(이동성)였고, 알고리즘 갈래는 다섯이 닫혔다. 남은 큰 레버는 초기맵 인스턴스 선택(0.729 → 상한 0.874) 하나이고, 그것도 후보 하나를 보고 진위를 가르는 국소 신호로는 안 열린다는 것이 이번 주의 실험 결과다.
+    </div>
+  </section>
+
+  <section>
+    <h2>한 주의 흐름</h2>
+    <div class="day">
+      <div class="date">9/4 – 9/6</div>
+      <div class="body">
+        <h3>115채 무GT 사슬 개통, 그리고 자를 또 한 번 고쳤다</h3>
+        <ul>
+          <li><strong>115채 통합 벤치 D.</strong> 최종 0.669 · ① 0.714 · ② 0.440 (초기맵만 0.300 → 라이브 국소화 +0.14, 첫 유의 기여). PnP 재국소화(<code>reloc_hloc</code>: CLIP 검색 + SIFT + PnP, GT 포즈 삼각측량 지도)가 실물 포즈 사슬로 자리 잡음.</li>
+          <li><strong>매핑워크 방 라벨 버그.</strong> 이동 프레임 라벨이 19~50% 오염돼 있었다 → 수정, 초기맵 재생성.</li>
+          <li><strong>머신 이전.</strong> M1 Max 매각 → M2 Max 로 전 사슬 이전(habitat + mlx). RTX PRO 6000 은 실행·보고 전담, 코드는 M2 에서 푸시하는 분업 확정.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="day">
+      <div class="date">9/7 – 9/8</div>
+      <div class="body">
+        <h3>유령 물체 — ② 의 절반은 애초에 풀 수 없는 문제였다</h3>
+        <div class="callout bad">
+          <strong>§166-25.</strong> 생성기가 <code>scenes/</code>(cluttered) 목록을 읽고 sim 은 <code>scenes-uncluttered/</code> 를 로드했다. gt0 의 45% 가 화면에 없는 물체였고, 그중 54건은 "유령을 옮기면" 받침 가구가 통째로 옮겨졌다. 이전 ②·③ 해석은 전부 다시 읽는다.
+        </div>
+        <ul>
+          <li><strong>재채점.</strong> 유령·숙주 제외(질의 291건) → 0.676 → 0.777, ② 0.38 → 0.62, 채택정답 0.59 → 0.83. 생성기 수정(설정의 scene_instances.paths 우선·타-템플릿 대체 금지).</li>
+          <li><strong>RTX 주말 결과 접수.</strong> 검출기 OWLv2-base 확정(9-1). 학습식 스캔 포즈 4모델은 무GT 정렬 상한 0.54 → 갈래 닫음(9-3).</li>
+          <li><strong>고정 앵커 분기.</strong> "잘 움직이는 물체는 앵커에서 빼자" → 타입 앵커+초기맵 방으로는 못 오르고, 인스턴스 식별이 완벽해도 +0.12 상한(§166-28). 같은 타입 여럿을 개체로 등록하는 앵커 문맥(§166-29)도 0.772 로 기준 미달.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="day">
+      <div class="date">9/9</div>
+      <div class="body">
+        <h3>레버의 정체 — 기록은 ① 만 올리고, ③ 는 belief 에서 막혀 있다</h3>
+        <ul>
+          <li><strong>GT 사다리 재측정.</strong> 포즈·방·거리·인식을 GT 로 줘도 ±0.01, 기록만 0.777 → 0.939 (§166-32). 사용자 지적으로 행 단위 분해 — ① +122건 · ② −2건 · ③ 0건. 정직한 ② 는 0.538 (§166-33).</li>
+          <li><strong>③ 0.000 의 진짜 이유.</strong> 115채의 ③ 목적지가 사전확률과 반대로 뽑혀 있었다(§166-34). 정답 방의 belief 순위 중앙 8/12. 목표를 다시 못 박음: 우리 몫은 기록 정답 → 부재 증거 → <em>인계</em>까지, belief 의 방 맞히기는 우리 점수가 아니다.</li>
+          <li><strong>거짓 인계 10건 = 고정 가구.</strong> 이동성 게이트로 0건(§166-36). 카메라방 게이트를 풀면 확인기회 9 → 19 지만 인계는 4 → 5, 거짓 인계 +4 — 커버리지 병목은 게이트가 아니라 옛 자리를 향한 프레임의 PnP.</li>
+          <li><strong>OG 12채 (RTX 9-12~14).</strong> 0.522 · ① 0.619 · ② 0.400 · ③ 인계 3/14, 인계 3건 전부 정답. 임계 0.06 채택(0.567 → 0.627). 기록 GT 는 OG 에서도 ①전용.</li>
+          <li><strong>v2 데이터 133채 생성</strong>(far_low 대본, 유령 0) + 파일럿 12채. 대본 두 판 비교 후 사전확률 대본은 ③ 18건 중 15건이 ② 로 새어 far_low 로 되돌림(§166-37).</li>
+        </ul>
+      </div>
+    </div>
+    <div class="day">
+      <div class="date">9/10</div>
+      <div class="body">
+        <h3>P0 소진, 새 시뮬레이터 결함 발견, 묶음 판정 기각</h3>
+        <ul>
+          <li><strong>파일럿 ③ 깔때기.</strong> PnP 변형 4종 중 "같은 방 후보 보강"만 ①·② 를 지키며 포즈 +87. either 게이트로 확인기회 2 · 인계 1. 남은 ③ 실패의 최대 항목은 초기맵 인스턴스 선택(3/6) (§166-38).</li>
+          <li><strong>P0 재순위 6종.</strong> 전부 +2 pt 이하(§166-39~41). 파일럿 ① 0.70 vs 115채 0.80 은 같은 장면에서 질의 구성 차이(§166-42).</li>
+          <li><strong>새 시뮬레이터(AIUE) 6채.</strong> 변환기(좌표 규약 x=−Y, z=−X, yaw=ψ+180)·사슬 통과, 카메라방 0.87, ③ 인계 1/1. ① 0.464 의 절반이 "렌더 잡음"으로 보였으나 — 전처리 5종이 0 이고, 실체는 <strong>스캔 영상이 주석보다 1,668장 짧은 인코더 정지</strong>. DP 정렬기로 복원하자 vol8_02 ① 0.352 → 0.581. 개선 요청서 7항 갱신(<a href="NEWSIM_REQUEST_20260910.md">NEWSIM_REQUEST</a>).</li>
+          <li><strong>묶음 판정(제안 실험).</strong> 후보 9장을 4B 에 한 번에 → ① 90건 중 31건을 "없다", 80건에 "다른 방에서 보인다" — 게이트가 막던 거짓 양성 그대로. 4B 로는 기각, 9B+ 는 RTX 에 넘김(§166-43).</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>지금 어디까지 왔나</h2>
+    <div class="grid2">
+      <div class="box">
+        <h3>확정된 것</h3>
+        <ul>
+          <li>115채 무GT 기준 표 <strong>0.781 / ① 0.818 / ② 0.615 / ③ 인계 0.44·거짓 0</strong> — 유령 제외·이동성 게이트·room-aug PnP·either 게이트가 기본값</li>
+          <li>③ 의 정의 = <strong>인계율</strong> (belief 정답은 참고) · 보고는 ①/②/③ 분리</li>
+          <li>검출기 OWLv2-base · 학습식 스캔 포즈·앵커 분기·개별 VLM 진위·4B 묶음 판정 <strong>닫음</strong></li>
+          <li>벤치 3종 병행: HSSD v2 133채 · OG 12채 · AIUE 6채 (규약 검증 완료)</li>
+        </ul>
+      </div>
+      <div class="box">
+        <h3>아직 못 한 것</h3>
+        <ul>
+          <li><strong>초기맵 인스턴스 선택</strong> 0.729 → 상한 0.874 — 국소 신호로는 불가, 큰 VLM 또는 구조 변경 미결</li>
+          <li><strong>③ 표본</strong> — 확인기회O 9건(115채)·2건(파일럿)으로는 어떤 개선도 유의하지 않다. v2 121채 본 실행 보류 중</li>
+          <li>② 채택률 0.46 — 게이트를 풀면 ① 이 깎여 커버리지 확장 미착수</li>
+          <li>새 시뮬레이터 재생성 대기(영상 정지·증거 물체 타입 유일·범주 라벨)</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>다음 주</h2>
+    <div class="tbl"><table>
+      <tr><th>항목</th><th>어디서</th><th>판정 기준</th></tr>
+      <tr><td><strong>P0 결정 — 인스턴스 선택</strong>: (a) 9B/32B 후보 비교 택1 + 묶음 판정 재시도(스크립트 그대로, <code>MODEL=</code> 교체) (b) 군집 후 선택이 아니라 탐지 시점 인스턴스 추적으로 초기맵 구조 변경</td><td>RTX (a) · M2 (b)</td><td>파일럿 ① 방 정답 0.65 → 0.80↑ · ① 거짓 인계 0 유지. (a) 가 +5 pt 미만이면 (b) 로</td></tr>
+      <tr><td><strong>v2 121채 본 실행</strong> — room-aug PnP·either·이동성 게이트 기본값, room_groups 사전 제작</td><td>RTX (하룻밤)</td><td>③ 확인기회O <strong>30건↑</strong> 확보 · 인계율·거짓 인계를 CI 로 보고</td></tr>
+      <tr><td><strong>③ 인계 커버리지</strong> — 옛 자리를 향한 프레임의 PnP 등록(앵커 간격·같은 방 후보) · 거짓 채택 우선순위(<code>ABS_OVER_C0</code>) 재검토</td><td>M2, 121채 표 위에서</td><td>확인기회O 대비 인계율 0.44 → 0.6↑ · 거짓 인계 0</td></tr>
+      <tr><td><strong>OG 24채 ③ 중심 확장</strong>(9-16) + 9B 묶음 판정(9-15 와 묶음)</td><td>RTX</td><td>③ 인계율과 ① 거짓 인계, 4B 기각표(§166-43)와 같은 형식으로 5줄 보고</td></tr>
+      <tr><td><strong>새 시뮬레이터 2차분</strong> — 요청서 7항 반영판 수령 → 프레임 수 == 주석 행 점검 → 6채 표</td><td>M2 (3시간)</td><td>정렬률 전 구간 0.8↑ · ① 0.56 → 0.7↑ · ③ 질의 ≥ 3건</td></tr>
+    </table></div>
+    <p>규칙 불변: 코드는 M2 에서 쓰고 푸시, RTX 는 실행·보고. 평균 한 줄로 보고하지 않는다 — ①/②/③ 와 거짓 인계를 함께 적는다.</p>
+  </section>
+
+  <footer>근거: <code>docs/RESULTS_OWL_20260819.md</code> §166-24~43 · <code>docs/PLAN_20260909.md</code> · <code>docs/rtx/RTX_RESULTS_20260908.md</code> · <code>docs/NEWSIM_20260909.md</code> §4~5 · <code>docs/NEWSIM_REQUEST_20260910.md</code>. 2026-09-10 작성.</footer>
+</div>
