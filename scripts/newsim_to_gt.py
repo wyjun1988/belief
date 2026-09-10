@@ -43,9 +43,21 @@ def project(cam, yaw, pitch, p, mirror):
     return u, v, zc
 def load_jsonl(p): return [json.loads(l) for l in open(p)]
 def episode_dir(sess_dir): return next(os.path.join(sess_dir, d) for d in os.listdir(sess_dir) if os.path.isdir(os.path.join(sess_dir, d)))
-def extract(mp4, idxs, outdir, pat):
+def extract(mp4, idxs, outdir, pat, n_ann=None):
+    """주석 행 idxs 에 해당하는 비디오 프레임을 뽑는다. 인코더가 프레임을 떨어뜨려 비디오가 주석보다 짧으면(vol8_02 스캔 7332/9000, 2026-09-10 발견:
+    인덱스로 뽑으면 100 s 이후 GT 박스가 엉뚱한 곳에 찍힘) 주석 행 i ↔ 비디오 프레임 round(i·n_video/n_ann) 로 선형 재사상한다(육안 검증: 소파·식탁 정렬)."""
     import cv2
-    os.makedirs(outdir, exist_ok=True); want = {k: i for i, k in enumerate(idxs)}; c = cv2.VideoCapture(mp4); k = 0; n = 0
+    os.makedirs(outdir, exist_ok=True); c = cv2.VideoCapture(mp4); nv = int(c.get(cv2.CAP_PROP_FRAME_COUNT)); scale = 1.0
+    if n_ann and nv > 0 and nv < n_ann - 1:
+        scale = nv / float(n_ann); print("   ⚠️ %s: 비디오 %d장 < 주석 %d행 → 프레임 선형 재사상 ×%.4f" % (os.path.relpath(mp4), nv, n_ann, scale), flush=True)
+    want = {}; va = os.path.join(os.path.dirname(mp4), "video_align.json")
+    if scale != 1.0 and os.path.exists(va):                    # newsim_align_video.py 의 DP 정렬(주석 행 → 비디오 프레임)이 있으면 그것을 쓴다
+        m = json.load(open(va))["ann2video"]; print("   video_align.json 사용(DP 정렬)", flush=True)
+        for i, k in enumerate(idxs): want.setdefault(int(m[k]), i)
+    else:
+        if scale != 1.0: print("   ⚠️ video_align.json 없음 → 선형 재사상(드롭이 불균일하면 틀린다; scripts/newsim_align_video.py 를 먼저 돌릴 것)", flush=True)
+        for i, k in enumerate(idxs): want.setdefault(int(round(k * scale)), i)
+    k = 0; n = 0
     while True:
         ok = c.grab()
         if not ok: break
@@ -83,6 +95,16 @@ for mp in maps:
     ent_scan = {e["actor_name"].strip(): e["instance_id"] for e in json.load(open(os.path.join(scan, "entities.json")))["entities"]}
     inst2oid_scan = {v: k for k, v in ent_scan.items()}
     idxs = list(range(0, len(scan_cams), a.stride))
+    va_path = os.path.join(scan, "video_align.json")
+    if os.path.exists(va_path):                            # 인코더 정지(stall)로 영상에 없는 주석 행은 지도에서 뺀다 (vol8_02: 834행 × 2회 = 1,668행 손실)
+        va = json.load(open(va_path)); v2a = va["video2ann"]; cov = set()
+        for r in v2a: cov.update((r - 2, r - 1, r, r + 1, r + 2))
+        runs = []; prev = v2a[0]
+        for r in v2a[1:]:
+            if r - prev - 1 >= 30: runs.append((prev + 1, r - 1))
+            prev = r
+        n0 = len(idxs); idxs = [k for k in idxs if k in cov]
+        print("   %s: 영상 %d장/주석 %d행 · 정지 구간 %s · 지도 프레임 %d → %d (영상에 없는 행 제외)" % (os.path.basename(scan), va["n_video"], va["n_ann"], ["행 %d~%d(%d)" % (a0, b0, b0 - a0 + 1) for a0, b0 in runs], n0, len(idxs)), flush=True)
     def frame_rec(cam, ann, inst2oid, positions, kind):
         loc = cam["location"]; pyr = cam["rotation_pyr_deg"]; cpos = ours(loc); yaw = yaw_ours(pyr[1]); pitch = float(pyr[0])
         rec = dict(room=room_of_xy(loc[0], loc[1]), yaw=round(yaw, 2), pitch=round(pitch, 2), apos=[round(cpos[0], 3), round(cpos[2], 3)], ctr={}, dist={}, box={})
@@ -133,8 +155,8 @@ for mp in maps:
                        _mirror_fixed=True, _remap=True, _map_room_by_pos=True, _mirror=mirror, _mirror_err=[round(mir_err[0] / max(1, mir_n), 1), round(mir_err[1] / max(1, mir_n), 1)])
         json.dump(payload, open(os.path.join(hd, "gt.json"), "w"), ensure_ascii=False)
         if not a.no_frames:
-            n_l = extract(os.path.join(ep, "ego.mp4"), list(range(len(cams))), os.path.join(hd, "live"), "%06d.jpg")
-            n_m = extract(os.path.join(scan, "ego.mp4"), idxs, os.path.join(hd, "map"), "%04d.jpg")
+            n_l = extract(os.path.join(ep, "ego.mp4"), list(range(len(cams))), os.path.join(hd, "live"), "%06d.jpg", n_ann=len(cams))
+            n_m = extract(os.path.join(scan, "ego.mp4"), idxs, os.path.join(hd, "map"), "%04d.jpg", n_ann=len(scan_cams))
         else:
             n_l = len(glob.glob(os.path.join(hd, "live", "*.jpg"))); n_m = len(glob.glob(os.path.join(hd, "map", "*.jpg")))
         # mp4 의 실제 디코딩 프레임 수가 메타보다 적을 수 있다(vol8_02 스캔: 489 예상 → 실제 추출 수만큼) → gt 의 map/live 를 추출된 장수로 자른다
