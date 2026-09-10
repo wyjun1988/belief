@@ -39,11 +39,14 @@ def ask(paths, q):
         r = generate(model, processor, prompt, paths, max_tokens=MAXTOK, verbose=False, temperature=0.0)
         return r if isinstance(r, str) else getattr(r, "text", str(r))
     msgs = [{"role": "user", "content": [{"type": "image"} for _ in paths] + [{"type": "text", "text": q}]}]
-    text = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
+    try: text = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False, enable_thinking=False)   # thinking 끔(9-19 1차: 9B 가 thinking 으로 JSON 전에 잘림)
+    except TypeError: text = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
+    if "<think>" not in text[-60:]: text = text + ("" if text.endswith("\n") else "\n") + "<think>\n\n</think>\n\n"
     ims = [Image.open(p).convert("RGB") for p in paths]
     inp = processor(text=[text], images=ims, return_tensors="pt").to(model.device)
     with torch.no_grad(): out = model.generate(**inp, max_new_tokens=MAXTOK, do_sample=False)
-    return processor.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
+    txt = processor.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
+    return txt.split("</think>")[-1] if "</think>" in txt else txt
 def parse(txt):
     """마지막으로 닫힌 최상위 {…} 블록(중괄호 짝 맞춤) → json; 후행 쉼표 허용."""
     starts = [i for i, c in enumerate(txt) if c == "{"]

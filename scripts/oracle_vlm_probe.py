@@ -41,18 +41,27 @@ def prep(path, i, ctr=None):
     im = Image.open(path).convert("RGB"); w, h = im.size
     if ctr: r = int(0.09 * w); ImageDraw.Draw(im).rectangle([max(0, ctr[0]-r), max(0, ctr[1]-r), min(w-1, ctr[0]+r), min(h-1, ctr[1]+r)], outline=(255, 0, 0), width=max(3, w // 200))
     s = IMG_W / float(w); im = im.resize((IMG_W, max(8, int(h * s)))); p = os.path.join(TMPD, "%02d.jpg" % i); im.save(p, quality=90); return p
+def hf_chat(msgs):
+    """HF 템플릿: thinking 을 THINK 대로 확실히. RTX 9-19 1차(2026-09-10)에서 9B 가 기본 thinking 으로 토큰을 다 써 JSON 이 잘렸다(A 3/87 파싱·B 0/87).
+    템플릿이 enable_thinking 을 모르면 mlx 와 같이 빈 <think></think> 블록을 프롬프트 끝에 붙여 끈다."""
+    try: t = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False, enable_thinking=THINK)
+    except TypeError: t = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
+    if not THINK and t.rstrip().endswith("<|im_start|>assistant"): t = t + "\n<think>\n\n</think>\n\n"
+    if not THINK and "<think>" not in t[-60:]: t = t + ("" if t.endswith("\n") else "\n") + "<think>\n\n</think>\n\n"
+    return t
 def ask(paths, q):
-    mt = int(os.environ.get("MAXTOK", "3000" if THINK else ("700" if COT else "400")))
+    mt = int(os.environ.get("MAXTOK", "3000" if THINK else ("700" if COT else "500")))
     if BACKEND == "mlx":
         prompt = apply_chat_template(processor, cfg, q, num_images=len(paths), enable_thinking=THINK); r = generate(model, processor, prompt, paths, max_tokens=mt, verbose=False, temperature=0.0)
         txt = r if isinstance(r, str) else getattr(r, "text", str(r))
     else:
         msgs = [{"role": "user", "content": [{"type": "image"} for _ in paths] + [{"type": "text", "text": q}]}]
-        text = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False, enable_thinking=THINK); ims = [Image.open(p).convert("RGB") for p in paths]
+        text = hf_chat(msgs); ims = [Image.open(p).convert("RGB") for p in paths]
         inp = processor(text=[text], images=ims, return_tensors="pt").to(model.device)
         with torch.no_grad(): out = model.generate(**inp, max_new_tokens=mt, do_sample=False)
         txt = processor.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
-    if THINK and "</think>" in txt: txt = txt.split("</think>")[-1]              # 생각 블록은 버리고 최종 답만 파싱
+    if "</think>" in txt: txt = txt.split("</think>")[-1]                        # 생각 블록은 버리고 최종 답만 파싱
+    elif "<think>" in txt: txt = "[TRUNCATED-THINK] " + txt                        # 생각이 끝나기 전에 잘림 → 파싱 실패로 남긴다
     return txt
 def run_one(hn, oid, typ, moved, rec_path, ctr0, later_paths, meta, evid=None):
     """선택된 프레임으로 질문 한 번. 변형 A 박스 없음 / B 기록 장면에 GT 중심 박스. PREAMBLE/EVID/MOB/COT/REFCROP/SPOTCROP 로 프롬프트 사다리."""
