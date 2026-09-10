@@ -42,12 +42,12 @@ def prep(path, i, ctr=None):
     s = IMG_W / float(w); im = im.resize((IMG_W, max(8, int(h * s)))); p = os.path.join(TMPD, "%02d.jpg" % i); im.save(p, quality=90); return p
 def ask(paths, q):
     if BACKEND == "mlx":
-        prompt = apply_chat_template(processor, cfg, q, num_images=len(paths)); r = generate(model, processor, prompt, paths, max_tokens=(600 if COT else 200), verbose=False, temperature=0.0)
+        prompt = apply_chat_template(processor, cfg, q, num_images=len(paths)); r = generate(model, processor, prompt, paths, max_tokens=int(os.environ.get("MAXTOK", "700" if COT else "400")), verbose=False, temperature=0.0)
         return r if isinstance(r, str) else getattr(r, "text", str(r))
     msgs = [{"role": "user", "content": [{"type": "image"} for _ in paths] + [{"type": "text", "text": q}]}]
     text = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False); ims = [Image.open(p).convert("RGB") for p in paths]
     inp = processor(text=[text], images=ims, return_tensors="pt").to(model.device)
-    with torch.no_grad(): out = model.generate(**inp, max_new_tokens=200, do_sample=False)
+    with torch.no_grad(): out = model.generate(**inp, max_new_tokens=int(os.environ.get("MAXTOK", "700" if COT else "400")), do_sample=False)
     return processor.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
 def run_one(hn, oid, typ, moved, rec_path, ctr0, later_paths, meta, evid=None):
     """선택된 프레임으로 질문 한 번. 변형 A 박스 없음 / B 기록 장면에 GT 중심 박스. PREAMBLE/EVID/MOB/COT/REFCROP/SPOTCROP 로 프롬프트 사다리."""
@@ -70,21 +70,13 @@ def run_one(hn, oid, typ, moved, rec_path, ctr0, later_paths, meta, evid=None):
     if MOBP:
         mv_ = _MOBT.get(a, None); mobl = ("Prior knowledge: %s %s.\n" % (an, "almost never moves" if (mv_ is not None and mv_ < 0.1) else "moves occasionally (mobility %.1f)" % mv_ if mv_ is not None else "may or may not move"))
     cot = "First write one short sentence per later image describing what is at the recorded place in it. Then " if COT else ""
-    q = (pre + "Image 1 shows %s at its recorded place in a house%s.\n%s\n%s%sIs the %s still at its recorded place in the later images? %sAnswer with JSON%s: "
+    q = (pre + "Image 1 shows %s at its recorded place in a house%s.\n%s\n%s%sIs the %s still at its recorded place in the later images? %sAnswer with JSON%s (the JSON must be the last line): "
          "{\"still_there\": \"yes\"|\"no\"|\"unsure\", \"seen_in\": [image numbers where the %s is visible], \"confidence\": 0-100}"
          % (an, " (inside the red box)" if VAR == "B" else "", "\n".join(lines), mobl, "The later views are in time order. ", a, cot, " only" if not COT else " on the last line", a))
     txt = ask(paths, q); js = parse(txt) or {}; truth = "no" if moved else "yes"; ans = str(js.get("still_there", "")).lower()
     row = dict(house=hn, oid=oid, type=typ, moved=moved, truth=truth, ans=ans, conf=js.get("confidence"), seen_in=js.get("seen_in"), variant=VAR, model=MODEL,
                opts=dict(pre=PRE, evid=EVID, mob=MOBP, cot=COT, refcrop=REFCROP, spotcrop=SPOTCROP), raw=txt[:600]); row.update(meta)
     return row, truth, ans
-if SELECT_IN:                                              # RTX 경로: 묶음의 select.jsonl 로 바로
-    out = open(OUTJ, "a"); n = 0; t0 = time.time(); stat = collections.Counter()
-    for l in open(os.path.join(SELECT_IN, "select.jsonl")):
-        r = json.loads(l); rec = os.path.join(SELECT_IN, r["rec_file"]); later = [os.path.join(SELECT_IN, f) for f in r["later_files"]]
-        row, truth, ans = run_one(r["house"], r["oid"], r["type"], r["moved"], rec, r["ctr0"], later, dict(n_later=r["n_later"], vis_later=r["vis_later"], d0=r["d0"]))
-        out.write(json.dumps(row, ensure_ascii=False) + "\n"); out.flush(); n += 1; stat[(truth, ans)] += 1
-        if MAX_OBJ and n >= MAX_OBJ: break
-    print("ORACLE_DONE %s · %d 타겟 · %.0fs · %s" % (VAR, n, time.time() - t0, dict(stat))); raise SystemExit
 def parse(txt):
     for st in [i for i, c in enumerate(txt) if c == "{"]:
         d = 0
@@ -96,6 +88,14 @@ def parse(txt):
                     try: return json.loads(re.sub(r",\s*([}\]])", r"\1", txt[st:i+1]))
                     except Exception: break
     return None
+if SELECT_IN:                                              # RTX 경로: 묶음의 select.jsonl 로 바로
+    out = open(OUTJ, "a"); n = 0; t0 = time.time(); stat = collections.Counter()
+    for l in open(os.path.join(SELECT_IN, "select.jsonl")):
+        r = json.loads(l); rec = os.path.join(SELECT_IN, r["rec_file"]); later = [os.path.join(SELECT_IN, f) for f in r["later_files"]]
+        row, truth, ans = run_one(r["house"], r["oid"], r["type"], r["moved"], rec, r["ctr0"], later, dict(n_later=r["n_later"], vis_later=r["vis_later"], d0=r["d0"]))
+        out.write(json.dumps(row, ensure_ascii=False) + "\n"); out.flush(); n += 1; stat[(truth, ans)] += 1
+        if MAX_OBJ and n >= MAX_OBJ: break
+    print("ORACLE_DONE %s · %d 타겟 · %.0fs · %s" % (VAR, n, time.time() - t0, dict(stat))); raise SystemExit
 out = open(OUTJ, "a") if not SELECT_OUT else None; n = 0; t0 = time.time(); stat = collections.Counter()
 if SELECT_OUT: os.makedirs(SELECT_OUT, exist_ok=True); open(os.path.join(SELECT_OUT, "select.jsonl"), "w").close()
 for hd in sorted(glob.glob(ROOT + "/house_*")):
