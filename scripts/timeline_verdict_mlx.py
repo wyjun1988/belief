@@ -2,15 +2,22 @@
 """타임라인 판정 (2026-09-10, 사용자 설계): timeline_prep.jsonl 의 재료를 **시간순 영어 서술 + 전체 프레임(박스 표시)** 로 묶어 VLM 에 한 번 묻는다.
 기록 장면(t=0, 어디에 무엇 옆에) → 목격(검출 점수·exemplar·방·확신도, 오검출 포함) → 부재 증거(타겟을 지운 문맥 검색·포즈 자리 향함, 그 프레임의 검출 점수) 를 한 줄씩.
 답: 마지막 자리 확인 t · 사라진 뒤 t · 자리를 보여주는 부재 프레임 · 오검출 목록 · 다른 곳 진짜 목격 · 현재 위치 · 부재 확신도 0~100 → 평가기 BUNDLE_JSONL (absent_conf·BUNDLE_TH).
-  THOR_ROOT=... PREP_JSONL=$B/scores/timeline_prep.jsonl OUT_JSONL=$B/scores/timeline.jsonl [IMG_W=448 MAX_IMG=24 MAX_OBJ=0] ~/mlx-venv/bin/python scripts/timeline_verdict_mlx.py"""
+  THOR_ROOT=... PREP_JSONL=$B/scores/timeline_prep.jsonl OUT_JSONL=$B/scores/timeline.jsonl [IMG_W=448 MAX_IMG=16 MAX_OBJ=0] ~/mlx-venv/bin/python scripts/timeline_verdict_mlx.py
+  RTX(HF): BACKEND=hf MODEL=Qwen/Qwen3.5-9B THOR_ROOT=<pack> PREP_JSONL=<pack>/timeline_prep_los.jsonl OUT_JSONL=... python scripts/timeline_verdict_mlx.py  (재료는 timeline_pack.py 로 묶어 보냄)"""
 import os, json, re, time, collections
 from PIL import Image, ImageDraw
-from mlx_vlm import load, generate
-from mlx_vlm.prompt_utils import apply_chat_template
-MODEL = os.environ.get("MODEL", "RepublicOfKorokke/Qwen3.5-4B-mlx-vlm-mxfp4"); ROOT = os.environ.get("THOR_ROOT", "data/hssd_v2b_pilot")
+BACKEND = os.environ.get("BACKEND", "mlx")            # mlx: Apple Silicon(Qwen3.5-4B mxfp4) · hf: transformers(RTX, MODEL=Qwen/Qwen3.5-9B 등) — 프롬프트·후처리는 동일
+MODEL = os.environ.get("MODEL", "RepublicOfKorokke/Qwen3.5-4B-mlx-vlm-mxfp4" if BACKEND == "mlx" else "Qwen/Qwen3.5-9B"); ROOT = os.environ.get("THOR_ROOT", "data/hssd_v2b_pilot")
 PREP = os.environ["PREP_JSONL"]; OUTJ = os.environ.get("OUT_JSONL", "/tmp/timeline.jsonl"); IMG_W = int(os.environ.get("IMG_W", "448")); MAX_IMG = int(os.environ.get("MAX_IMG", "16"))
 MAX_OBJ = int(os.environ.get("MAX_OBJ", "0")); MAXTOK = int(os.environ.get("MAXTOK", "1000")); HOUSES = set(os.environ.get("HOUSES", "").split())
-model, processor = load(MODEL); cfg = model.config
+if BACKEND == "mlx":
+    from mlx_vlm import load, generate
+    from mlx_vlm.prompt_utils import apply_chat_template
+    model, processor = load(MODEL); cfg = model.config
+else:
+    import torch
+    from transformers import AutoProcessor, AutoModelForImageTextToText
+    processor = AutoProcessor.from_pretrained(MODEL); model = AutoModelForImageTextToText.from_pretrained(MODEL, dtype=torch.bfloat16, device_map="auto").eval()
 done = set()
 if os.path.exists(OUTJ):
     for l in open(OUTJ):
@@ -25,9 +32,16 @@ def prep_img(path, i, box=None, color=(255, 0, 0)):
         else: box = None
     s = IMG_W / float(w); im = im.resize((IMG_W, max(8, int(h * s)))); p = os.path.join(TMPD, "%02d.jpg" % i); im.save(p, quality=90); return p
 def ask(paths, q):
-    prompt = apply_chat_template(processor, cfg, q, num_images=len(paths))
-    r = generate(model, processor, prompt, paths, max_tokens=MAXTOK, verbose=False, temperature=0.0)
-    return r if isinstance(r, str) else getattr(r, "text", str(r))
+    if BACKEND == "mlx":
+        prompt = apply_chat_template(processor, cfg, q, num_images=len(paths))
+        r = generate(model, processor, prompt, paths, max_tokens=MAXTOK, verbose=False, temperature=0.0)
+        return r if isinstance(r, str) else getattr(r, "text", str(r))
+    msgs = [{"role": "user", "content": [{"type": "image"} for _ in paths] + [{"type": "text", "text": q}]}]
+    text = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
+    ims = [Image.open(p).convert("RGB") for p in paths]
+    inp = processor(text=[text], images=ims, return_tensors="pt").to(model.device)
+    with torch.no_grad(): out = model.generate(**inp, max_new_tokens=MAXTOK, do_sample=False)
+    return processor.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
 def parse(txt):
     """마지막으로 닫힌 최상위 {…} 블록(중괄호 짝 맞춤) → json; 후행 쉼표 허용."""
     starts = [i for i, c in enumerate(txt) if c == "{"]
