@@ -10,6 +10,8 @@ BACKEND = os.environ.get("BACKEND", "mlx")            # mlx: Apple Silicon(Qwen3
 MODEL = os.environ.get("MODEL", "RepublicOfKorokke/Qwen3.5-4B-mlx-vlm-mxfp4" if BACKEND == "mlx" else "Qwen/Qwen3.5-9B"); ROOT = os.environ.get("THOR_ROOT", "data/hssd_v2b_pilot")
 PREP = os.environ["PREP_JSONL"]; OUTJ = os.environ.get("OUT_JSONL", "/tmp/timeline.jsonl"); IMG_W = int(os.environ.get("IMG_W", "448")); MAX_IMG = int(os.environ.get("MAX_IMG", "16"))
 MAX_OBJ = int(os.environ.get("MAX_OBJ", "0")); MAXTOK = int(os.environ.get("MAXTOK", "1000")); HOUSES = set(os.environ.get("HOUSES", "").split())
+MODE = os.environ.get("MODE", "timeline")           # timeline: 전체 서술(§166-44/46) · simple: 오라클 형식(§166-48) — 기록 장면(박스)+포즈 검증 자리 프레임 ≤K장만, 목적 서문, "still there?" 하나
+K_SPOT = int(os.environ.get("K_SPOT", "4")); REFCROP = os.environ.get("REFCROP", "0") == "1"
 if BACKEND == "mlx":
     from mlx_vlm import load, generate
     from mlx_vlm.prompt_utils import apply_chat_template
@@ -59,12 +61,50 @@ def parse(txt):
                         except Exception: break
     return None
 def article(t): return ("an " if t[:1] in "aeiou" else "a ") + t
+def crop_img(path, i, box):
+    im = Image.open(path).convert("RGB"); w, h = im.size; cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2; r = max(int(0.17 * w), int(max(box[2] - box[0], box[3] - box[1]) * 0.9))
+    x0, y0 = max(0, int(cx) - r), max(0, int(cy) - r); c = im.crop((x0, y0, min(w, x0 + 2 * r), min(h, y0 + 2 * r))).resize((IMG_W, IMG_W)); p = os.path.join(TMPD, "%02d.jpg" % i); c.save(p, quality=90); return p
+def simple_one(r, hdr, rec_room, a):
+    """오라클 형식(§166-48)을 파이프라인 프레임으로: 기록 장면(OWL 박스) [+확대] + 포즈 검증(LOS·마커) 자리 프레임 중 마커가 큰 순 K장(시간순) · 목적 서문 · still_there 하나."""
+    if r.get("record_k") is None or not r.get("record_box"): return None
+    rec_path = os.path.join(hdr, "map", "%04d.jpg" % r["record_k"])
+    if not os.path.exists(rec_path): return None
+    # 확인된 마지막 목격(기록 방에서 검출 점수 ≥0.30) 이후의 자리 프레임만
+    last_true = max([s_["t"] for s_ in r["sightings"] if s_.get("score", 0) >= 0.30 and s_.get("room") == rec_room], default=-1)
+    ctx = [c for c in r["context"] if c.get("geo") and c.get("spot_box") and c["t"] > last_true and os.path.exists(os.path.join(hdr, "live", "%06d.jpg" % c["t"]))]
+    ctx = sorted(ctx, key=lambda c: -((c["spot_box"][2] - c["spot_box"][0]) * (c["spot_box"][3] - c["spot_box"][1])))[:K_SPOT]; ctx.sort(key=lambda c: c["t"])
+    if len(ctx) < 1: return dict(house=r["house"], oid=r["oid"], type=r["type"], record=rec_room, imgs=[], spot_seen=[], absent_conf=0.0, at_spot="unsure", else_t=None, else_room=None, conf="low", n_spot=0, raw="(no pose-verified spot frame)")
+    paths = [prep_img(rec_path, 1, r["record_box"])]; imgs = [["record", -1, rec_room, {}]]
+    if REFCROP: paths.append(crop_img(rec_path, 2, r["record_box"])); imgs.append(["refcrop", -1, rec_room, {}])
+    for c in ctx:
+        n = len(paths) + 1; paths.append(prep_img(os.path.join(hdr, "live", "%06d.jpg" % c["t"]), n, c["spot_box"], color=(0, 120, 255))); imgs.append(["spot", c["t"], c.get("room"), dict(geo=1, marker=1)])
+    sp = [i + 1 for i, x in enumerate(imgs) if x[0] == "spot"]
+    q = ("You help a home robot answer \"Where is the %s?\". The robot recorded the %s at a place during a scan (Image 1, inside the red box) and later walked past that place again. "
+         "Your job is to decide from the later views whether the %s is still there. Most household objects do not move, so answer \"no\" only when the recorded place is clearly visible and the %s is clearly not there; "
+         "if the place is partly hidden, too far, or the object is small and hard to see, answer \"unsure\" rather than \"no\". A wrong \"no\" makes the robot search the whole house for nothing.\n\n"
+         "%sImages %d-%d are later views of that same place in time order; the blue box marks where the %s should appear from that camera position.\n"
+         "Is the %s still at its recorded place in the later images? Answer with JSON only (the JSON must be the last line): "
+         "{\"still_there\": \"yes\"|\"no\"|\"unsure\", \"seen_in\": [image numbers where the %s is visible], \"confidence\": 0-100}"
+         % (a, a, a, a, ("Image 2 is a zoomed-in crop of Image 1 around the %s. " % a) if REFCROP else "", sp[0], sp[-1], a, a, a))
+    txt = ask(paths, q); js = parse(txt) or {}; st = str(js.get("still_there", "")).lower()
+    try: cf = float(js.get("confidence", 0) or 0)
+    except Exception: cf = 0.0
+    def _ints(v): return [int(x) for x in (v if isinstance(v, list) else [v]) if str(x).strip().lstrip("-").isdigit()]
+    return dict(house=r["house"], oid=r["oid"], type=r["type"], record=rec_room, imgs=imgs, n_spot=len(sp), last_true_t=last_true, seen_in=_ints(js.get("seen_in", [])),
+                spot_seen=(sp if st == "no" else []), absent_conf=(cf if st == "no" else 0.0), at_spot=(st if st in ("yes", "no", "unsure") else "unsure"), else_t=None, else_room=None, conf=("high" if cf >= 70 else "low"), raw=txt[:600])
 n_obj = 0; t0 = time.time()
 for l in open(PREP):
     r = json.loads(l); hn, oid, a = r["house"], r["oid"], r["type"].replace("_", " ").lower()
     if HOUSES and hn not in HOUSES: continue
     if (hn, oid) in done: continue
     hdr = os.path.realpath(os.path.join(ROOT, hn)); rec_room = r.get("record") or "house"
+    if MODE == "simple":
+        row = simple_one(r, hdr, rec_room, a)
+        if row is None: continue
+        out.write(json.dumps(row, ensure_ascii=False) + "\n"); out.flush(); n_obj += 1
+        if n_obj % 10 == 0: print("  %d 타겟 · %.0fs" % (n_obj, time.time() - t0), flush=True)
+        if MAX_OBJ and n_obj >= MAX_OBJ: break
+        continue
     events = [("sight", s) for s in r["sightings"]] + [("ctx", c) for c in r["context"]]
     events.sort(key=lambda e: e[1]["t"])
     if len(events) > MAX_IMG - 1:                               # 상한: 문맥은 유지, 목격은 점수 상위로
