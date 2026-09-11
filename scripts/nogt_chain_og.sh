@@ -40,11 +40,11 @@ for f in sorted(glob.glob("$B/cache/hs2_a_house_*.npz")): out[os.path.basename(f
 json.dump(out, open("$B/q_anchors.json", "w")); print("앵커 목록 %d채 %d장" % (len(out), sum(len(v) for v in out.values())))
 PY
   one() { hn=$1; S=data/seq/${SEQP}_$hn; W=$HOME/khcache/hloc-${SEQP}/$hn; NM=$($K -c "import json; print(json.load(open('$S/camera_info.json'))['n_map'])" 2>/dev/null)
-    $K -u scripts/reloc_hloc.py $S --scan-end $NM --live-step 1 --work $W --map gt --embed clip --topk 5 --threads 4 --live-list $B/q_anchors.json --house-name $hn \
-      --pose-out $B/pnp/pose_$hn.jsonl --hssd-mirror $MIRROR --min-inliers 50 > $B/pnp/logs/$hn.log 2>&1
+    $K -u scripts/reloc_hloc.py $S --scan-end $NM --live-step 1 --work $W --map gt --embed clip --topk ${TOPK:-5} --threads 4 --live-list $B/q_anchors.json --house-name $hn \
+      --pose-out $B/pnp/pose_$hn.jsonl --hssd-mirror $MIRROR --min-inliers ${MIN_INLIERS:-50} > $B/pnp/logs/$hn.log 2>&1
     echo "  $hn $(grep -aE 'GT 포즈 삼각측량|라이브 PnP' $B/pnp/logs/$hn.log | sed -E 's/^\[ *[0-9]+s\] //; s/ · 장당.*//' | tr '\n' ' ' | cut -c1-200)"
     :; }
-  export -f one; export K B MIRROR
+  export -f one; export K B MIRROR TOPK MIN_INLIERS
   ls -d $OUT/house_* | xargs -n1 basename | xargs -P $PAR -I{} bash -c 'one {}'
   cat $B/pnp/pose_house_*.jsonl > $B/pnp/pose_all.jsonl; echo "  POSE_JSONL $(wc -l < $B/pnp/pose_all.jsonl)줄"
   echo "  ⚠️ '삼각측량 지도' 줄의 재투영 오차가 2 px 를 넘으면 MIRROR 를 바꿔(0↔1) 9단계만 다시 (좌표 손 규약)."
