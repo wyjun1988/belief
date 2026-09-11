@@ -33,20 +33,23 @@ def prep_img(path, i, box=None, color=(255, 0, 0)):
         if x1 - x0 >= 8 and y1 - y0 >= 8: ImageDraw.Draw(im).rectangle([x0, y0, x1, y1], outline=color, width=max(3, w // 200))
         else: box = None
     s = IMG_W / float(w); im = im.resize((IMG_W, max(8, int(h * s)))); p = os.path.join(TMPD, "%02d.jpg" % i); im.save(p, quality=90); return p
-def ask(paths, q):
+PREFILL = os.environ.get("PREFILL", "1") == "1"          # 어시스턴트 턴을 JSON 첫 토큰으로 시작(프리필) → 장문 분석·thinking 없이 바로 JSON. 2026-09-11 RTX 9B 보고 뒤 기본 켬
+def ask(paths, q, prefill='{"still_there": "'):
+    pf = prefill if PREFILL else ""
     if BACKEND == "mlx":
-        prompt = apply_chat_template(processor, cfg, q, num_images=len(paths))
+        prompt = apply_chat_template(processor, cfg, q, num_images=len(paths)) + pf
         r = generate(model, processor, prompt, paths, max_tokens=MAXTOK, verbose=False, temperature=0.0)
-        return r if isinstance(r, str) else getattr(r, "text", str(r))
+        return pf + (r if isinstance(r, str) else getattr(r, "text", str(r)))
     msgs = [{"role": "user", "content": [{"type": "image"} for _ in paths] + [{"type": "text", "text": q}]}]
     try: text = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False, enable_thinking=False)   # thinking 끔(9-19 1차: 9B 가 thinking 으로 JSON 전에 잘림)
     except TypeError: text = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
     if "<think>" not in text[-60:]: text = text + ("" if text.endswith("\n") else "\n") + "<think>\n\n</think>\n\n"
+    text = text + pf
     ims = [Image.open(p).convert("RGB") for p in paths]
     inp = processor(text=[text], images=ims, return_tensors="pt").to(model.device)
     with torch.no_grad(): out = model.generate(**inp, max_new_tokens=MAXTOK, do_sample=False)
     txt = processor.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
-    return txt.split("</think>")[-1] if "</think>" in txt else txt
+    return pf + (txt.split("</think>")[-1] if "</think>" in txt else txt)
 def parse(txt):
     """마지막으로 닫힌 최상위 {…} 블록(중괄호 짝 맞춤) → json; 후행 쉼표 허용."""
     starts = [i for i, c in enumerate(txt) if c == "{"]
@@ -151,7 +154,8 @@ for l in open(PREP):
          "First write 2-4 sentences of reasoning (which images really show the recorded spot, which detector reports are real), then the JSON on a single line without line breaks. "
          "Do not mark an image as an absence frame unless you can verify it shows the same furniture and walls as Image 1 (a blue box, when present, marks where the spot should be). "
          "If you cannot verify the spot in any image, set absence_frames to [] and absent_confidence below 30. If the %s is still at its spot in the latest verified image, set gone_after_t to null and absent_confidence low.") % (a, a, "\n".join(lines), a, a, a, a, a, a)
-    txt = ask(paths, q); js = parse(txt) or {}
+    if PREFILL: q = q.replace("First write 2-4 sentences of reasoning (which images really show the recorded spot, which detector reports are real), then the JSON on a single line without line breaks. ", "")
+    txt = ask(paths, q, prefill='{"last_seen_at_spot_t": '); js = parse(txt) or {}
     def _ints(v): return [int(x) for x in (v if isinstance(v, list) else [v]) if str(x).strip().lstrip("-").isdigit()]
     absf = [i for i in _ints(js.get("absence_frames", [])) if 1 <= i <= len(imgs) and imgs[i-1][0] == "ctx" or (1 <= i <= len(imgs) and imgs[i-1][0] == "sight")]
     absf = [i for i in absf if imgs[i-1][0] != "record"]
