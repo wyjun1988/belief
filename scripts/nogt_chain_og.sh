@@ -30,14 +30,16 @@ echo "OG 사슬 · $OUT ($HOUSES채) · $B · STEP $STEP · W $FRAME_W fx $FRAME
 [ $STEP -le 8 ] && { echo "=== 8. 거리 (DA) $(date +%H:%M) ==="
   THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ AX_PREFIX=$B/cache/hs2_x_ SCORES=$B/scores/t1_floor0.8_d40.jsonl OUT_JSONL=$B/scores/geo_depth_nogt.jsonl $K -u scripts/geo_depth.py 2>&1 | tail -2; }
 [ $STEP -le 9 ] && { echo "=== 9. 앵커 프레임 PnP (스캔 포즈 지도 · CLIP 검색 · SIFT) $(date +%H:%M) ==="
-  for H in $OUT/house_*; do hn=$(basename $H); [ -d data/seq/og_$hn ] || $K scripts/hssd_to_seq_reloc.py $H data/seq/og_$hn --mirror $MIRROR 2>&1 | grep -v Warn | tail -1; done
+  # 2026-09-11: seq·hloc 디렉터리를 데이터셋별로(SEQP) — 같은 집 이름의 다른 생성분이 옛 라이브 프레임을 재사용하던 오염(HSSD §166-45) 예방. 옛 경로를 강제하려면 SEQ_PREFIX=og
+  SEQP=${SEQ_PREFIX:-og_$(basename $OUT)}; export SEQP
+  for H in $OUT/house_*; do hn=$(basename $H); [ -d data/seq/${SEQP}_$hn ] || $K scripts/hssd_to_seq_reloc.py $H data/seq/${SEQP}_$hn --mirror $MIRROR 2>&1 | grep -v Warn | tail -1; done
   $K - <<PY
 import numpy as np, json, glob, os
 out = {}
 for f in sorted(glob.glob("$B/cache/hs2_a_house_*.npz")): out[os.path.basename(f)[6:-4]] = [int(t) for t in np.load(f, allow_pickle=True)["ts"]]
 json.dump(out, open("$B/q_anchors.json", "w")); print("앵커 목록 %d채 %d장" % (len(out), sum(len(v) for v in out.values())))
 PY
-  one() { hn=$1; S=data/seq/og_$hn; W=$HOME/khcache/hloc-og/$hn; NM=$($K -c "import json; print(json.load(open('$S/camera_info.json'))['n_map'])" 2>/dev/null)
+  one() { hn=$1; S=data/seq/${SEQP}_$hn; W=$HOME/khcache/hloc-${SEQP}/$hn; NM=$($K -c "import json; print(json.load(open('$S/camera_info.json'))['n_map'])" 2>/dev/null)
     $K -u scripts/reloc_hloc.py $S --scan-end $NM --live-step 1 --work $W --map gt --embed clip --topk 5 --threads 4 --live-list $B/q_anchors.json --house-name $hn \
       --pose-out $B/pnp/pose_$hn.jsonl --hssd-mirror $MIRROR --min-inliers 50 > $B/pnp/logs/$hn.log 2>&1
     echo "  $hn $(grep -aE 'GT 포즈 삼각측량|라이브 PnP' $B/pnp/logs/$hn.log | sed -E 's/^\[ *[0-9]+s\] //; s/ · 장당.*//' | tr '\n' ' ' | cut -c1-200)"
@@ -46,7 +48,7 @@ PY
   ls -d $OUT/house_* | xargs -n1 basename | xargs -P $PAR -I{} bash -c 'one {}'
   cat $B/pnp/pose_house_*.jsonl > $B/pnp/pose_all.jsonl; echo "  POSE_JSONL $(wc -l < $B/pnp/pose_all.jsonl)줄"
   echo "  ⚠️ '삼각측량 지도' 줄의 재투영 오차가 2 px 를 넘으면 MIRROR 를 바꿔(0↔1) 9단계만 다시 (좌표 손 규약)."
-  for H in $OUT/house_*; do hn=$(basename $H); $K scripts/export_map_points.py $H --work $HOME/khcache/hloc-og/$hn --seq data/seq/og_$hn --out $HOME/khcache/mappts/$hn 2>&1 | grep -v Warn | tail -1; done; }
+  for H in $OUT/house_*; do hn=$(basename $H); $K scripts/export_map_points.py $H --work $HOME/khcache/hloc-${SEQP}/$hn --seq data/seq/${SEQP}_$hn --out $HOME/khcache/mappts/$hn 2>&1 | grep -v Warn | tail -1; done; }
 [ $STEP -le 10 ] && { echo "=== 10. 벤치 D (GT 0) $(date +%H:%M) ==="
   env BENCH_DIR=$B THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ AX_PREFIX=$B/cache/hs2_x_ VERIFY_JSONL=$B/scores/t1_floor0.8_d40.jsonl \
     GEO_DEPTH=$B/scores/geo_depth_nogt.jsonl ROOM_GROUPS=0 PY=$K POSE_JSONL=$B/pnp/pose_all.jsonl ROOM_JSONL=$B/scores/room_embed_clip.jsonl ROWS_OUT=$B/rows_D.jsonl \
