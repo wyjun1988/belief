@@ -23,7 +23,7 @@ HOUSES=$(ls -d $OUT/house_* | wc -l | tr -d ' '); echo "사슬 v2 · $OUT ($HOUS
 [ $STEP -le 6 ] && { echo "=== 6. 초기맵 (GT 지도 포즈 · DA×0.468 · 검출) $(date +%H:%M) ==="
   THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ INITMAP_GEO=1 INITMAP_INST=1 MAP_DEPTH=da MAP_POINTS=0 MAP_PROP=0 $K -u scripts/build_initmap.py 2>&1 | grep -aE "완료|Traceback" | tail -1; }
 [ $STEP -le 7 ] && { echo "=== 7. 검증 점수 (mlx Qwen) $(date +%H:%M) ==="
-  THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ FLOOR=0.8 MAXWALK=40 OUT_JSONL=$B/scores/t1_floor0.8_d40.jsonl $MLX -u scripts/exp_t1_verify_mlx.py 2>&1 | tail -1
+  THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ ALL_TARGETS=${ALL_TARGETS:-1} FLOOR=0.8 MAXWALK=40 OUT_JSONL=$B/scores/t1_floor0.8_d40.jsonl $MLX -u scripts/exp_t1_verify_mlx.py 2>&1 | tail -1
   echo "  점수 $(wc -l < $B/scores/t1_floor0.8_d40.jsonl)줄"; }
 [ $STEP -le 8 ] && { echo "=== 8. 거리 (DA) $(date +%H:%M) ==="
   THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ AX_PREFIX=$B/cache/hs2_x_ SCORES=$B/scores/t1_floor0.8_d40.jsonl OUT_JSONL=$B/scores/geo_depth_nogt.jsonl $K -u scripts/geo_depth.py 2>&1 | tail -2; }

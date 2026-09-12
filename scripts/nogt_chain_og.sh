@@ -25,7 +25,7 @@ echo "OG 사슬 · $OUT ($HOUSES채) · $B · STEP $STEP · W $FRAME_W fx $FRAME
   $K scripts/recluster_initmap.py $OUT --out initmap_owl_rc.json --rank max --th 0.12; }
 [ $STEP -le 7 ] && [ "${SKIP_VERIFY:-0}" = 1 ] && { echo "=== 7. 검증 생략(SKIP_VERIFY=1) ==="; : > $B/scores/t1_floor0.8_d40.jsonl; }
 [ $STEP -le 7 ] && [ "${SKIP_VERIFY:-0}" != 1 ] && { echo "=== 7. 검증 점수 (HF $VMODEL) $(date +%H:%M) ==="
-  MODEL=$VMODEL THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ FLOOR=0.8 MAXWALK=40 OUT_JSONL=$B/scores/t1_floor0.8_d40.jsonl $K -u scripts/exp_t1_verify_pipeline.py 2>&1 | tail -1
+  MODEL=$VMODEL THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ ALL_TARGETS=${ALL_TARGETS:-1} FLOOR=0.8 MAXWALK=40 OUT_JSONL=$B/scores/t1_floor0.8_d40.jsonl $K -u scripts/exp_t1_verify_pipeline.py 2>&1 | tail -1
   echo "  점수 $(wc -l < $B/scores/t1_floor0.8_d40.jsonl)줄"; }
 [ $STEP -le 8 ] && { echo "=== 8. 거리 (DA) $(date +%H:%M) ==="
   THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ AX_PREFIX=$B/cache/hs2_x_ SCORES=$B/scores/t1_floor0.8_d40.jsonl OUT_JSONL=$B/scores/geo_depth_nogt.jsonl $K -u scripts/geo_depth.py 2>&1 | tail -2; }

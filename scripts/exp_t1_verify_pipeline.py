@@ -77,7 +77,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     for j, oid in enumerate(QT):
         v0 = g["gt0"][oid]
         if not v0["room"] or cnt[v0["type"]] > 1 or v0["type"] not in vocab: continue
-        if oid not in moves: continue                    # T1 후보(이동)만 — 비용 절약
+        if oid not in moves and os.environ.get("ALL_TARGETS", "0") != "1": continue   # 기본 GT 이동 타겟만(비용) — ALL_TARGETS=1 이면 전 타겟(배포 조건, §166-60)
         ti = vocab.index(v0["type"])
         TS = QS[:, j] + STx[:, j]
         th80 = np.quantile(TS, FLOOR)
