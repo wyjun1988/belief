@@ -47,15 +47,24 @@ print("방 임베딩 · %s (%s) · %s · temp %.3f stay %.2f · emit %s(k%d) cen
 
 def emb(paths, tag):
     cf = os.path.join(CACHE, "%s_%s.npy" % (MODEL, tag))
+    # 2026-09-12 (§166-58): 캐시 키가 집 이름뿐이라 **같은 집 이름의 다른 데이터셋**이 남의 임베딩을 썼다(v2 133채 88/133 → 카메라방 0.26 vs 새로 만든 집 0.80).
+    # 이제 프레임 경로·크기·mtime 지문을 함께 저장하고, 다르면 다시 만든다.
+    import hashlib
+    sig = hashlib.sha1(("|".join("%s:%d:%d" % (os.path.abspath(q), os.path.getsize(q), int(os.path.getmtime(q))) for q in paths[:8] + paths[-8:])).encode()).hexdigest()
     if os.path.exists(cf):
-        e = np.load(cf)
-        if len(e) == len(paths): return e
+        e = np.load(cf); ok = len(e) == len(paths)
+        if ok and os.path.exists(mf):
+            try: ok = json.load(open(mf)).get("sig") == sig
+            except Exception: ok = False
+        elif ok: ok = False                                   # 지문 없는 옛 캐시는 믿지 않는다
+        if ok: return e
+        print("  캐시 무효(다른 데이터셋/프레임) → 재계산: %s" % os.path.basename(cf), flush=True)
     out = []
     for i in range(0, len(paths), 16):
         ims = [Image.open(p).convert("RGB") for p in paths[i:i + 16]]
         with torch.no_grad(): e = _emb(ims)
         e = e / e.norm(dim=-1, keepdim=True); out.append(e.float().cpu().numpy())
-    E = np.concatenate(out) if out else np.zeros((0, 1), np.float32); np.save(cf, E); return E
+    E = np.concatenate(out) if out else np.zeros((0, 1), np.float32); np.save(cf, E); json.dump(dict(sig=sig, n=len(paths), root=os.path.abspath(os.path.dirname(os.path.dirname(paths[0]))) if paths else ""), open(mf, "w")); return E
 
 def viterbi(S, stay, temp):
     Z = (S - S.max(1, keepdims=True)) / temp
