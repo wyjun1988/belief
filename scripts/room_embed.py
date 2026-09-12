@@ -46,7 +46,7 @@ else:
 print("방 임베딩 · %s (%s) · %s · temp %.3f stay %.2f · emit %s(k%d) center %d" % (MODEL, CK, DEV, TEMP, STAY, EMIT, KNN, int(CENTER)), flush=True)
 
 def emb(paths, tag):
-    cf = os.path.join(CACHE, "%s_%s.npy" % (MODEL, tag))
+    cf = os.path.join(CACHE, "%s_%s.npy" % (MODEL, tag)); mf = cf[:-4] + ".meta.json"
     # 2026-09-12 (§166-58): 캐시 키가 집 이름뿐이라 **같은 집 이름의 다른 데이터셋**이 남의 임베딩을 썼다(v2 133채 88/133 → 카메라방 0.26 vs 새로 만든 집 0.80).
     # 이제 프레임 경로·크기·mtime 지문을 함께 저장하고, 다르면 다시 만든다.
     import hashlib
