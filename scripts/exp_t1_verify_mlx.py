@@ -63,7 +63,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     for j, oid in enumerate(QT):
         v0 = g["gt0"].get(oid)
         if not v0 or not v0["room"] or cnt[v0["type"]] > 1 or v0["type"] not in vocab: continue
-        if oid not in moves: continue
+        if oid not in moves and os.environ.get("ALL_TARGETS", "0") != "1": continue   # 2026-09-13(§166-60): 기본은 GT 이동 타겟만 채점 = ① 은 채택 경로가 구조적으로 못 켜진다(거짓 채택 0 이 공짜). ALL_TARGETS=1 이면 전 타겟 채점(배포 조건)
         ti = vocab.index(v0["type"])
         TS = QS[:, j] + STx[:, j]
         th = np.quantile(TS, FLOOR)
