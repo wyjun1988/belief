@@ -8564,3 +8564,4 @@ c3 대본 70건의 평가 사례: ② 40 · ③확인기회O 8 · ③확인기�
 목적지 유형: 샌 40건 = living room 23(오픈플랜 18)·dining 5·bedroom 4·kitchen 4·… / 남은 ③ 27건 = bedroom 9·bathroom 5·kitchen 4·closet·toilet·laundry·office…
 원인: `far_low` 는 체류 ≤0.35 인 방이 통로뿐이면 전체로 후퇴해 "가장 먼 방" 을 고르는데 그게 거실이다. 거실·식당·부엌은 오픈플랜이라 방 제외가 인접 공간을 못 막고, 문 너머·건너편에서 보인다.
 조치: 생성기 `--c3-dest closed` — 문이 있는 닫힌 방 유형(bedroom·bathroom·toilet·closet·office·laundry·utility·storage·study·washroom·pantry)만 목적지, 그중 가장 먼 방. ③ 전용 파일럿(10채, CASE3=1.0, MOVES=4) 생성 중 → 이동 후 재목격 비율로 수율 확인 뒤 ③ 전용 세트(~60채)로 확장.
+- ③ 전용 파일럿(10채, `--c3-dest closed`, CASE3=1.0, MOVES=4, 13:14~13:23): c3 20건 중 이동 후 재목격 **5 (0.25)** — v2 133채의 0.69 대비 2.8배 개선. 목적지 bedroom 10·office 3·bathroom 3·outdoor 3(닫힌 방이 없을 때 후퇴 → ④). 확인 방문 중앙 2. → **③ 전용 세트 60채**(scenes 30~89, SEED0 9100) 생성 시작 — 기대 ③ ~90건.
