@@ -34,7 +34,7 @@ ap.add_argument("--outdoor", type=float, default=0.0,
                 help="이동 중 이 비율은 **집 밖**(outdoor/balcony/porch/garage)으로 — "
                      "'가방에 넣어 나갔다' 시나리오. 답은 '밖'이 되어야 한다")
 ap.add_argument("--c3-check-dist", type=float, default=2.0, help="③ 대본의 옛 자리 확인 방문 거리(m). 벤치 질의 범위 RoI ≤1.5 m 를 만족시키려면 1.2")
-ap.add_argument("--c3-dest", default="prior", choices=["prior", "far_low"],
+ap.add_argument("--c3-dest", default="prior", choices=["prior", "far_low", "closed"],
                 help="③ 목적지: prior=목적지 사전확률(유형 먼저, 인스턴스 균등; 2026-09-07 기본) · far_low=가장 먼 저체류 방(종전 — belief 와 정반대라 인계분 정답 0.04)")
 ap.add_argument("--case3", type=float, default=0.5,
                 help="이동 중 이 비율을 **경우③ 대본**으로: 이동 후 배회에서 목적지 방을 제외하고 "
@@ -340,6 +340,13 @@ for i2, oid in enumerate(cands[:args.moves]):
         if args.c3_dest == "far_low":
             _low = [r for r in _in2 if _dw.get(_rtype(r), 0.1) <= 0.35] or _in2    # 실외는 ④ 몫 — ③ 목적지에서 제외
             tgt = max(_low, key=lambda r: float(np.linalg.norm(cen[r] - cen[obj_room[oid]])))
+        elif args.c3_dest == "closed":
+            # 2026-09-12 (§166-55): 133채에서 c3 70건 중 40건이 ② 로 샜고 그 목적지의 33건이 living/dining/kitchen(오픈플랜)이었다 — far_low 의 저체류 후보가 비면
+            # 전체로 후퇴해 가장 먼 큰 방(거실)을 고른 탓. **문이 있는 닫힌 방 유형**만 목적지로: 이동 후 배회가 그 방을 안 가면 문 너머로도 안 보인다.
+            _closed = ("bedroom", "bathroom", "toilet", "closet", "office", "laundry", "utility", "storage", "study", "washroom", "pantry")
+            _cl = [r for r in _in2 if any(k in _rtype(r) for k in _closed) and r != obj_room[oid]]
+            if not _cl: _cl = [r for r in _in2 if _dw.get(_rtype(r), 0.1) <= 0.35] or _in2
+            tgt = max(_cl, key=lambda r: float(np.linalg.norm(cen[r] - cen[obj_room[oid]])))
         else:
             # 2026-09-07 사용자 결정(a): ③ 목적지도 **목적지 사전확률**로 — belief 가 맞힐 수 있는 분포. 재목격은 excluded_rooms(카메라 경로) 로만 막는다.
             # 표본은 **유형 먼저**(P(유형) = 사전확률, 없는 유형 0.02) → 그 유형의 방 인스턴스 균등 — 평가기 belief(사전확률/인스턴스 수)와 같은 규약.
