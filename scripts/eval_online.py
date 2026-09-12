@@ -567,6 +567,12 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 alt = None                          # 실점수 있는 타겟은 실경로가 판정
                 _pas = [(int(e[0]), e[1]) for e in _rr
                         if e[1] >= VTH and (len(e) < 3 or e[2] >= VTH2)]
+                # ② 시간 게이트(2026-09-12, §166-52): 묶음/단순화 판정이 "자리에 없다" 고 한 첫 자리 프레임 시각 이후의 후보만 채택 창에 — 이동 전 프레임(통과 후보의 39%)을 걷어낸다
+                if BUNDLE is not None and os.environ.get("BUNDLE_TIMEGATE", "0") == "1" and (hn, oid) in BUNDLE:
+                    _bd0 = BUNDLE[(hn, oid)]; _sp = _bd0.get("spot_seen") or []; _im = _bd0.get("imgs") or []
+                    _gt = [int(_im[i-1][1]) for i in _sp if 1 <= i <= len(_im) and len(_im[i-1]) > 1 and _im[i-1][1] is not None and int(_im[i-1][1]) >= 0]
+                    if _bd0.get("at_spot") == "no" and _gt:
+                        _gone = min(_gt); _pas = [(i2, s_) for i2, s_ in _pas if int(ts[i2]) > _gone]
                 if len(_pas) >= 4 and os.environ.get("C0_QSGATE", "1") == "1":                  # exnew 외형 게이트 (C0_QSGATE=0 으로 끔 — 이동 후 프레임은 exemplar 와 달라 보여 걸러질 수 있다, 2026-09-08 진단)
                     _qv = [QS[i2, j] for i2, _s in _pas]
                     _qm = float(np.median(_qv))
