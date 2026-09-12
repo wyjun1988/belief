@@ -32,6 +32,8 @@ if not SELECT_OUT:
         import torch
         from transformers import AutoProcessor, AutoModelForImageTextToText
         processor = AutoProcessor.from_pretrained(MODEL); model = AutoModelForImageTextToText.from_pretrained(MODEL, dtype=torch.bfloat16, device_map="auto").eval()
+        if os.environ.get("ADAPTER"):                                   # LoRA 어댑터(lora_presence_train.py 산출) — 2026-09-12
+            from peft import PeftModel; model = PeftModel.from_pretrained(model, os.environ["ADAPTER"]).eval(); print("ADAPTER", os.environ["ADAPTER"], flush=True)
 def facing(ax, az, yaw, spot, dmax=4.0, amax=35.0):
     dx, dz = spot[0] - ax, spot[1] - az; d = math.hypot(dx, dz); return d <= dmax and abs((math.degrees(math.atan2(dx, dz)) - yaw + 180) % 360 - 180) <= amax
 def crop(path, i, ctr, frac=0.34):

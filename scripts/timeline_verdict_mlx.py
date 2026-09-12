@@ -20,6 +20,8 @@ else:
     import torch
     from transformers import AutoProcessor, AutoModelForImageTextToText
     processor = AutoProcessor.from_pretrained(MODEL); model = AutoModelForImageTextToText.from_pretrained(MODEL, dtype=torch.bfloat16, device_map="auto").eval()
+    if os.environ.get("ADAPTER"):                                   # LoRA 어댑터(lora_presence_train.py 산출) — 2026-09-12
+        from peft import PeftModel; model = PeftModel.from_pretrained(model, os.environ["ADAPTER"]).eval(); print("ADAPTER", os.environ["ADAPTER"], flush=True)
 done = set()
 if os.path.exists(OUTJ):
     for l in open(OUTJ):
