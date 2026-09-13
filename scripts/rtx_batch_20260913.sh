@@ -9,10 +9,11 @@ OG_ROOT=${OG_ROOT:-/mnt/ssd2/wooyeol/work/og4v}; OG_BENCH=${OG_BENCH:-$HOME/khca
 M4=${M4:-Qwen/Qwen3.5-4B}; M9=${M9:-Qwen/Qwen3.5-9B}; M27=${M27:-Qwen/Qwen3.5-27B}; DRY=${DRY:-0}
 SUM=$KH/rtx_batch_summary_$(date +%m%d).txt; : > $SUM; log() { echo "[$(date +%H:%M)] $*" | tee -a $SUM; }
 step() { log "=== $1 ==="; }
-unz() { [ -d "$KH/$1" ] || { [ -f "$DRIVE/$1.zip" ] && unzip -q "$DRIVE/$1.zip" -d "$KH/" && log "풀림 $1" || log "⚠ $1.zip 없음 ($DRIVE)"; }; }
+unz() { [ -d "$KH/$1" ] && return; for z in "$DRIVE/$1.zip" "packs/$1.zip"; do [ -f "$z" ] && { unzip -q "$z" -d "$KH/" && log "풀림 $1 ($z)"; return; }; done; log "⚠ $1.zip 없음 ($DRIVE · packs/)"; }
 export PYTHONUNBUFFERED=1
 step "0. 재료"; for z in oracle_pack_v2b reid_pack_v2b lora_pack_pilot lora_presence_v2; do unz $z; done
-[ -d "$KH/lora_presence_v2" ] || { [ -f "$DRIVE/lora_pack_v2.zip" ] && unzip -q "$DRIVE/lora_pack_v2.zip" -d "$KH/" && log "풀림 lora_pack_v2 → lora_presence_v2"; }
+[ -d "$KH/lora_presence_v2" ] || { for z in "$DRIVE/lora_pack_v2.zip" packs/lora_pack_v2.zip; do [ -f "$z" ] && { unzip -q "$z" -d "$KH/" && log "풀림 lora_pack_v2 → lora_presence_v2"; break; }; done; }
+[ -d "$KH/lora_presence_v2" ] || log "⚠ lora_pack_v2.zip(233MB) 없음 — Drive 에서 받아 \$DRIVE 에 두면 133채 LoRA, 없으면 파일럿 268샘플로 대체"
 python -c "import peft" 2>/dev/null || pip install -q peft && log "peft OK"
 DRYO=""; [ "$DRY" = 1 ] && DRYO="MAX_OBJ=5"
 
@@ -39,7 +40,7 @@ then o=$KH/oracle_27b_B.jsonl; [ -s $o ] && log "skip $o" || env $DRYO BACKEND=h
 else log "27B 캐시 없음 → 건너뜀 (M27=$M27)"; fi
 
 step "3. 9-29 LoRA 자리 존재 판정 — 4B"
-D=$KH/lora_presence_v2; [ "$DRY" = 1 ] && D=$KH/lora_pack_pilot
+D=$KH/lora_presence_v2; { [ "$DRY" = 1 ] || [ ! -d $D ]; } && D=$KH/lora_pack_pilot; log "LoRA 데이터: $D"
 if [ -d $D ]; then
   A4=$KH/lora_presence_4b; MS=""; [ "$DRY" = 1 ] && MS="--max-steps 20 --eval-every 10"
   [ -f $A4/adapter_config.json ] && log "skip 학습(어댑터 있음) $A4" || python scripts/lora_presence_train.py --data $D --model $M4 --out $A4 --epochs 2 --eval-every 200 --val-max 300 $MS 2>&1 | grep -aE "^EVAL|LORA_TRAIN_DONE|Traceback|trainable" | tee -a $SUM

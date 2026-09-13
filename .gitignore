@@ -34,3 +34,4 @@ data/thor*/
 data/thor2z
 data/thor3
 data/thor3_big
+!packs/*.zip
