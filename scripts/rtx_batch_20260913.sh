@@ -16,6 +16,16 @@ step "0. 재료"; for z in oracle_pack_v2b reid_pack_v2b lora_pack_pilot lora_pr
 python -c "import peft" 2>/dev/null || pip install -q peft && log "peft OK"
 DRYO=""; [ "$DRY" = 1 ] && DRYO="MAX_OBJ=5"
 
+step "0.5 OG 24채 사슬 재실행 (STEP 5~10) — 캐시 오염·GT 채점 수정판 (§166-58·60)"
+# 임베딩(지문 검증·데이터셋별 캐시)·mappts·검증기 전 타겟(ALL_TARGETS=1)·seq 데이터셋별 — 이전 OG 표(9-12~9-18·9-27)는 이 수정 전 것이라 보류.
+if [ -d "$OG_ROOT" ] && [ -d "$OG_BENCH" ]; then
+  if [ -s $OG_BENCH/scores/t1_all_done.flag ]; then log "skip OG 재실행(flag)"; else
+    OUT=$OG_ROOT BENCH_DIR=$OG_BENCH STEP=5 TH=0.06 TOPK=5 MIN_INLIERS=50 ALL_TARGETS=1 bash scripts/nogt_chain_og.sh > $KH/og24_rerun_$(date +%m%d).log 2>&1
+    grep -aE "전체 GT|라이브 PnP|최종 답|^\s*(①|②|③)[^ ]* +n=|Traceback" $KH/og24_rerun_$(date +%m%d).log | tail -12 | tee -a $SUM
+    python scripts/pose_check_conventions.py $OG_ROOT $OG_BENCH/pnp/pose_all.jsonl 2>/dev/null | head -2 | tee -a $SUM
+    grep -q "최종 답" $KH/og24_rerun_$(date +%m%d).log && date > $OG_BENCH/scores/t1_all_done.flag; fi
+else log "⚠ OG 경로 없음 → OG 재실행 건너뜀 (OG_ROOT=$OG_ROOT OG_BENCH=$OG_BENCH)"; fi
+
 step "1. 9-24 ② 인스턴스 재식별 9B (서문 1/0)"
 for P in 1 0; do o=$KH/reid_9b_pre$P.jsonl; [ -s $o ] && { log "skip $o"; continue; }
   env $DRYO BACKEND=hf MODEL=$M9 SELECT_IN=$KH/reid_pack_v2b PREAMBLE=$P OUT_JSONL=$o python scripts/oracle_reid_probe.py 2>&1 | grep -aE "REID_DONE|Traceback|Error" | tail -2 | tee -a $SUM; done

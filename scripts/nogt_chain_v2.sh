@@ -19,7 +19,7 @@ HOUSES=$(ls -d $OUT/house_* | wc -l | tr -d ' '); echo "사슬 v2 · $OUT ($HOUS
   for SC in $(cat $SCENES); do H=$OUT/house_$(printf %04d $((OFFSET + i))); i=$((i+1)); [ -d $H ] || continue; [ -f $H/room_groups.json ] && continue
     $HAB scripts/room_groups.py --scene "$SC" --dataset $HSSD_DATASET --house $H 2>&1 | grep -aE "^house_" | cut -c1-120; done; }
 [ $STEP -le 5 ] && { echo "=== 5. 임베딩 카메라방 (CLIP 노드 + Viterbi) $(date +%H:%M) ==="
-  THOR_ROOT=$OUT HOUSES=$HOUSES MODEL=clip EMIT=max OUT_JSONL=$B/scores/room_embed_clip.jsonl $K -u scripts/room_embed.py 2>&1 | grep -aE "전체 GT|Traceback" | cut -c1-160; }
+  THOR_ROOT=$OUT HOUSES=$HOUSES MODEL=clip EMIT=max EMB_CACHE=${EMB_CACHE:-$B/emb} OUT_JSONL=$B/scores/room_embed_clip.jsonl $K -u scripts/room_embed.py 2>&1 | grep -aE "전체 GT|Traceback" | cut -c1-160; }
 [ $STEP -le 6 ] && { echo "=== 6. 초기맵 (GT 지도 포즈 · DA×0.468 · 검출) $(date +%H:%M) ==="
   THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ INITMAP_GEO=1 INITMAP_INST=1 MAP_DEPTH=da MAP_POINTS=0 MAP_PROP=0 $K -u scripts/build_initmap.py 2>&1 | grep -aE "완료|Traceback" | tail -1; }
 [ $STEP -le 7 ] && { echo "=== 7. 검증 점수 (mlx Qwen) $(date +%H:%M) ==="

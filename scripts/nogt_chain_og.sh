@@ -16,7 +16,7 @@ echo "OG 사슬 · $OUT ($HOUSES채) · $B · STEP $STEP · W $FRAME_W fx $FRAME
   THOR_ROOT=$OUT QCACHE_PREFIX=$B/cache/hs2_q_ STRIDE=4 $K -u scripts/exp_imgq.py 2>&1 | tail -1
   THOR_ROOT=$OUT ACACHE_PREFIX=$B/cache/hs2_x_ STRIDE=4 $K -u scripts/exp_anchor_exemplar.py 2>&1 | tail -1; }
 [ $STEP -le 5 ] && { echo "=== 5. 임베딩 카메라방 (CLIP 노드 + Viterbi) $(date +%H:%M) ==="
-  THOR_ROOT=$OUT HOUSES=$HOUSES MODEL=clip EMIT=max OUT_JSONL=$B/scores/room_embed_clip.jsonl $K -u scripts/room_embed.py 2>&1 | grep -aE "전체 GT|Traceback" | cut -c1-160; }
+  THOR_ROOT=$OUT HOUSES=$HOUSES MODEL=clip EMIT=max EMB_CACHE=${EMB_CACHE:-$B/emb} OUT_JSONL=$B/scores/room_embed_clip.jsonl $K -u scripts/room_embed.py 2>&1 | grep -aE "전체 GT|Traceback" | cut -c1-160; }
 [ $STEP -le 6 ] && { echo "=== 6. 초기맵 (지도 포즈 ${MAP_POSE_DIR:-GT} · DA 자가보정 · 검출) $(date +%H:%M) ==="
   # 스캔 삼각측량 점(DA 척도 자가보정)은 9단계 뒤에야 생기므로 STEP 6 첫 실행은 DA_K 상수(0.5, OG 는 미측정)로. 9단계 뒤 `STEP=6 REBUILD=1` 로 다시 돌리면 점·자가보정을 쓴다.
   if [ "${REBUILD:-0}" = 1 ] && [ -d "$HOME/khcache/mappts-${SEQP}" ]; then _MP="MAP_POINTS=1 MAP_POSE_DIR=$HOME/khcache/mappts-${SEQP} DA_K=auto"; else _MP="MAP_POINTS=0 DA_K=${DA_K:-0.5}"; fi

@@ -17,7 +17,7 @@ echo "OG 사슬 · $OUT ($HOUSES채) · $B · STEP $STEP · W $FRAME_W fx $FRAME
   THOR_ROOT=$OUT QCACHE_PREFIX=$B/cache/hs2_q_ STRIDE=4 $K -u scripts/exp_imgq.py 2>&1 | tail -1
   THOR_ROOT=$OUT ACACHE_PREFIX=$B/cache/hs2_x_ STRIDE=4 $K -u scripts/exp_anchor_exemplar.py 2>&1 | tail -1; }
 [ $STEP -le 5 ] && { echo "=== 5. 임베딩 카메라방 (CLIP 노드 + Viterbi) $(date +%H:%M) ==="
-  THOR_ROOT=$OUT HOUSES=$HOUSES MODEL=clip EMIT=max OUT_JSONL=$B/scores/room_embed_clip.jsonl $K -u scripts/room_embed.py 2>&1 | grep -aE "전체 GT|Traceback" | cut -c1-160; }
+  THOR_ROOT=$OUT HOUSES=$HOUSES MODEL=clip EMIT=max EMB_CACHE=${EMB_CACHE:-$B/emb} OUT_JSONL=$B/scores/room_embed_clip.jsonl $K -u scripts/room_embed.py 2>&1 | grep -aE "전체 GT|Traceback" | cut -c1-160; }
 [ $STEP -le 6 ] && { echo "=== 6. 초기맵 (지도 포즈 ${MAP_POSE_DIR:-GT} · DA 자가보정 · 검출) $(date +%H:%M) ==="
   # 스캔 삼각측량 점(DA 척도 자가보정)은 9단계 뒤에야 생기므로 STEP 6 첫 실행은 DA_K 상수(0.5, OG 는 미측정)로. 9단계 뒤 `STEP=6 REBUILD=1` 로 다시 돌리면 점·자가보정을 쓴다.
   if [ "${REBUILD:-0}" = 1 ] && [ -d "$HOME/khcache/mappts" ]; then _MP="MAP_POINTS=1 MAP_POSE_DIR=$HOME/khcache/mappts DA_K=auto"; else _MP="MAP_POINTS=0 DA_K=${DA_K:-0.5}"; fi
@@ -49,7 +49,7 @@ PY
   echo "  ⚠️ '삼각측량 지도' 줄의 재투영 오차가 2 px 를 넘으면 MIRROR 를 바꿔(0↔1) 9단계만 다시 (좌표 손 규약)."
   for H in $OUT/house_*; do hn=$(basename $H); $K scripts/export_map_points.py $H --work $HOME/khcache/hloc-newsim/$hn --seq data/seq/newsim_$hn --out $HOME/khcache/mappts/$hn 2>&1 | grep -v Warn | tail -1; done; }
 [ $STEP -le 10 ] && [ "${SKIP_ABSV:-0}" != 1 ] && { echo "=== 9-b. 부재 검증기 (mlx, 포즈+CLIP 문맥) $(date +%H:%M) ==="
-  THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ ROOM_JSONL=$B/scores/room_embed_clip.jsonl INITMAP_FILE=initmap_owl_rc.json POSE_JSONL=$B/pnp/pose_all.jsonl RETR=both TOPN=8 OUT_JSONL=$B/scores/abs_verify_rc_both.jsonl $MLX -u scripts/abs_verify_mlx.py 2>&1 | grep -aE "→|Traceback" | tail -2; }
+  THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ ROOM_JSONL=$B/scores/room_embed_clip.jsonl INITMAP_FILE=initmap_owl_rc.json POSE_JSONL=$B/pnp/pose_all.jsonl RETR=both TOPN=8 EMB_CACHE=${EMB_CACHE:-$B/emb} OUT_JSONL=$B/scores/abs_verify_rc_both.jsonl $MLX -u scripts/abs_verify_mlx.py 2>&1 | grep -aE "→|Traceback" | tail -2; }
 [ $STEP -le 10 ] && { echo "=== 10. 벤치 D (GT 0) $(date +%H:%M) ==="
   env BENCH_DIR=$B THOR_ROOT=$OUT A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ AX_PREFIX=$B/cache/hs2_x_ VERIFY_JSONL=$B/scores/t1_floor0.8_d40.jsonl \
     GEO_DEPTH=$B/scores/geo_depth_nogt.jsonl ROOM_GROUPS=0 PY=$K POSE_JSONL=$B/pnp/pose_all.jsonl ROOM_JSONL=$B/scores/room_embed_clip.jsonl ROWS_OUT=$B/rows_D.jsonl \
