@@ -13,7 +13,7 @@ for SC in $(cat "$SCENES"); do
       echo "=== $H ← $SC $(date +%H:%M) ==="
       $HAB -u scripts/hab_episode.py --scene "$SC" --dataset "$HSSD_DATASET" --move data/hssd_move.json \
         --frames ${FRAMES:-1200} --moves ${MOVES:-8} --case3 ${CASE3:-0.5} --far 0.0 --evidence 3:1.4 --dwell 0 --pace 0.25 --turn 0.5 --scan 35 --max-turn 999 \
-        --map-travel 0.35 --map-sites 1 --map-step 60 --c3-check-dist ${C3DIST:-1.2} --c3-dest ${C3DEST:-far_low} --seed $((SEED0 + i)) --out "$H" 2>&1 \
+        --map-travel 0.35 --map-sites 1 --map-step 60 --c3-check-dist ${C3DIST:-1.2} --c3-dest ${C3DEST:-far_low} ${EXTRA:-} --seed $((SEED0 + i)) --out "$H" 2>&1 \
         | grep -aE "이동 후보|③ 자격|이동 계획|이동 기록|이동 취소|핸들 없는|Traceback|Error" || echo "  $SC 실패"
       [ -f "$H/gt.json" ] || { echo "  ⚠ gt.json 없음 → 삭제"; rm -rf "$H"; }
     fi

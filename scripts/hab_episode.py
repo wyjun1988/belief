@@ -34,6 +34,8 @@ ap.add_argument("--outdoor", type=float, default=0.0,
                 help="이동 중 이 비율은 **집 밖**(outdoor/balcony/porch/garage)으로 — "
                      "'가방에 넣어 나갔다' 시나리오. 답은 '밖'이 되어야 한다")
 ap.add_argument("--c3-check-dist", type=float, default=2.0, help="③ 대본의 옛 자리 확인 방문 거리(m). 벤치 질의 범위 RoI ≤1.5 m 를 만족시키려면 1.2")
+ap.add_argument("--c3-remove", action="store_true",
+                help="③ 은 월드 밖으로 치우고 목적지 방만 라벨로 남긴다 — 배치 가능성 제약을 없애 ③ 생성률을 올린다")
 ap.add_argument("--c3-dest", default="prior", choices=["prior", "far_low", "closed"],
                 help="③ 목적지: prior=목적지 사전확률(유형 먼저, 인스턴스 균등; 2026-09-07 기본) · far_low=가장 먼 저체류 방(종전 — belief 와 정반대라 인계분 정답 0.04)")
 ap.add_argument("--case3", type=float, default=0.5,
@@ -732,6 +734,27 @@ while t < args.frames:
                 # 렌더에 반영 못 하는 이동은 **기록하지 않는다** (종전: GT 만 갱신 → 거짓 ②)
                 skipped_moves += 1
                 print("  ⚠ 이동 건너뜀(핸들/보행점 없음): %s" % oid, flush=True)
+            elif role == "c3" and args.c3_remove:
+                # ③ 은 정의상 이동 후 다시 관측되지 않는다 → **놓을 자리가 필요 없다.**
+                # 물체를 월드 밖으로 치우고 목적지 방만 GT 라벨로 남긴다(2026-09-14 사용자 지적).
+                # 받침·시선 게이트를 안 타므로 ③ 생성이 배치 가능성에 안 묶인다.
+                _oldp = np.array(state[oid]["pos"], float)
+                o.translation = mn.Vector3(float(np_[0]), -1000.0, float(np_[2]))
+                newp = [float(np_[0]), float(_oldp[1]), float(np_[2])]
+                state[oid]["pos"] = newp
+                moves.append(dict(t=t, oid=oid, frm=obj_room[oid], to=dest, intended=dest,
+                                  pos=[round(v, 3) for v in newp], witness=False, supported=True,
+                                  removed=True, role="c3"))
+                excluded_rooms.add(dest); hidden_oids.append(oid)
+                oid_for_check = oid; _cvs = check_goals(_oldp, 2, args.c3_check_dist); oid_for_check = None
+                _low = [r for r in sorted(polys, key=lambda r: (MOVE or {}).get("dwell", {}).get(_rtype(r), 0.1))
+                        if r not in excluded_rooms]
+                for _j, (_gf, _gn) in enumerate(_cvs):
+                    forced_goals += [_gf, _gn]
+                    if _j < len(_cvs) - 1 and _low: forced_goals.append(_low[0])
+                if not _cvs: forced_goals.append(moves[-1]["frm"])
+                moves[-1]["check_visits"] = len(_cvs)
+                obj_room[oid] = dest
             else:
                 off = support_offset(o, state[oid]["pos"])
                 if on_floor_originally(o, state[oid]["pos"]):
