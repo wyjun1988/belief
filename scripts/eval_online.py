@@ -607,7 +607,11 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                             if _dd > _bestd and np.hypot(_p1[0]-_p2[0], _p1[1]-_p2[1]) >= 0.5: _bestd, _bestp = _dd, (_cand[_a][0], _cand[_b][0])
                     if _bestp and _bestd >= 15:
                         _pick = list(_bestp) + [i2 for i2, _s in _pas[:1] if i2 not in _bestp]
-                if len(_pick) >= C0_MIN:
+                # 가까운 목격 1장은 먼 2장만 못하지 않다 (§166-68 Q2: ② 못 본 52건 중 15건이 '조건 통과 1장')
+                _near = float(os.environ.get("C0_NEAR", "0"))
+                _cmin = C0_MIN
+                if _near > 0 and _pick and min((_dist_of(i2) if _c0maxd > 0 else 1e9) for i2 in _pick) <= _near: _cmin = 1
+                if len(_pick) >= _cmin:
                     _rays = [r for r in (_geo_ray(i2) for i2 in _pick) if r]
                     _pts = []
                     for _a in range(len(_rays)):
@@ -625,7 +629,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                                      or GDEP.get((hn, int(ts[i2]), oid)) <= _msd]
                         _rms = [x for x in (_geo_room_d(i2) for i2 in _pick) if x]
                         _cc = Counter(_rms).most_common(1)
-                        if _cc and _cc[0][1] >= min(2, C0_MIN) and _cc[0][0] != record:
+                        if _cc and _cc[0][1] >= min(2, _cmin) and _cc[0][0] != record:   # C0_NEAR 로 _cmin=1 이면 가까운 단장 투영도 인정
                             alt = _cc[0][0]
                         if os.environ.get("C0_DIAG") == "1": _dg.update(proj_rooms=_rms)
                 _amode = os.environ.get("C0_ANCHOR", "0")     # 0 · first(앵커가 있으면 앵커가 정한다) · fallback(투영이 못 정했을 때만)
