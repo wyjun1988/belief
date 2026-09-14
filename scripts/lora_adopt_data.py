@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw
 ap = argparse.ArgumentParser(); ap.add_argument("root"); ap.add_argument("out")
 ap.add_argument("--per-target", type=int, default=6); ap.add_argument("--val-houses", type=int, default=25)
 ap.add_argument("--img-w", type=int, default=448); ap.add_argument("--seed", type=int, default=0)
-ap.add_argument("--max-houses", type=int, default=0); ap.add_argument("--neg-per-pos", type=float, default=2.0)
+ap.add_argument("--max-houses", type=int, default=0); ap.add_argument("--move-boost", type=int, default=1); ap.add_argument("--neg-per-pos", type=float, default=2.0)
 a = ap.parse_args(); rng = random.Random(a.seed)
 VJ = os.path.expanduser(os.environ.get("VERIFY_JSONL", "")); A3P = os.path.expanduser(os.environ.get("A3_PREFIX", ""))
 VTH, VTH2 = float(os.environ.get("VERIFY_TH", "2.069")), float(os.environ.get("VERIFY_TH2", "0.887"))
@@ -88,7 +88,15 @@ for hd in houses:
             (pos if hit else neg).append((i, t))
         if not pos and not neg: continue
         rng.shuffle(pos); rng.shuffle(neg)
-        take_p = pos[:a.per_target]
+        # ② 가 실제 병목인데 학습 표본의 14% 뿐이다(§166-75): 이동 후 프레임은 더 많이 뽑는다.
+        _mv = [m for m in (g.get("moves") or []) if m["oid"] == oid]
+        _t0 = _mv[-1]["t"] if _mv else None
+        if _t0 is not None and a.move_boost > 1:
+            _after = [x for x in pos if x[1] > _t0]; _before = [x for x in pos if x[1] <= _t0]
+            take_p = _after[:a.per_target * a.move_boost] + _before[:a.per_target]
+            neg = [x for x in neg if x[1] > _t0] + [x for x in neg if x[1] <= _t0]   # 음성도 이동 후 우선
+        else:
+            take_p = pos[:a.per_target]
         take_n = neg[:max(1, int(len(take_p) * a.neg_per_pos)) if take_p else min(2, len(neg))]
         for lab, group in (("yes", take_p), ("no", take_n)):
             for i, t in group:
