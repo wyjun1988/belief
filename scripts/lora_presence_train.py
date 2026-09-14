@@ -12,7 +12,7 @@ ap = argparse.ArgumentParser(); ap.add_argument("--data", required=True); ap.add
 ap.add_argument("--epochs", type=int, default=2); ap.add_argument("--lr", type=float, default=1e-4); ap.add_argument("--r", type=int, default=16); ap.add_argument("--alpha", type=int, default=32)
 ap.add_argument("--max-steps", type=int, default=0); ap.add_argument("--eval-every", type=int, default=200); ap.add_argument("--grad-accum", type=int, default=8); ap.add_argument("--eval-only", action="store_true"); ap.add_argument("--adapter", default="")
 ap.add_argument("--seed", type=int, default=0); ap.add_argument("--val-max", type=int, default=300)
-ap.add_argument("--task", default="presence", choices=["presence", "adopt"])   # adopt = ② 채택 판정(§166-71): 후보 박스가 기록 물체와 같은 것인가; a = ap.parse_args(); random.seed(a.seed); torch.manual_seed(a.seed)
+ap.add_argument("--task", default="presence", choices=["presence", "adopt", "place"])   # adopt = ② 채택 판정(§166-71): 후보 박스가 기록 물체와 같은 것인가; a = ap.parse_args(); random.seed(a.seed); torch.manual_seed(a.seed)
 processor = AutoProcessor.from_pretrained(a.model); model = AutoModelForImageTextToText.from_pretrained(a.model, dtype=torch.bfloat16, device_map="auto")
 from peft import LoraConfig, get_peft_model, PeftModel
 if a.adapter: model = PeftModel.from_pretrained(model, a.adapter, is_trainable=not a.eval_only)
@@ -21,9 +21,14 @@ elif not a.eval_only:
     model = get_peft_model(model, cfg); model.print_trainable_parameters()
 def load(split): return [json.loads(l) for l in open(os.path.join(a.data, split + ".jsonl"))]
 def article(t): return ("an " if t[:1] in "aeiou" else "a ") + t
-KEY = "still_there" if a.task == "presence" else "same_object"
+KEY = {"presence": "still_there", "adopt": "same_object", "place": "is_type"}[a.task]
 def prompt_of(r):
     n = len(r["cands"]) + 1
+    if a.task == "place":
+        # 참조 없음 — 기록을 만드는 단계라 대조할 기준이 없다. 크롭 한 장의 진위만 묻는다(§166-77).
+        return ("The image shows part of a room. Inside the red box, an object detector claims to have found %s. "
+                "Ignore everything outside the box. Is the object inside the red box really %s? "
+                "Answer with JSON only: {\"is_type\": \"yes\"|\"no\", \"confidence\": 0-100}" % (article(r["type"]), article(r["type"])))
     if a.task == "adopt":
         return ("Image 1 shows %s at its recorded place in a house (inside the red box). Image 2 is a later view from elsewhere in the same house, "
                 "where an object detector proposed %s (inside the red box). The object may have been moved, so a different room is possible. "
@@ -33,11 +38,11 @@ def prompt_of(r):
             "Look carefully: is the %s still at its recorded place in the later images? Answer with JSON only: "
             "{\"still_there\": \"yes\"|\"no\"|\"unsure\", \"seen_in\": [image numbers (2-%d) where the %s is visible], \"confidence\": 0-100}" % (article(r["type"]), n, r["type"], n, r["type"]))
 def answer_of(r):
-    if a.task == "adopt": return json.dumps({KEY: r["label"], "confidence": 90})
+    if a.task in ("adopt", "place"): return json.dumps({KEY: r["label"], "confidence": 90})
     return json.dumps(dict(still_there=r["label"], seen_in=r.get("seen_in", []), confidence=(90 if r["label"] in ("yes", "no") else 50)))
-def images_of(r): return [Image.open(os.path.join(a.data, "images", f)).convert("RGB") for f in [r["ref"]] + r["cands"]]
+def images_of(r): return [Image.open(os.path.join(a.data, "images", f)).convert("RGB") for f in ([r["ref"]] if r.get("ref") else []) + r["cands"]]
 def chat(r, with_answer):
-    msgs = [{"role": "user", "content": [{"type": "image"} for _ in range(len(r["cands"]) + 1)] + [{"type": "text", "text": prompt_of(r)}]}]
+    msgs = [{"role": "user", "content": [{"type": "image"} for _ in range(len(r["cands"]) + (1 if r.get("ref") else 0))] + [{"type": "text", "text": prompt_of(r)}]}]
     if with_answer: msgs.append({"role": "assistant", "content": [{"type": "text", "text": answer_of(r)}]})
     try: t = processor.apply_chat_template(msgs, add_generation_prompt=not with_answer, tokenize=False, enable_thinking=False)
     except TypeError: t = processor.apply_chat_template(msgs, add_generation_prompt=not with_answer, tokenize=False)
