@@ -5,6 +5,7 @@
   BACKEND=hf  MODEL=Qwen/Qwen3.5-4B ADAPTER=~/khcache/adopt4b/lora_adopt_qwen3_5-4b \\
   VERIFY_JSONL=~/khcache/bench-v2full/scores/t1_all.jsonl A3_PREFIX=~/khcache/bench-v2full/cache/hs2_a_ \\
   THOR_ROOT=data/hssd_v2 OUT_JSONL=~/khcache/bench-v2full/scores/t1_adopt_real.jsonl python scripts/lora_adopt_infer.py
+묶음 모드(GPU 서버): PACK=<adopt_pack.py 산출 디렉터리> ADAPTER=... VERDICT_JSONL=... — 원본 데이터셋 불필요.
 옵션: DEVICE=mps|cuda · LIMIT=0(전체) · VERDICT_JSONL=<판정 원장> · KEEP_UNJUDGED=1(판정 실패 프레임은 남긴다)
 """
 import os, json, re, time, glob, collections, numpy as np
@@ -16,6 +17,7 @@ VERD = os.path.expanduser(os.environ.get("VERDICT_JSONL", OUT.replace(".jsonl", 
 VTH, VTH2 = float(os.environ.get("VERIFY_TH", "2.069")), float(os.environ.get("VERIFY_TH2", "0.887"))
 IMG_W = int(os.environ.get("IMG_W", "448")); LIMIT = int(os.environ.get("LIMIT", "0"))
 KEEP_UNJ = os.environ.get("KEEP_UNJUDGED", "1") == "1"
+MARGIN = float(os.environ.get("MARGIN", "0"))   # log P(yes) - log P(no) 문턱. 0 = 모델 기본 판정과 같음
 BACKEND = os.environ.get("BACKEND", "hf"); MODEL = os.environ.get("MODEL", "Qwen/Qwen3.5-4B")
 ADAPTER = os.path.expanduser(os.environ.get("ADAPTER", "")); DEV = os.environ.get("DEVICE", "mps")
 def article(t): return ("an " if t[:1] in "aeiou" else "a ") + t
@@ -33,14 +35,20 @@ if BACKEND == "hf":
     if ADAPTER:
         from peft import PeftModel
         model = PeftModel.from_pretrained(model, ADAPTER); model.eval()
+    tok = getattr(proc, "tokenizer", proc)
+    _ids = {w: tok.encode(w, add_special_tokens=False) for w in ("yes", "no")}
+    YES, NO = _ids["yes"][0], _ids["no"][0]
     def ask(ims, typ):
+        """생성 대신 **다음 토큰의 yes/no 로그확률**을 읽는다 — 점수가 연속이라 작동점을 나중에 고를 수 있다.
+        생성 한 토큰만 받으면 문턱이 모델에 고정돼 ROC 위의 한 점밖에 못 쓴다(2026-09-14)."""
         msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "image"}, {"type": "text", "text": prompt_of(typ)}]}]
         try: t = proc.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False, enable_thinking=False)
         except TypeError: t = proc.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
         if "<think>" not in t[-60:]: t = t + ("" if t.endswith("\n") else "\n") + "<think>\n\n</think>\n\n"
         inp = proc(text=[t + PREFILL], images=ims, return_tensors="pt").to(model.device)
-        with torch.no_grad(): o = model.generate(**inp, max_new_tokens=24, do_sample=False)
-        return PREFILL + proc.batch_decode(o[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
+        with torch.no_grad(): lg = model(**inp).logits[0, -1].float()
+        lp = torch.log_softmax(lg, -1)
+        return float(lp[YES] - lp[NO])
 else:
     from mlx_vlm import load, generate
     from mlx_vlm.prompt_utils import apply_chat_template as act
@@ -63,6 +71,28 @@ def boxed(path, box, w_out=IMG_W):
         x0, y0, x1, y1 = [max(0, min(W - 1 if i % 2 == 0 else H - 1, int(v))) for i, v in enumerate(box)]
         if x1 > x0 and y1 > y0: ImageDraw.Draw(im).rectangle([x0, y0, x1, y1], outline=(255, 0, 0), width=max(3, W // 150))
     s = w_out / float(W); return im.resize((w_out, max(8, int(H * s))))
+PACK = os.path.expanduser(os.environ.get("PACK", ""))
+if PACK:
+    # 묶음 모드(GPU 서버용): adopt_pack.py 산출물만 있으면 원본 데이터셋이 필요 없다.
+    st = collections.Counter(); t0 = time.time(); n = 0
+    fv = open(VERD, "w"); _cache = {}
+    items = [json.loads(l) for l in open(os.path.join(PACK, "items.jsonl"))]
+    print("묶음 %d건 · %s" % (len(items), PACK), flush=True)
+    for it in items:
+        try:
+            rf = it["ref"]
+            if rf not in _cache: _cache[rf] = Image.open(os.path.join(PACK, "images", rf)).convert("RGB")
+            cd = Image.open(os.path.join(PACK, "images", it["cand"])).convert("RGB")
+            margin = ask([_cache[rf], cd], it["type"])
+        except Exception as ex:
+            st["오류"] += 1; fv.write(json.dumps(dict(house=it["house"], oid=it["oid"], t=it["t"], i=it.get("i"), ans="", err=str(ex)[:120])) + "\n"); continue
+        a = "yes" if margin >= MARGIN else "no"; st[a] += 1; n += 1
+        fv.write(json.dumps(dict(house=it["house"], oid=it["oid"], t=it["t"], i=it.get("i"), ans=a, margin=round(margin, 3))) + "\n")
+        if n % 500 == 0: print("  %d/%d · %.0fs · %s" % (n, len(items), time.time() - t0, dict(st)), flush=True); fv.flush()
+        if LIMIT and n >= LIMIT: break
+    fv.close(); print("ADOPT_INFER_DONE %d건 · %.0fs · %s → %s" % (n, time.time() - t0, dict(st), VERD))
+    raise SystemExit
+
 G = {}; Z = {}; REF = {}
 st = collections.Counter(); t0 = time.time(); n = 0
 fo = open(OUT, "w"); fv = open(VERD, "w")
@@ -95,14 +125,14 @@ for ln in open(VJ):
         if not os.path.exists(p): keep.append(e); continue
         W = float(Image.open(p).size[0]); bcx, bcy, bw, bh = [float(x) * W for x in z["bx"][i, ti]]
         box = [bcx - bw / 2, bcy - bh / 2, bcx + bw / 2, bcy + bh / 2] if (bw > 1 and bh > 1) else None
-        try: raw = ask([ref, boxed(p, box)], typ.replace("_", " ").lower())
+        try: margin = ask([ref, boxed(p, box)], typ.replace("_", " ").lower())
         except Exception as ex:
             st["오류"] += 1; fv.write(json.dumps(dict(house=h, oid=oid, t=t, ans="", err=str(ex)[:120])) + "\n")
             if KEEP_UNJ: keep.append(e)
             continue
-        a = parse(raw); st[a or "무응답"] += 1; n += 1
-        fv.write(json.dumps(dict(house=h, oid=oid, t=t, i=i, ans=a, raw=raw[:120])) + "\n")
-        if a == "yes" or (a == "" and KEEP_UNJ): keep.append(e)
+        a = "yes" if margin >= MARGIN else "no"; st[a] += 1; n += 1
+        fv.write(json.dumps(dict(house=h, oid=oid, t=t, i=i, ans=a, margin=round(margin, 3))) + "\n")
+        if a == "yes": keep.append(e)
         if n % 200 == 0:
             print("  %d장 · %.0fs · %s" % (n, time.time() - t0, dict(st)), flush=True); fv.flush()
         if LIMIT and n >= LIMIT: break
