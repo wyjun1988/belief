@@ -11,7 +11,8 @@ from transformers import AutoProcessor, AutoModelForImageTextToText
 ap = argparse.ArgumentParser(); ap.add_argument("--data", required=True); ap.add_argument("--model", default="Qwen/Qwen3.5-4B"); ap.add_argument("--out", required=True)
 ap.add_argument("--epochs", type=int, default=2); ap.add_argument("--lr", type=float, default=1e-4); ap.add_argument("--r", type=int, default=16); ap.add_argument("--alpha", type=int, default=32)
 ap.add_argument("--max-steps", type=int, default=0); ap.add_argument("--eval-every", type=int, default=200); ap.add_argument("--grad-accum", type=int, default=8); ap.add_argument("--eval-only", action="store_true"); ap.add_argument("--adapter", default="")
-ap.add_argument("--seed", type=int, default=0); ap.add_argument("--val-max", type=int, default=300); a = ap.parse_args(); random.seed(a.seed); torch.manual_seed(a.seed)
+ap.add_argument("--seed", type=int, default=0); ap.add_argument("--val-max", type=int, default=300)
+ap.add_argument("--task", default="presence", choices=["presence", "adopt"])   # adopt = ② 채택 판정(§166-71): 후보 박스가 기록 물체와 같은 것인가; a = ap.parse_args(); random.seed(a.seed); torch.manual_seed(a.seed)
 processor = AutoProcessor.from_pretrained(a.model); model = AutoModelForImageTextToText.from_pretrained(a.model, dtype=torch.bfloat16, device_map="auto")
 from peft import LoraConfig, get_peft_model, PeftModel
 if a.adapter: model = PeftModel.from_pretrained(model, a.adapter, is_trainable=not a.eval_only)
@@ -20,12 +21,20 @@ elif not a.eval_only:
     model = get_peft_model(model, cfg); model.print_trainable_parameters()
 def load(split): return [json.loads(l) for l in open(os.path.join(a.data, split + ".jsonl"))]
 def article(t): return ("an " if t[:1] in "aeiou" else "a ") + t
+KEY = "still_there" if a.task == "presence" else "same_object"
 def prompt_of(r):
     n = len(r["cands"]) + 1
+    if a.task == "adopt":
+        return ("Image 1 shows %s at its recorded place in a house (inside the red box). Image 2 is a later view from elsewhere in the same house, "
+                "where an object detector proposed %s (inside the red box). The object may have been moved, so a different room is possible. "
+                "Judge the object itself, not the room: is the thing in the red box in image 2 the same %s as in image 1? "
+                "Answer with JSON only: {\"same_object\": \"yes\"|\"no\", \"confidence\": 0-100}" % (article(r["type"]), article(r["type"]), r["type"]))
     return ("Image 1 shows %s at its recorded place in a house (inside the red box). Images 2-%d are later views of that same place, in time order. "
             "Look carefully: is the %s still at its recorded place in the later images? Answer with JSON only: "
             "{\"still_there\": \"yes\"|\"no\"|\"unsure\", \"seen_in\": [image numbers (2-%d) where the %s is visible], \"confidence\": 0-100}" % (article(r["type"]), n, r["type"], n, r["type"]))
-def answer_of(r): return json.dumps(dict(still_there=r["label"], seen_in=r.get("seen_in", []), confidence=(90 if r["label"] in ("yes", "no") else 50)))
+def answer_of(r):
+    if a.task == "adopt": return json.dumps({KEY: r["label"], "confidence": 90})
+    return json.dumps(dict(still_there=r["label"], seen_in=r.get("seen_in", []), confidence=(90 if r["label"] in ("yes", "no") else 50)))
 def images_of(r): return [Image.open(os.path.join(a.data, "images", f)).convert("RGB") for f in [r["ref"]] + r["cands"]]
 def chat(r, with_answer):
     msgs = [{"role": "user", "content": [{"type": "image"} for _ in range(len(r["cands"]) + 1)] + [{"type": "text", "text": prompt_of(r)}]}]
@@ -44,11 +53,11 @@ def parse(txt):
     except Exception: return {}
 @torch.no_grad()
 def evaluate(rows, tag):
-    model.eval(); st = collections.Counter(); pf = '{"still_there": "'
+    model.eval(); st = collections.Counter(); pf = '{"%s": "' % KEY
     for r in rows[:a.val_max]:
         ims = images_of(r); text = chat(r, False) + pf; inp = processor(text=[text], images=ims, return_tensors="pt").to(model.device)
         out = model.generate(**inp, max_new_tokens=80, do_sample=False); txt = pf + processor.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
-        ans = str(parse(txt).get("still_there", "")).lower(); st[(r["label"], ans)] += 1
+        ans = str(parse(txt).get(KEY, "")).lower(); st[(r["label"], ans)] += 1
     y = sum(v for (l, ans), v in st.items() if l == "yes"); yy = st[("yes", "yes")]; n = sum(v for (l, ans), v in st.items() if l == "no"); nn = st[("no", "no")]; u = sum(v for (l, ans), v in st.items() if l == "unsure"); uu = st[("unsure", "unsure")] + st[("unsure", "yes")]
     print("EVAL[%s] yes→yes %d/%d (%.2f) · no→no %d/%d (%.2f) · unsure→unsure|yes %d/%d (%.2f) · %s" % (tag, yy, y, yy / max(1, y), nn, n, nn / max(1, n), uu, u, uu / max(1, u), dict(st)), flush=True); model.train(); return yy / max(1, y), nn / max(1, n)
 train, val = load("train"), load("val"); print("train %d · val %d" % (len(train), len(val)), flush=True)
