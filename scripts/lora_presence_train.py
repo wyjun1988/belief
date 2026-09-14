@@ -54,13 +54,36 @@ def parse(txt):
 @torch.no_grad()
 def evaluate(rows, tag):
     model.eval(); st = collections.Counter(); pf = '{"%s": "' % KEY
+    _tk = getattr(processor, "tokenizer", processor)
+    _Y, _N = _tk.encode("yes", add_special_tokens=False)[0], _tk.encode("no", add_special_tokens=False)[0]
+    _mg = []   # (log P(yes) - log P(no), 정답) — 작동점 하나가 아니라 ROC 전체를 보려면 연속 점수가 필요하다(2026-09-14)
     # val 은 집 순서대로 쓰여 있다 — 앞에서 자르면 몇 채만 보고 점수를 낸다(9/25채였다, 2026-09-14).
     _rows = list(rows); random.Random(1234).shuffle(_rows)
     for r in _rows[:a.val_max]:
         ims = images_of(r); text = chat(r, False) + pf; inp = processor(text=[text], images=ims, return_tensors="pt").to(model.device)
         out = model.generate(**inp, max_new_tokens=80, do_sample=False); txt = pf + processor.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
         ans = str(parse(txt).get(KEY, "")).lower(); st[(r["label"], ans)] += 1
+        try:
+            _lg = model(**inp).logits[0, -1].float(); _lp = torch.log_softmax(_lg, -1)
+            _mg.append((float(_lp[_Y] - _lp[_N]), r["label"]))
+        except Exception: pass
     y = sum(v for (l, ans), v in st.items() if l == "yes"); yy = st[("yes", "yes")]; n = sum(v for (l, ans), v in st.items() if l == "no"); nn = st[("no", "no")]; u = sum(v for (l, ans), v in st.items() if l == "unsure"); uu = st[("unsure", "unsure")] + st[("unsure", "yes")]
+    if _mg:
+        _a = sorted([m for m, l in _mg if l == "yes"]); _b = sorted([m for m, l in _mg if l != "yes"])
+        if _a and _b:
+            _all = sorted([m for m, _ in _mg]); _rk = {v: i + 1 for i, v in enumerate(_all)}
+            _ra = sum(_rk[v] for v in _a); _auc = (_ra - len(_a) * (len(_a) + 1) / 2) / (len(_a) * len(_b))
+            # 배포 분포(참 0.536)에서 각 문턱이 만드는 순도·잔량
+            _best = None
+            for _th in sorted(set(round(m, 2) for m, _ in _mg))[::max(1, len(_mg) // 60)]:
+                _t = sum(1 for m in _a if m >= _th) / len(_a); _f = sum(1 for m in _b if m >= _th) / len(_b)
+                _kt, _kf = 0.536 * _t, 0.464 * _f
+                if _kt + _kf < 0.15: continue
+                _pu = _kt / (_kt + _kf)
+                if _best is None or _pu > _best[3]: _best = (_th, _t, _f, _pu, _kt + _kf)
+            print("EVAL[%s] AUC %.3f · 최적문턱 %.2f → 참 %.2f · 거짓 %.2f · 배포순도 %.3f · 잔량 %.0f%%"
+                  % (tag, _auc, _best[0], _best[1], _best[2], _best[3], 100 * _best[4]) if _best else
+                  "EVAL[%s] AUC %.3f" % (tag, _auc), flush=True)
     print("EVAL[%s] yes→yes %d/%d (%.2f) · no→no %d/%d (%.2f) · unsure→unsure|yes %d/%d (%.2f) · %s" % (tag, yy, y, yy / max(1, y), nn, n, nn / max(1, n), uu, u, uu / max(1, u), dict(st)), flush=True); model.train(); return yy / max(1, y), nn / max(1, n)
 train, val = load("train"), load("val"); print("train %d · val %d" % (len(train), len(val)), flush=True)
 if a.eval_only: evaluate(val, "val"); raise SystemExit
