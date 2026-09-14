@@ -54,7 +54,9 @@ def parse(txt):
 @torch.no_grad()
 def evaluate(rows, tag):
     model.eval(); st = collections.Counter(); pf = '{"%s": "' % KEY
-    for r in rows[:a.val_max]:
+    # val 은 집 순서대로 쓰여 있다 — 앞에서 자르면 몇 채만 보고 점수를 낸다(9/25채였다, 2026-09-14).
+    _rows = list(rows); random.Random(1234).shuffle(_rows)
+    for r in _rows[:a.val_max]:
         ims = images_of(r); text = chat(r, False) + pf; inp = processor(text=[text], images=ims, return_tensors="pt").to(model.device)
         out = model.generate(**inp, max_new_tokens=80, do_sample=False); txt = pf + processor.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
         ans = str(parse(txt).get(KEY, "")).lower(); st[(r["label"], ans)] += 1
