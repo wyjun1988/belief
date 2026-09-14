@@ -73,17 +73,17 @@ def evaluate(rows, tag):
         if _a and _b:
             _all = sorted([m for m, _ in _mg]); _rk = {v: i + 1 for i, v in enumerate(_all)}
             _ra = sum(_rk[v] for v in _a); _auc = (_ra - len(_a) * (len(_a) + 1) / 2) / (len(_a) * len(_b))
-            # 배포 분포(참 0.536)에서 각 문턱이 만드는 순도·잔량
-            _best = None
-            for _th in sorted(set(round(m, 2) for m, _ in _mg))[::max(1, len(_mg) // 60)]:
-                _t = sum(1 for m in _a if m >= _th) / len(_a); _f = sum(1 for m in _b if m >= _th) / len(_b)
-                _kt, _kf = 0.536 * _t, 0.464 * _f
-                if _kt + _kf < 0.15: continue
-                _pu = _kt / (_kt + _kf)
-                if _best is None or _pu > _best[3]: _best = (_th, _t, _f, _pu, _kt + _kf)
-            print("EVAL[%s] AUC %.3f · 최적문턱 %.2f → 참 %.2f · 거짓 %.2f · 배포순도 %.3f · 잔량 %.0f%%"
-                  % (tag, _auc, _best[0], _best[1], _best[2], _best[3], 100 * _best[4]) if _best else
-                  "EVAL[%s] AUC %.3f" % (tag, _auc), flush=True)
+            # 배포 분포(참 0.536)에서 문턱을 잔량 기준으로 훑어 표로 찍는다.
+            # (종전엔 "잔량 15% 이상 중 순도 최대" 를 최적이라 했는데, 그건 그냥 잔량을 최소로 미는 목적함수였다 — 2026-09-14)
+            _lines = []
+            for _want in (0.60, 0.50, 0.40, 0.30, 0.20):
+                _pick = None
+                for _th in sorted(set(round(m, 2) for m, _ in _mg)):
+                    _t = sum(1 for m in _a if m >= _th) / len(_a); _f = sum(1 for m in _b if m >= _th) / len(_b)
+                    _y = 0.536 * _t + 0.464 * _f
+                    if _y <= _want: _pick = (_th, _t, _f, 0.536 * _t / max(_y, 1e-9), _y); break
+                if _pick: _lines.append("잔량%.0f%%:문턱%.2f 참%.2f 거짓%.2f 순도%.3f" % (100 * _pick[4], _pick[0], _pick[1], _pick[2], _pick[3]))
+            print("EVAL[%s] AUC %.3f | %s" % (tag, _auc, " | ".join(_lines)), flush=True)
     print("EVAL[%s] yes→yes %d/%d (%.2f) · no→no %d/%d (%.2f) · unsure→unsure|yes %d/%d (%.2f) · %s" % (tag, yy, y, yy / max(1, y), nn, n, nn / max(1, n), uu, u, uu / max(1, u), dict(st)), flush=True); model.train(); return yy / max(1, y), nn / max(1, n)
 train, val = load("train"), load("val"); print("train %d · val %d" % (len(train), len(val)), flush=True)
 if a.eval_only: evaluate(val, "val"); raise SystemExit
