@@ -12,10 +12,19 @@ a = ap.parse_args(); rng = random.Random(a.seed)
 def facing(ax, az, yaw, spot, dmax=4.0, amax=35.0):
     dx, dz = spot[0] - ax, spot[1] - az; d = math.hypot(dx, dz); return d <= dmax and abs((math.degrees(math.atan2(dx, dz)) - yaw + 180) % 360 - 180) <= amax
 def save(src, dst, ctr=None):
-    if os.path.exists(dst): return
+    """빨간 박스를 그려 저장. 반환 = 실제로 쓸 수 있는 이미지인가.
+    중심이 화면 밖이면 클램핑 뒤 x1<x0·y1<y0 가 되어 PIL 이 죽는다(OG 에서 발생, 2026-09-15).
+    화면 밖 중심은 박스를 못 그리므로 **표본을 버린다** — 호출부가 반환값을 봐야 한다."""
+    if os.path.exists(dst): return True
+    if not os.path.exists(src): return False
     im = Image.open(src).convert("RGB"); w, h = im.size
-    if ctr: r = int(0.09 * w); ImageDraw.Draw(im).rectangle([max(0, ctr[0]-r), max(0, ctr[1]-r), min(w-1, ctr[0]+r), min(h-1, ctr[1]+r)], outline=(255, 0, 0), width=max(3, w // 200))
-    s = a.img_w / float(w); im.resize((a.img_w, max(8, int(h * s)))).save(dst, quality=90)
+    if ctr:
+        r = int(0.09 * w)
+        x0, y0 = max(0, int(ctr[0] - r)), max(0, int(ctr[1] - r))
+        x1, y1 = min(w - 1, int(ctr[0] + r)), min(h - 1, int(ctr[1] + r))
+        if x1 <= x0 or y1 <= y0: return False
+        ImageDraw.Draw(im).rectangle([x0, y0, x1, y1], outline=(255, 0, 0), width=max(3, w // 200))
+    s = a.img_w / float(w); im.resize((a.img_w, max(8, int(h * s)))).save(dst, quality=90); return True
 houses = sorted(glob.glob(os.path.join(a.root, "house_*")))
 if a.max_houses: houses = houses[:a.max_houses]
 rng.shuffle(houses); val = set(houses[:a.val_houses]); os.makedirs(os.path.join(a.out, "images"), exist_ok=True)
@@ -33,7 +42,9 @@ for hd in houses:
         typ = v0["type"].replace("_", " ").lower(); spot = [v0["pos"][0], v0["pos"][2]]; room = grp(v0["room"])
         cands = [(m["dist"][oid], k) for k, m in enumerate(g["map"]) if oid in (m.get("ctr") or {}) and oid in (m.get("dist") or {})]
         if not cands: stat["no_ref"] += 1; continue
-        d0, k0 = min(cands); ctr0 = g["map"][k0]["ctr"][oid]; ref = "%s_map%04d_%s.jpg" % (hn, k0, oid.replace("|", "_").replace(" ", "_")); save(os.path.join(hd, "map", "%04d.jpg" % k0), os.path.join(a.out, "images", ref), ctr0)
+        d0, k0 = min(cands); ctr0 = g["map"][k0]["ctr"][oid]; ref = "%s_map%04d_%s.jpg" % (hn, k0, oid.replace("|", "_").replace(" ", "_"))
+        if not save(os.path.join(hd, "map", "%04d.jpg" % k0), os.path.join(a.out, "images", ref), ctr0):
+            stat["참조 박스 불가(중심 화면밖)"] += 1; continue
         fac = sorted(t for t, m in live.items() if m.get("apos") and m.get("yaw") is not None and grp(m["room"]) == room and facing(m["apos"][0], m["apos"][1], m["yaw"], spot))
         t_mv = mv[oid]["t"] if oid in mv else None
         segs = []                                          # (프레임 후보, 라벨 규칙)
@@ -46,8 +57,12 @@ for hd in houses:
                 vis = sum(1 for t in pick if oid in (live[t].get("vis") or []))
                 label = "no" if kind == "post" else ("yes" if vis >= 1 else "unsure")
                 files = []
+                _bad = False
                 for t in pick:
-                    f = "%s_live%06d.jpg" % (hn, t); save(os.path.join(hd, "live", "%06d.jpg" % t), os.path.join(a.out, "images", f)); files.append(f)
+                    f = "%s_live%06d.jpg" % (hn, t)
+                    if not save(os.path.join(hd, "live", "%06d.jpg" % t), os.path.join(a.out, "images", f)): _bad = True; break
+                    files.append(f)
+                if _bad: stat["후보 프레임 없음"] += 1; continue
                 seen = [i + 2 for i, t in enumerate(pick) if oid in (live[t].get("vis") or [])]
                 fo[split].write(json.dumps(dict(house=hn, oid=oid, type=typ, ref=ref, cands=files, label=label, seen_in=seen, kind=kind, t_move=t_mv)) + "\n"); stat[(split, label)] += 1
 for f in fo.values(): f.close()
