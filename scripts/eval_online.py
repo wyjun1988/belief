@@ -10,7 +10,7 @@
           ⚠️ 덮어쓰기는 기록과 **다른 방**이 복수 확인될 때만 (T4 보호 비대칭 규칙)
   질의(끝) 기록 방 부재 게이팅(온라인) 발동 시 belief(기록 제외) / 아니면 기록
 """
-import json, glob, os
+import json, glob, os, math, collections
 import numpy as np
 import re as _re
 _VISGT = os.environ.get("VIS_GT", "1") == "1"   # 0 이면 인스턴스 선택·부재 분할점을 검출 신호로 (GT vis 제거)
@@ -100,6 +100,14 @@ if os.environ.get("GEO_DEPTH"):
         _d = json.loads(_l)
         GDEP[(_d["house"], _d["t"], _d["oid"])] = _d["d"]
     print("mono-depth %d표본" % len(GDEP), flush=True)
+PLACE = None; PLACE_TH = float(os.environ.get("PLACE_TH", "-1e9")); PLACE_W = float(os.environ.get("PLACE_W", "0"))
+if os.environ.get("PLACE_JSONL"):
+    PLACE = {}
+    for _l in open(os.path.expanduser(os.environ["PLACE_JSONL"])):
+        _d = json.loads(_l)
+        # anchor_registry 의 pos 는 초기맵 항목의 pos 와 같은 값이다(같은 군집에서 나왔다)
+        PLACE[(_d["house"], _d["type"], round(_d.get("pos", [0, 0])[0], 2) if _d.get("pos") else 0.0,
+               round(_d.get("pos", [0, 0])[1], 2) if _d.get("pos") else 0.0)] = float(_d["margin"])
 PRIOR_JSON = os.environ.get("PRIOR_JSON", "data/thor_prior.json")
 PR = json.load(open(PRIOR_JSON))
 # ── 위치·yaw 를 SfM 추정으로 대체 (사다리 '위치:SfM'): POSE_JSONL = {house,t,apos,yaw} ──
@@ -156,7 +164,9 @@ if _NGT:
 
 res = {"rec": [], "sys": [], "static": [], "moved_sys": [], "moved_rec": [],
        "case": Counter()}
+_ONLY = set(h for h in os.environ.get("ONLY_HOUSES", "").split() if h)   # 집 부분집합 채점(어댑터 val 전용 평가용)
 for hd in sorted(glob.glob(ROOT + "/house_*")):
+    if _ONLY and os.path.basename(hd) not in _ONLY: continue
     hn = os.path.basename(os.path.realpath(hd))
     fa, fq = A3P + hn + ".npz", QCP + hn + ".npz"
     if not (os.path.exists(fa) and os.path.exists(fq)): continue
@@ -260,14 +270,35 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     AS = S[:, nT:]
     im = {}; im_inst = {}
     imf = os.path.join(os.path.realpath(hd), os.environ.get("INITMAP_FILE", "initmap_owl.json"))
+    # 기록 자리 판정(LoRA) 마진: 후보 인스턴스를 걸러내거나 가중치를 조정한다 (§166-77).
+    # PLACE_TH 미만은 후보에서 뺀다(전부 빠지면 무시 — 원래 목록을 쓴다). PLACE_W>0 이면 시그모이드 가중을 곱한다.
+    _pm = {}
+    if PLACE:
+        for _k, _v in PLACE.items():
+            if _k[0] == hn: _pm[(_k[1], round(_k[2], 2), round(_k[3], 2))] = _v
     if os.path.exists(imf):
-        best = {}
-        for i2 in json.load(open(imf)):
-            i2["room"] = _grp(i2.get("room"))
-            if i2["w"] > best.get(i2["type"], (0,))[0]:
-                best[i2["type"]] = (i2["w"], i2["room"])
-            if i2.get("pos"):        # 인스턴스판: 타입당 여러 (방, 좌표)
-                im_inst.setdefault(i2["type"], []).append((i2["pos"], i2["room"], i2["w"]))
+        best = {}; _raw = json.load(open(imf)); _keep = []
+        for i2 in _raw:
+            _mg = _pm.get((i2["type"], round((i2.get("pos") or [0, 0])[0], 2), round((i2.get("pos") or [0, 0])[1], 2)))
+            i2["_mg"] = _mg
+            if _mg is not None and _mg < PLACE_TH: continue
+            _keep.append(i2)
+        _byt = collections.defaultdict(list)
+        for i2 in _keep: _byt[i2["type"]].append(i2)
+        for i2 in _raw:
+            if not _byt.get(i2["type"]): _byt[i2["type"]].append(i2)   # 그 타입이 전멸하면 필터 무시
+        _seen = set()
+        for t2, its in _byt.items():
+            for i2 in its:
+                _id = id(i2)
+                if _id in _seen: continue
+                _seen.add(_id)
+                i2["room"] = _grp(i2.get("room"))
+                _w = i2["w"]
+                if PLACE_W > 0 and i2.get("_mg") is not None:
+                    _w = _w * (1.0 / (1.0 + math.exp(-PLACE_W * i2["_mg"])))
+                if _w > best.get(i2["type"], (0,))[0]: best[i2["type"]] = (_w, i2["room"])
+                if i2.get("pos"): im_inst.setdefault(i2["type"], []).append((i2["pos"], i2["room"], _w))
         im = {t: r for t, (w, r) in best.items()}
     # VLM 앵커 명부(ANCH_SRC=vlm, scripts/anchor_crops.py → anchor_vlm_mlx.py): 통과 인스턴스만 앵커 후보 — 타입은 검출 어휘(박스 있는 타겟 타입)로 제한
     _VANCH = {}
