@@ -32,9 +32,20 @@ for hd in hds:
     imp, rawp = os.path.join(hdr, IMF), os.path.join(hdr, "initmap_raw.json")
     if not (os.path.exists(imp) and os.path.exists(rawp)): print("%s 초기맵/raw 없음" % hn, flush=True); continue
     im_ = json.load(open(imp)); raw = json.load(open(rawp)); mfs = sorted(glob.glob(os.path.join(hdr, "map", "*.jpg"))); cdir = os.path.join(hdr, "anchor_reg_crops"); os.makedirs(cdir, exist_ok=True)
+    # QUERY_ONLY=1: 질의 대상(집 안에서 타입이 유일한 물체)의 타입만, 가중치 하한 없이 **전량** 등록한다.
+    # 기본값(ANCH_TYPES 가구 목록 + W_MIN=1.0)은 앵커용이라 기록 자리 판정에는 후보의 3분의 1만 덮였다(2026-09-16).
+    _QO = os.environ.get("QUERY_ONLY", "0") == "1"; _QT = None
+    if _QO:
+        _g = json.load(open(os.path.join(hdr, "gt.json")))
+        import collections as _c
+        _cnt = _c.Counter(v["type"] for v in _g["gt0"].values())
+        _QT = {t for t, n in _cnt.items() if n == 1}
     T0 = time.time(); reg = []; embs = []; ids = []; view_of = []; ntype = {}
     for it in sorted(im_, key=lambda x: -x["w"]):
-        if it["type"] not in ANCH or not it.get("pos") or it["w"] < W_MIN: continue
+        if not it.get("pos"): continue
+        if _QO:
+            if it["type"] not in _QT: continue
+        elif it["type"] not in ANCH or it["w"] < W_MIN: continue
         pts = sorted([p for p in raw.get(it["type"], []) if math.hypot(p[0] - it["pos"][0], p[1] - it["pos"][1]) <= 1.0], key=lambda p: -p[2])
         ks = []
         for p in pts:

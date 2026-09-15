@@ -37,8 +37,13 @@ def crop(src, box):
     ImageDraw.Draw(im).rectangle([max(0, x0), max(0, y0), min(W - 1, x1), min(H - 1, y1)],
                                  outline=(255, 0, 0), width=max(3, W // 150))
     im = im.crop((int(cx0), int(cy0), int(cx1), int(cy1)))
-    w2, h2 = im.size; s = IMG_W / float(w2)
-    return im.resize((IMG_W, max(8, int(h2 * s))))
+    # 학습(lora_place_data.py)과 같은 변환 — 폭 IMG_W 로 맞추고 높이는 비율대로.
+    # 다만 **높이를 28의 배수로 반올림**한다: 크롭마다 모양이 다르면 MPS 가 모양마다 커널을
+    # 다시 컴파일해 장당 1.6초가 6.0초로 늘어난다(2026-09-16 실측). 반올림은 최대 27px 차이라
+    # 학습 분포를 사실상 안 바꾸면서 서로 다른 모양 수를 수백 개에서 십수 개로 줄인다.
+    w2, h2 = im.size; sc = IMG_W / float(w2)
+    hh = max(28, int(round(h2 * sc / 28.0)) * 28)
+    return im.resize((IMG_W, hh))
 def ask(im, typ):
     q = ("The image shows part of a room. Inside the red box, an object detector claims to have found %s. "
          "Ignore everything outside the box. Is the object inside the red box really %s? "
@@ -52,12 +57,19 @@ def ask(im, typ):
     lp = torch.log_softmax(lg, -1); return float(lp[YES] - lp[NO])
 hds = sorted(glob.glob(os.path.join(ROOT, "house_*")))
 if HOUSES: hds = [h for h in hds if os.path.basename(h) in HOUSES]
+done = set()
+if os.environ.get("RESUME", "1") == "1" and os.path.exists(OUT):
+    for _l in open(OUT):
+        try: _d = json.loads(_l); done.add((_d["house"], _d["iid"]))
+        except Exception: pass
+    print("이어받기: 이미 %d건" % len(done), flush=True)
 n = 0; t0 = time.time(); st = collections.Counter()
-with open(OUT, "w") as fo:
+with open(OUT, "a" if done else "w") as fo:
     for hd in hds:
         hn = os.path.basename(hd); rp = os.path.join(hd, "anchor_registry.json")
         if not os.path.exists(rp): st["등록부 없음"] += 1; continue
         for it in json.load(open(rp)):
+            if (hn, it["id"]) in done: st["이어받기 생략"] += 1; continue
             ms = []
             for v in (it.get("views") or [])[:VIEWS]:
                 k, b = v.get("k"), v.get("box")
@@ -69,5 +81,10 @@ with open(OUT, "w") as fo:
             fo.write(json.dumps(dict(house=hn, iid=it["id"], type=it["type"], room=it.get("room"),
                                      pos=it.get("pos"), w=it.get("w"), margin=round(max(ms), 3), n_view=len(ms))) + "\n")
             n += 1
-            if n % 200 == 0: print("  %d · %.0fs · %s" % (n, time.time() - t0, dict(st)), flush=True); fo.flush()
+            if n % 100 == 0:
+                print("  %d · %.0fs (%.2fs/건) · %s" % (n, time.time() - t0, (time.time() - t0) / n, dict(st)), flush=True)
+                fo.flush()
+                if DEV == "mps":
+                    try: torch.mps.empty_cache()
+                    except Exception: pass
 print("PLACE_INFER_DONE %d 인스턴스 · %.0fs · %s → %s" % (n, time.time() - t0, dict(st), OUT))
