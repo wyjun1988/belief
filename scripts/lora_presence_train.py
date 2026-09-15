@@ -12,7 +12,8 @@ ap = argparse.ArgumentParser(); ap.add_argument("--data", required=True); ap.add
 ap.add_argument("--epochs", type=int, default=2); ap.add_argument("--lr", type=float, default=1e-4); ap.add_argument("--r", type=int, default=16); ap.add_argument("--alpha", type=int, default=32)
 ap.add_argument("--max-steps", type=int, default=0); ap.add_argument("--eval-every", type=int, default=200); ap.add_argument("--grad-accum", type=int, default=8); ap.add_argument("--eval-only", action="store_true"); ap.add_argument("--adapter", default="")
 ap.add_argument("--seed", type=int, default=0); ap.add_argument("--val-max", type=int, default=300)
-ap.add_argument("--task", default="presence", choices=["presence", "adopt", "place"])   # adopt = ② 채택 판정(§166-71): 후보 박스가 기록 물체와 같은 것인가; a = ap.parse_args(); random.seed(a.seed); torch.manual_seed(a.seed)
+ap.add_argument("--task", default="presence", choices=["presence", "adopt", "place"])
+ap.add_argument("--balance", action="store_true", help="소수 라벨을 복제해 균형 맞춤 — 9-40 에서 yes 36%%/no 64%% 라 모델이 no 로 쏠렸다(있다 재현 0.39·아니다 0.97)")   # adopt = ② 채택 판정(§166-71): 후보 박스가 기록 물체와 같은 것인가; a = ap.parse_args(); random.seed(a.seed); torch.manual_seed(a.seed)
 processor = AutoProcessor.from_pretrained(a.model); model = AutoModelForImageTextToText.from_pretrained(a.model, dtype=torch.bfloat16, device_map="auto")
 from peft import LoraConfig, get_peft_model, PeftModel
 if a.adapter: model = PeftModel.from_pretrained(model, a.adapter, is_trainable=not a.eval_only)
@@ -90,7 +91,17 @@ def evaluate(rows, tag):
                 if _pick: _lines.append("잔량%.0f%%:문턱%.2f 참%.2f 거짓%.2f 순도%.3f" % (100 * _pick[4], _pick[0], _pick[1], _pick[2], _pick[3]))
             print("EVAL[%s] AUC %.3f | %s" % (tag, _auc, " | ".join(_lines)), flush=True)
     print("EVAL[%s] yes→yes %d/%d (%.2f) · no→no %d/%d (%.2f) · unsure→unsure|yes %d/%d (%.2f) · %s" % (tag, yy, y, yy / max(1, y), nn, n, nn / max(1, n), uu, u, uu / max(1, u), dict(st)), flush=True); model.train(); return yy / max(1, y), nn / max(1, n)
-train, val = load("train"), load("val"); print("train %d · val %d" % (len(train), len(val)), flush=True)
+train, val = load("train"), load("val")
+if a.balance:
+    _by = collections.defaultdict(list)
+    for r in train: _by[r["label"]].append(r)
+    _mx = max(len(v) for v in _by.values())
+    train = []
+    for k, v in _by.items():
+        train += v + [v[i % len(v)] for i in range(_mx - len(v))]
+    random.shuffle(train)
+    print("균형: " + " · ".join("%s %d→%d" % (k, len(v), _mx) for k, v in _by.items()), flush=True)
+print("train %d · val %d" % (len(train), len(val)), flush=True)
 if a.eval_only: evaluate(val, "val"); raise SystemExit
 model.train(); opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=a.lr, weight_decay=0.0); step = 0; t0 = time.time(); best = -1
 for ep in range(a.epochs):
