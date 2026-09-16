@@ -739,9 +739,13 @@ while t < args.frames:
                 # 물체를 월드 밖으로 치우고 목적지 방만 GT 라벨로 남긴다(2026-09-14 사용자 지적).
                 # 받침·시선 게이트를 안 타므로 ③ 생성이 배치 가능성에 안 묶인다.
                 _oldp = np.array(state[oid]["pos"], float)
+                # STATIC 물체는 translation 대입이 무시된다 — place_at() 처럼 먼저 KINEMATIC 으로 바꿔야 실제로 옮겨진다.
+                # (첫 시험에서 물체가 원위치에 그대로 남아 107프레임 '가시' 로 찍혔다, 2026-09-16)
+                o.motion_type = habitat_sim.physics.MotionType.KINEMATIC
                 o.translation = mn.Vector3(float(np_[0]), -1000.0, float(np_[2]))
-                newp = [float(np_[0]), float(_oldp[1]), float(np_[2])]
-                state[oid]["pos"] = newp
+                _gone = [float(np_[0]), -1000.0, float(np_[2])]
+                newp = [float(np_[0]), float(_oldp[1]), float(np_[2])]       # 목적지 **라벨**(채점용) — 실제 렌더에는 없다
+                state[oid]["pos"] = _gone                                     # 가시성 후퇴 경로도 렌더와 일치시킨다
                 moves.append(dict(t=t, oid=oid, frm=obj_room[oid], to=dest, intended=dest,
                                   pos=[round(v, 3) for v in newp], witness=False, supported=True,
                                   removed=True, role="c3"))
