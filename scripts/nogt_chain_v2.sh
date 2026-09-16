@@ -5,7 +5,7 @@
 set -u; cd "$(dirname "$0")/.."
 OUT=${OUT:?데이터셋}; B=${BENCH_DIR:?벤치 디렉터리}; STEP=${STEP:-1}; PAR=${PAR:-3}
 K=${PY:-$HOME/kx-venv/bin/python}; MLX=${MLX:-$HOME/mlx-venv/bin/python}; HAB=${HAB:-$HOME/miniforge3/envs/hab/bin/python}
-HSSD_DATASET=${HSSD_DATASET:-$HOME/hssd-hab/hssd-hab-uncluttered.scene_dataset_config.json}; SCENES=${SCENES:-docs/bench/hssd60_c4_scenes.txt}; OFFSET=${OFFSET:-31}
+HSSD_DATASET=${HSSD_DATASET:-$HOME/hssd-hab/hssd-hab-uncluttered.scene_dataset_config.json}; SCENES=${SCENES:-docs/bench/hssd60_c4_scenes.txt}; OFFSET=${OFFSET:-0}
 export KMP_DUPLICATE_LIB_OK=TRUE PYTORCH_ENABLE_MPS_FALLBACK=1 VECLIB_MAXIMUM_THREADS=4 OMP_NUM_THREADS=4
 mkdir -p $B/cache $B/scores $B/pnp/logs
 HOUSES=$(ls -d $OUT/house_* | wc -l | tr -d ' '); echo "사슬 v2 · $OUT ($HOUSES채) · $B · STEP $STEP · $(date +%H:%M)"
@@ -15,7 +15,7 @@ HOUSES=$(ls -d $OUT/house_* | wc -l | tr -d ' '); echo "사슬 v2 · $OUT ($HOUS
   THOR_ROOT=$OUT CACHE_PREFIX=$B/cache/hs2_a_ BOXES=1 $K -u scripts/exp_anchowl.py 4 2>&1 | tail -1
   THOR_ROOT=$OUT QCACHE_PREFIX=$B/cache/hs2_q_ STRIDE=4 $K -u scripts/exp_imgq.py 2>&1 | tail -1
   THOR_ROOT=$OUT ACACHE_PREFIX=$B/cache/hs2_x_ STRIDE=4 $K -u scripts/exp_anchor_exemplar.py 2>&1 | tail -1; }
-[ $STEP -le 4 ] && { echo "=== 4. 열린 공간 방 그룹 $(date +%H:%M) ==="; i=0
+[ $STEP -le 4 ] && { echo "=== 4. 열린 공간 방 그룹 $(date +%H:%M) (OFFSET=$OFFSET · 집 번호 = OFFSET + 장면 색인) ==="; i=0
   for SC in $(cat $SCENES); do H=$OUT/house_$(printf %04d $((OFFSET + i))); i=$((i+1)); [ -d $H ] || continue; [ -f $H/room_groups.json ] && continue
     $HAB scripts/room_groups.py --scene "$SC" --dataset $HSSD_DATASET --house $H 2>&1 | grep -aE "^house_" | cut -c1-120; done; }
 [ $STEP -le 5 ] && { echo "=== 5. 임베딩 카메라방 (CLIP 노드 + Viterbi) $(date +%H:%M) ==="
