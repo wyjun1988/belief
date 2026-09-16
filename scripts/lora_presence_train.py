@@ -13,10 +13,10 @@ ap.add_argument("--epochs", type=int, default=2); ap.add_argument("--lr", type=f
 ap.add_argument("--max-steps", type=int, default=0); ap.add_argument("--eval-every", type=int, default=200); ap.add_argument("--grad-accum", type=int, default=8); ap.add_argument("--eval-only", action="store_true"); ap.add_argument("--adapter", default="")
 ap.add_argument("--seed", type=int, default=0); ap.add_argument("--val-max", type=int, default=300)
 ap.add_argument("--task", default="presence", choices=["presence", "adopt", "place"])
-ap.add_argument("--balance", action="store_true", help="소수 라벨을 복제해 균형 맞춤 — 9-40 에서 yes 36%%/no 64%% 라 모델이 no 로 쏠렸다(있다 재현 0.39·아니다 0.97)")   # adopt = ② 채택 판정(§166-71): 후보 박스가 기록 물체와 같은 것인가; ap.add_argument("--targets", default="narrow", choices=["narrow", "llm", "full"],
+ap.add_argument("--balance", action="store_true", help="소수 라벨을 복제해 균형 맞춤 — 9-40 에서 yes 36%%/no 64%% 라 모델이 no 로 쏠렸다(있다 재현 0.39·아니다 0.97)")
+ap.add_argument("--targets", default="narrow", choices=["narrow", "llm", "full"],
                 help="LoRA 가 붙는 모듈. narrow=q/k/v/o(전체 어텐션 8/32층만 · 비전 0, 종전 기본) · llm=선형 어텐션(in_proj_qkv·out_proj)+MLP 포함 · full=llm+비전 타워(attn.qkv/proj·mlp)+merger")
 a = ap.parse_args(); random.seed(a.seed); torch.manual_seed(a.seed)
-a = ap.parse_args(); random.seed(a.seed); torch.manual_seed(a.seed)   # 9-35 편집에서 주석 뒤로 밀려 사라졌던 줄 — 2026-09-16 복구
 processor = AutoProcessor.from_pretrained(a.model); model = AutoModelForImageTextToText.from_pretrained(a.model, dtype=torch.bfloat16, device_map="auto")
 from peft import LoraConfig, get_peft_model, PeftModel
 if a.adapter: model = PeftModel.from_pretrained(model, a.adapter, is_trainable=not a.eval_only)
