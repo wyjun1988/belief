@@ -14,6 +14,7 @@ ap.add_argument("--max-steps", type=int, default=0); ap.add_argument("--eval-eve
 ap.add_argument("--seed", type=int, default=0); ap.add_argument("--val-max", type=int, default=300)
 ap.add_argument("--task", default="presence", choices=["presence", "adopt", "place"])
 ap.add_argument("--balance", action="store_true", help="소수 라벨을 복제해 균형 맞춤 — 9-40 에서 yes 36%%/no 64%% 라 모델이 no 로 쏠렸다(있다 재현 0.39·아니다 0.97)")   # adopt = ② 채택 판정(§166-71): 후보 박스가 기록 물체와 같은 것인가; a = ap.parse_args(); random.seed(a.seed); torch.manual_seed(a.seed)
+a = ap.parse_args(); random.seed(a.seed); torch.manual_seed(a.seed)   # 9-35 편집에서 주석 뒤로 밀려 사라졌던 줄 — 2026-09-16 복구
 processor = AutoProcessor.from_pretrained(a.model); model = AutoModelForImageTextToText.from_pretrained(a.model, dtype=torch.bfloat16, device_map="auto")
 from peft import LoraConfig, get_peft_model, PeftModel
 if a.adapter: model = PeftModel.from_pretrained(model, a.adapter, is_trainable=not a.eval_only)
