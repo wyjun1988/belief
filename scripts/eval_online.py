@@ -100,6 +100,11 @@ if os.environ.get("GEO_DEPTH"):
         _d = json.loads(_l)
         GDEP[(_d["house"], _d["t"], _d["oid"])] = _d["d"]
     print("mono-depth %d표본" % len(GDEP), flush=True)
+IVSC = None      # 인스턴스 선택(방위 투표) 전용 점수 — 채택 필터가 프레임을 1장까지 깎아 투표를 굶긴다(2026-09-16)
+if os.environ.get("INST_VERIFY_JSONL"):
+    IVSC = {}
+    for _l in open(os.path.expanduser(os.environ["INST_VERIFY_JSONL"])):
+        _d = json.loads(_l); IVSC[(_d["house"], _d["oid"])] = _d["scored"]
 PLACE = None; PLACE_TH = float(os.environ.get("PLACE_TH", "-1e9")); PLACE_W = float(os.environ.get("PLACE_W", "0"))
 if os.environ.get("PLACE_JSONL"):
     PLACE = {}
@@ -298,7 +303,14 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 if PLACE_W > 0 and i2.get("_mg") is not None:
                     _w = _w * (1.0 / (1.0 + math.exp(-PLACE_W * i2["_mg"])))
                 if _w > best.get(i2["type"], (0,))[0]: best[i2["type"]] = (_w, i2["room"])
-                if i2.get("pos"): im_inst.setdefault(i2["type"], []).append((i2["pos"], i2["room"], _w))
+                if i2.get("pos"):
+                    # INST_W: 선택 공식이 쓰는 검출 가중치. w=점수합(노출 편향 있음) · mx=최고점수 ·
+                    # wnv=점수합/시점수. 오류 119건에서 정답 후보가 w 로 지는 비율이 0.75, mx 는 0.60 이다(2026-09-16).
+                    _wm = os.environ.get("INST_W", "w")
+                    _ws = (i2.get("mx", _w) if _wm == "mx" else
+                           (_w / max(i2.get("nv", 1), 1) if _wm == "wnv" else
+                            ((i2.get("mx", 0) * _w) ** 0.5 if _wm == "mix" else _w)))
+                    im_inst.setdefault(i2["type"], []).append((i2["pos"], i2["room"], _ws))
         im = {t: r for t, (w, r) in best.items()}
     # VLM 앵커 명부(ANCH_SRC=vlm, scripts/anchor_crops.py → anchor_vlm_mlx.py): 통과 인스턴스만 앵커 후보 — 타입은 검출 어휘(박스 있는 타겟 타입)로 제한
     _VANCH = {}
@@ -517,11 +529,44 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     _first = next((i2 for i2 in range(len(ts)) if vis[i2]), None)
                     _p0 = _proj(_first) if _first is not None else None
                     if _p0: record = min(_cands, key=lambda c3: (c3[0][0]-_p0[0])**2 + (c3[0][1]-_p0[1])**2)[1]
+                elif os.environ.get("INST_SEL", "bearing") == "proj":
+                    # 투영 선택(2026-09-16): 검증 통과 프레임을 **거리(DA)까지 써서** 바닥에 찍고,
+                    # 그 중앙점에 가장 가까운 후보를 고른다. §154 에서 거리는 무용하다고 기각했지만
+                    # 그때는 (a) DA 보정 전이고 (b) 채택 필터로 프레임을 정화하기 전이었다.
+                    _pts2 = []
+                    for i2 in (_vpass if _vpass else sorted(hits)[:8])[:12]:
+                        _ry = _geo_ray(i2)
+                        _dd = (GDEP.get((hn, int(ts[i2]), oid)) if GDEP is not None else None)
+                        if not (_ry and _dd): continue
+                        _ap2, _b2 = _ry
+                        _pts2.append([_ap2[0] + _dd * np.sin(np.radians(_b2)), _ap2[1] + _dd * np.cos(np.radians(_b2))])
+                    if len(_pts2) >= int(os.environ.get("INST_PROJ_MIN", "2")):
+                        _md = np.median(np.array(_pts2), 0)
+                        _bestc = min(_cands, key=lambda c3: (c3[0][0] - _md[0]) ** 2 + (c3[0][1] - _md[1]) ** 2)
+                        record = _bestc[1]; _rec_pos = _bestc[0]
+                    else:   # 증거 부족 → 방위 투표로 후퇴
+                        _bv = Counter()
+                        for i2 in (_vpass if _vpass else sorted(hits)[:8])[:12]:
+                            _ry = _geo_ray(i2)
+                            if not _ry: continue
+                            _ap, _b = _ry
+                            _best, _bd = None, 1e9
+                            for c3 in _cands:
+                                _bc = np.degrees(np.arctan2(c3[0][0] - _ap[0], c3[0][1] - _ap[1]))
+                                _dd2 = abs((_bc - _b + 180) % 360 - 180)
+                                if _dd2 < _bd: _bd, _best = _dd2, c3[1]
+                            if _best is not None and _bd < float(os.environ.get("INST_ANG", "25")): _bv[_best] += 1
+                        _bestc = max(_cands, key=lambda c3: (1 + _bv.get(c3[1], 0)) * _prior(v0["type"], rt.get(c3[1], c3[1])) * (c3[2] ** 0.5))
+                        record = _bestc[1]; _rec_pos = _bestc[0]
                 elif os.environ.get("INST_SEL", "bearing") == "bearing":
                     # 거리 값은 사실상 무의미하고(무작위 거리와 결과 동일, §154) **방위**만 정보다 →
                     # 후보를 "검출 방위와 각도차가 작은가" 로 고른다. 거리 추정 잡음에 구조적으로 면역.
                     _bv = Counter()
-                    for i2 in (_vpass if _vpass else sorted(hits)[:8])[:12]:
+                    _ivp = _vpass
+                    if IVSC is not None:
+                        _ir = IVSC.get((hn, oid))
+                        if _ir: _ivp = sorted(int(e[0]) for e in _ir if e[1] >= VTH and (len(e) < 3 or e[2] >= VTH2))
+                    for i2 in (_ivp if _ivp else sorted(hits)[:8])[:int(os.environ.get("INST_NVOTE", "12"))]:
                         _ry = _geo_ray(i2)
                         if not _ry: continue
                         _ap, _b = _ry
@@ -532,6 +577,11 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                             if _dd < _bd: _bd, _best = _dd, c3[1]
                         if _best is not None and _bd < float(os.environ.get("INST_ANG", "25")): _bv[_best] += 1
                     _bestc = max(_cands, key=lambda c3: (1 + _bv.get(c3[1], 0)) * _prior(v0["type"], rt.get(c3[1], c3[1])) * (c3[2] ** 0.5)); record = _bestc[1]; _rec_pos = _bestc[0]
+                    if os.environ.get("INST_DIAG"):
+                        _fd = open(os.path.expanduser(os.environ["INST_DIAG"]), "a")
+                        _fd.write(json.dumps(dict(house=hn, oid=oid, n_cand=len(_cands), n_vote=int(sum(_bv.values())),
+                                                  n_room_voted=len(_bv), picked=record, pass_frames=len(_vpass))) + "\n")
+                        _fd.close()
                 elif os.environ.get("INST_SEL", "bearing") == "prior":
                     # 후보 인스턴스를 **방 사전확률 × 검출 가중**으로 — 투영(거리 잡음)에 의존하지 않는 GT-free 선택
                     _bestc = max(_cands, key=lambda c3: _prior(v0["type"], rt.get(c3[1], c3[1])) * (c3[2] ** 0.5)); record = _bestc[1]; _rec_pos = _bestc[0]
