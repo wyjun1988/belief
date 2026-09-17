@@ -18,9 +18,12 @@ mk(){ D=$KH/$1; shift; mkdir -p $D/images; : > $D/train.jsonl; : > $D/val.jsonl
   for s in "$@"; do [ -d $KH/$s ] || { log "⚠ $s 없음"; continue; }
     ln -sfn $KH/$s/images/* $D/images/ 2>/dev/null; cat $KH/$s/train.jsonl >> $D/train.jsonl; cat $KH/$s/val.jsonl >> $D/val.jsonl; done
   log "$1: train $(wc -l < $D/train.jsonl) · val $(wc -l < $D/val.jsonl)"; }
-mk lora_adopt_all  lora_adopt_v2 lora_adopt_og lora_adopt_c2
-mk lora_adopt_allhn lora_adopt_v2 lora_adopt_og lora_adopt_c2 lora_adopt_hn
-mk lora_presence_mix2 lora_presence_v2 lora_presence_og
+# ⚠ 2026-09-17 23:40 수정: hssd_v2 와 hssd_c2set 은 house_XXXX 가 **같은 장면**이라(house_0015 의 gt0 117개 oid 동일)
+#   단순 cat 은 c2 train 에 v2 val 집 9채를 넣어 val 을 오염시킨다. lora_merge_sets.py 가 "어느 셋에서든 val 인 집은 합본에서도 val" 로 자른다.
+rm -rf $KH/lora_adopt_all $KH/lora_adopt_allhn $KH/lora_presence_mix2
+python scripts/lora_merge_sets.py $KH/lora_adopt_all  $KH/lora_adopt_v2 $KH/lora_adopt_og $KH/lora_adopt_c2 2>&1 | tail -1 | tee -a $SUM
+python scripts/lora_merge_sets.py $KH/lora_adopt_allhn $KH/lora_adopt_v2 $KH/lora_adopt_og $KH/lora_adopt_c2 $KH/lora_adopt_hn 2>&1 | tail -1 | tee -a $SUM
+python scripts/lora_merge_sets.py $KH/lora_presence_mix2 $KH/lora_presence_v2 $KH/lora_presence_og 2>&1 | tail -1 | tee -a $SUM
 python scripts/lora_presence_train.py --help 2>&1 | grep -q -- "--targets" || { log "✗ git pull 안 됨 (--targets 없음)"; exit 1; }
 
 train(){ # train <GPU> <task> <data> <이름> [인자…]
@@ -38,11 +41,13 @@ step "1. 채택 — ② 병목을 깨는 조합 8판 (GPU$G0 / GPU$G1 병렬)"
 ( train $G1 adopt $KH/lora_adopt_allhn adopt_allhn_r32   --targets narrow --r 32 --alpha 64 --val-max 2400
   train $G1 adopt $KH/lora_adopt_allhn adopt_allhn_e2    --targets narrow --epochs 2 --val-max 2400
   train $G1 adopt $KH/lora_adopt_hn    adopt_hn_full     --targets full --grad-ckpt --val-max 1081
+  train $G1 adopt $KH/lora_adopt_allhn adopt_allhn_full  --targets full --grad-ckpt --val-max 2400
   train $G1 presence $KH/lora_presence_mix2 pres_mix_lr3 --lr 3e-5 --val-max 1103 ) > /dev/null 2>&1 &
 wait
 step "2. 채택 추론 — 133채 실측 묶음 6,996건, 어댑터별 마진 (M2 가 이 파일로 최종 점수를 낸다)"
-for NM in adopt_hn adopt_allhn adopt_v2_lr3 adopt_allhn_lr3 adopt_allhn_r32 adopt_allhn_e2 adopt_hn_full; do
-  A=$OUT/$NM; V=$KH/adopt_margin_$NM.jsonl
+# 중간 결과 어댑터 3종(out/lora_adopt_all_4b 등)도 함께 — M2 분리 채점에서 all_full 이 이동 후 AUC 0.887(현행 0.768)이었다
+for NM in adopt_hn adopt_allhn adopt_v2_lr3 adopt_allhn_lr3 adopt_allhn_r32 adopt_allhn_e2 adopt_hn_full adopt_allhn_full lora_adopt_all_4b lora_adopt_all_full_4b lora_adopt_v2_full_4b; do
+  A=$OUT/$NM; [ -d $A ] || A=$KH/out/$NM; V=$KH/adopt_margin_$NM.jsonl
   [ -s $A/adapter_model.safetensors ] || continue
   [ -s $V ] && { log "skip 추론 $NM"; continue; }
   PACK=$KH/adopt_infer_v2 BACKEND=hf DEVICE=cuda MODEL=$M4 ADAPTER=$A VERDICT_JSONL=$V VERIFY_JSONL=/dev/null A3_PREFIX=/tmp/ \

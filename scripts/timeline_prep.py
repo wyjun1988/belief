@@ -5,6 +5,12 @@
   THOR_ROOT=... A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ ROOM_JSONL=$B/scores/room_embed_clip.jsonl POSE_JSONL=$B/pnp/pose_all_room.jsonl \\
     INITMAP_FILE=initmap_owl_rc.json OUT_JSONL=$B/scores/timeline_prep.jsonl [SIGHT_TH=0.10 MAX_SIGHT=12 MAX_CTX=10 MAX_OBJ=0 HOUSES=house_0001] python scripts/timeline_prep.py"""
 import os, sys, json, glob, math, collections, time
+import os as _os_, json as _json_
+_SEL = {}
+if _os_.environ.get("INST_SEL_JSONL"):
+    for _l in open(_os_.path.expanduser(_os_.environ["INST_SEL_JSONL"])):
+        _r = _json_.loads(_l); _SEL[(_r["house"], _r["oid"])] = _r
+    print("기록 인스턴스 선택 INST_SEL_JSONL %d행" % len(_SEL), flush=True)
 import numpy as np, torch
 from PIL import Image
 ROOT = os.environ.get("THOR_ROOT", "data/hssd_v2b_pilot"); A3P = os.environ["A3_PREFIX"]; QCP = os.environ["QC_PREFIX"]; RJ = os.environ.get("ROOM_JSONL"); PJ = os.environ.get("POSE_JSONL")
@@ -84,7 +90,9 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         if not v0 or (hn, oid) in PH or cnt[v0["type"]] > 1 or v0["type"] not in inst or v0["type"] not in vocab: continue
         if ONLY_MOVED and oid not in moved: continue
         if (hn, oid) in done: continue
-        w, record, spot = inst[v0["type"]][0]
+        if (hn, oid) in _SEL and _SEL[(hn, oid)].get("rec_pos") is not None:   # 벤치가 고른 인스턴스(REC_DUMP) — 첫 인스턴스와 어긋나 엉뚱한 자리를 보던 문제(2026-09-17)
+            w, record, spot = 0.0, grp(_SEL[(hn, oid)]["record"]), list(_SEL[(hn, oid)]["rec_pos"])
+        else: w, record, spot = inst[v0["type"]][0]
         if spot is None: continue
         ti = vocab.index(v0["type"]); a = words(v0["type"])
         # ── (1) 기록 장면: 자리를 향한 스캔 프레임 ≤5 장에 OWL → 타겟 점수 최대 프레임·박스·이웃

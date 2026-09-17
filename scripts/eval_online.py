@@ -84,7 +84,10 @@ if os.environ.get("ABS_VERIFY_JSONL"):
         if os.environ.get("ABSV_TAILMODE", "0") == "1":
             # 이동 시각을 모르므로 후반 창 안에서 '있다→없다' 로 바뀌었을 수 있다: 마지막 MINL 장만 '없다' 를 요구하고 그 앞 장은 전반 증거로 돌린다 (§166-29 2판)
             late_ = sorted(late_, key=lambda x: x[0]); _early = _early + late_[:-ABSV_MINL]; late_ = late_[-ABSV_MINL:]
-        if sum(x[ci] > ABSV_TP for x in late_) > 0: return False
+        _np_ = sum(x[ci] > ABSV_TP for x in late_); _rule = os.environ.get("ABSV_RULE", "any")   # any: 한 장이라도 "있다"면 부재 아님 · major: 절반 이상 · mean: 평균 마진 (2026-09-17)
+        if _rule == "any" and _np_ > 0: return False
+        if _rule == "major" and _np_ * 2 >= len(late_): return False
+        if _rule == "mean" and float(np.mean([x[ci] for x in late_])) > ABSV_TP: return False
         _emin = float(os.environ.get("ABSV_EARLY_MIN", "0"))          # 이른 자리 프레임의 최고 점수가 이 값 이상이어야(있었다는 명확한 증거) 부재를 인정
         if _emin > 0:
             if not _early: return None
@@ -159,7 +162,8 @@ LADDER = ("[RoI ≤%sm %s ≥%spx] " % (os.environ.get("ROI_DIST", "-"), os.envi
 _NGT = sum(k in LADDER for k in ("포즈:GT", "거리:GT", "초기맵:GT", "모의(GT", "위치:GT", "자리:GT", "앵커방:GT"))   # 자리:GT = 부재 게이트가 GT 물체 원위치를 씀(2026-09-07 발견)
 _PHANTOM = json.load(open(os.environ["PHANTOM_JSON"])) if os.environ.get("PHANTOM_JSON") else None
 _PH_SKIP = [0]
-if os.environ.get("ROWS_OUT"): open(os.path.expanduser(os.environ["ROWS_OUT"]), "w").close()   # 행 덤프는 실행마다 새로 (append 라 사슬 재실행 때 누적됐다, 2026-09-09)
+if os.environ.get("ROWS_OUT"): open(os.path.expanduser(os.environ["ROWS_OUT"]), "w").close()
+if os.environ.get("REC_DUMP"): open(os.path.expanduser(os.environ["REC_DUMP"]), "w").close()   # 기록 선택 덤프(집·물체·기록방·인스턴스 자리) — 부재 검증기가 같은 인스턴스를 보게(2026-09-17)   # 행 덤프는 실행마다 새로 (append 라 사슬 재실행 때 누적됐다, 2026-09-09)
 _BRANK = []      # (정답 방의 belief 순위, 후보 방 수) — ③ 인계 행만
 if _PHANTOM: LADDER += " · 유령제외:%d집" % len(_PHANTOM)
 else: LADDER += " · 유령제외:없음⚠️"
@@ -774,6 +778,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             record = max(((_prior(v0["type"], rt[r])/max(nrt[rt[r]],1), r)
                           for r in rids))[1]
         # 질의: 기록 방 부재 게이팅 (온라인 앞/뒤 1/3 + 앵커 게이팅)
+        if os.environ.get("REC_DUMP"):
+            with open(os.path.expanduser(os.environ["REC_DUMP"]), "a") as _fo: _fo.write(json.dumps(dict(house=hn, oid=oid, type=v0["type"], record=record, rec_pos=(list(map(float, _rec_pos)) if _rec_pos is not None else None))) + "\n")
         inr = np.where(arm == record)[0]
         fired = False
         _nlate = -1                                 # 부재확인 기회(자리 본 후반 프레임 수)

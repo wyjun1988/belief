@@ -54,6 +54,11 @@ ACTX = {}                                    # RETR=anchor: anchor_ctx.py 의 �
 if RETR == "anchor":
     for _l in open(os.path.expanduser(os.environ["ANCHOR_CTX_JSONL"])):
         _r = json.loads(_l); ACTX[(_r["house"], _r["oid"])] = _r
+_SEL = {}
+if os.environ.get("INST_SEL_JSONL"):
+    for _l in open(os.path.expanduser(os.environ["INST_SEL_JSONL"])):
+        _r = json.loads(_l); _SEL[(_r["house"], _r["oid"])] = _r
+    print("기록 인스턴스 선택 INST_SEL_JSONL %d행" % len(_SEL), flush=True)
 done = set()
 if os.path.exists(OUTJ):
     for l in open(OUTJ):
@@ -87,7 +92,10 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         if not v0 or not v0["room"] or cnt[v0["type"]] > 1 or v0["type"] not in vocab or v0["type"] not in inst: continue
         if ONLY_MOVED and oid not in moved: continue
         if (hn, oid) in done: continue
-        ti = vocab.index(v0["type"]); w, record, spot = (max(inst[v0["type"]]) if os.environ.get("INST_PICK", "first") == "maxw" else inst[v0["type"]][0])   # first: 파일 순서(재군집 순위) · maxw: 점수합 최대
+        ti = vocab.index(v0["type"])
+        if (hn, oid) in _SEL and _SEL[(hn, oid)].get("rec_pos") is not None:   # 벤치가 고른 인스턴스(REC_DUMP) — 첫 인스턴스와 3.8~12.9m 어긋나 엉뚱한 자리를 보던 문제(2026-09-17)
+            w, record, spot = 0.0, grp(_SEL[(hn, oid)]["record"]), list(_SEL[(hn, oid)]["rec_pos"])
+        else: w, record, spot = (max(inst[v0["type"]]) if os.environ.get("INST_PICK", "first") == "maxw" else inst[v0["type"]][0])   # first: 파일 순서(재군집 순위) · maxw: 점수합 최대
         if spot is None: continue
         fac = [k for k, m in enumerate(g["map"]) if 0.3 <= math.hypot(spot[0]-m["apos"][0], spot[1]-m["apos"][1]) <= CTX_DIST
                and abs((math.degrees(math.atan2(spot[0]-m["apos"][0], spot[1]-m["apos"][1])) - m["yaw"] + 180) % 360 - 180) <= CTX_ANG]
