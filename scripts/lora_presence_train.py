@@ -16,6 +16,8 @@ ap.add_argument("--task", default="presence", choices=["presence", "adopt", "pla
 ap.add_argument("--balance", action="store_true", help="소수 라벨을 복제해 균형 맞춤 — 9-40 에서 yes 36%%/no 64%% 라 모델이 no 로 쏠렸다(있다 재현 0.39·아니다 0.97)")
 ap.add_argument("--targets", default="narrow", choices=["narrow", "llm", "full"],
                 help="LoRA 가 붙는 모듈. narrow=q/k/v/o(전체 어텐션 8/32층만 · 비전 0, 종전 기본) · llm=선형 어텐션(in_proj_qkv·out_proj)+MLP 포함 · full=llm+비전 타워(attn.qkv/proj·mlp)+merger")
+ap.add_argument("--grad-ckpt", action="store_true", help="gradient checkpointing — --targets full 이 448px·비전 역전파로 95GB 를 넘겨 OOM 났다(9-45). 활성 메모리를 층 단위로 재계산")
+ap.add_argument("--img-max", type=int, default=0, help="입력 이미지 긴 변 상한(px). 0=원본(학습셋 448 폭). full 에서 메모리 더 줄이려면 336")
 a = ap.parse_args(); random.seed(a.seed); torch.manual_seed(a.seed)
 processor = AutoProcessor.from_pretrained(a.model); model = AutoModelForImageTextToText.from_pretrained(a.model, dtype=torch.bfloat16, device_map="auto")
 from peft import LoraConfig, get_peft_model, PeftModel
@@ -28,6 +30,11 @@ elif not a.eval_only:
                      r"|.*visual\.blocks\.\d+\.attn\.(qkv|proj)$|.*visual\.blocks\.\d+\.mlp\.linear_fc[12]$|.*merger\.linear_fc[12]$"}[a.targets]
     cfg = LoraConfig(r=a.r, lora_alpha=a.alpha, lora_dropout=0.05, target_modules=_TM, task_type="CAUSAL_LM")
     model = get_peft_model(model, cfg); model.print_trainable_parameters()
+if a.grad_ckpt and not a.eval_only:
+    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    try: model.enable_input_require_grads()      # 체크포인팅 + 동결 임베딩 조합에서 grad 가 끊기는 것 방지
+    except Exception: pass
+    print("gradient checkpointing ON", flush=True)
 def load(split): return [json.loads(l) for l in open(os.path.join(a.data, split + ".jsonl"))]
 def article(t): return ("an " if t[:1] in "aeiou" else "a ") + t
 KEY = {"presence": "still_there", "adopt": "same_object", "place": "is_type"}[a.task]
@@ -49,7 +56,11 @@ def prompt_of(r):
 def answer_of(r):
     if a.task in ("adopt", "place"): return json.dumps({KEY: r["label"], "confidence": 90})
     return json.dumps(dict(still_there=r["label"], seen_in=r.get("seen_in", []), confidence=(90 if r["label"] in ("yes", "no") else 50)))
-def images_of(r): return [Image.open(os.path.join(a.data, "images", f)).convert("RGB") for f in ([r["ref"]] if r.get("ref") else []) + r["cands"]]
+def _shrink(im):
+    if a.img_max and max(im.size) > a.img_max:
+        sc = a.img_max / float(max(im.size)); im = im.resize((max(8, int(im.size[0] * sc)), max(8, int(im.size[1] * sc))))
+    return im
+def images_of(r): return [_shrink(Image.open(os.path.join(a.data, "images", f)).convert("RGB")) for f in ([r["ref"]] if r.get("ref") else []) + r["cands"]]
 def chat(r, with_answer):
     msgs = [{"role": "user", "content": [{"type": "image"} for _ in range(len(r["cands"]) + (1 if r.get("ref") else 0))] + [{"type": "text", "text": prompt_of(r)}]}]
     if with_answer: msgs.append({"role": "assistant", "content": [{"type": "text", "text": answer_of(r)}]})
