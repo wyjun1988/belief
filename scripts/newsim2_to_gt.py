@@ -13,6 +13,7 @@ yaw 는 언리얼 yaw(왼손, +Z 회전) → 우리 yaw(+Y 위, atan2(-dx,-dz) �
 """
 import argparse, json, glob, os, math, collections
 import numpy as np
+import cv2
 ap = argparse.ArgumentParser(); ap.add_argument("root"); ap.add_argument("out")
 ap.add_argument("--fps", type=float, default=1.0); ap.add_argument("--max-eps", type=int, default=0)
 ap.add_argument("--check", action="store_true"); ap.add_argument("--no-frames", action="store_true")
@@ -46,6 +47,20 @@ def parse_objs(rec):
             import ast
             o = ast.literal_eval(o)
     return o or []
+def _dump(mp4, want, outdir, pat, order=None):
+    """mp4 에서 지정 프레임만 뽑아 저장. order 가 있으면 그 순서대로 0..n-1 로 번호를 다시 매긴다(map 용)."""
+    if not os.path.exists(mp4) or not want: return 0
+    os.makedirs(outdir, exist_ok=True)
+    idx = {t: i for i, t in enumerate(order)} if order else None
+    if all(os.path.exists(os.path.join(outdir, pat % (idx[t] if idx else t))) for t in want): return len(want)
+    cap = cv2.VideoCapture(mp4); n = 0; t = 0
+    while True:
+        ok, fr = cap.read()
+        if not ok: break
+        if t in want:
+            cv2.imwrite(os.path.join(outdir, pat % (idx[t] if idx else t)), fr, [cv2.IMWRITE_JPEG_QUALITY, 88]); n += 1
+        t += 1
+    cap.release(); return n
 eps = sorted(glob.glob(os.path.join(a.root, "*/*/*/" if a.flat else "episodes/*/*/*/")))
 if a.scan: eps = [e for e in eps if ("/%s/" % a.scan) not in e]
 _SCANS = {}      # 장면 → 스캔 디렉터리
@@ -167,6 +182,18 @@ for i, e in enumerate(eps):
          "scene_meta": {"polys": polys, "doors": []},
          "_src": e, "_scene": os.path.basename(os.path.dirname(os.path.dirname(e.rstrip("/")))),
          "_newsim2": True}
+    # ── 프레임 추출: 사슬은 live/%06d.jpg · map/%04d.jpg 를 읽는다. 이게 없으면 초기맵부터 못 돈다.
+    if not a.no_frames:
+        _want_live = {int(l["t"]) for l in live}
+        _n = _dump(e + "ego.mp4", _want_live, hd + "/live", "%06d.jpg")
+        stat["라이브 이미지"] += _n
+        if mp and _sd:
+            _n2 = _dump(_sd + "ego.mp4", {int(m["_t"]) for m in mp}, hd + "/map", "%04d.jpg", order=[int(m["_t"]) for m in mp])
+            stat["지도 이미지"] += _n2
+        elif mp:
+            _n2 = _dump(e + "ego.mp4", {int(m["_t"]) for m in mp}, hd + "/map", "%04d.jpg", order=[int(m["_t"]) for m in mp])
+            stat["지도 이미지"] += _n2
+        for k, m in enumerate(mp): m["_k"] = k          # map 파일 색인 = 리스트 순서
     json.dump(g, open(hd + "/gt.json", "w"), ensure_ascii=False)
     stat["집"] += 1; stat["프레임"] += len(live); stat["지도프레임"] += len(mp)
     if a.check:
