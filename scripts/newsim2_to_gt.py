@@ -165,6 +165,9 @@ for i, e in enumerate(eps):
                 gp = np.array(gt0[oid]["pos"], float)
                 _dist[oid] = round(float(np.hypot(gp[0] - _ap[0], gp[2] - _ap[2])), 3)
             mp.append({"room": _rm, "yaw": round(_yaw, 2), "apos": [round(_ap[0], 3), round(_ap[2], 3)],
+                       "pitch": round(float(c["rotation_pyr_deg"][0]), 2),   # ★ 2026-09-18: 없으면 PnP 가 죽는다.
+                       # 스캔 카메라는 중앙 11.3°(최대 36°) 아래를 본다. pitch 를 빼면 hssd_to_seq_reloc 이 수평 포즈로
+                       # 삼각측량해 지도 점이 프레임당 14개(HSSD 55개)뿐이고 라이브 등록률이 1/368 로 무너졌다.
                        "box": _box, "ctr": _ctr, "dist": _dist, "_t": t, "_scan": 1})
         stat["스캔 지도프레임"] += len(mp)
     seen_t = set()
