@@ -16,6 +16,10 @@ import numpy as np
 ap = argparse.ArgumentParser(); ap.add_argument("root"); ap.add_argument("out")
 ap.add_argument("--fps", type=float, default=1.0); ap.add_argument("--max-eps", type=int, default=0)
 ap.add_argument("--check", action="store_true"); ap.add_argument("--no-frames", action="store_true")
+ap.add_argument("--flat", action="store_true", help="3차분 배치 구조: <root>/<scene>/<episode>/<run>/ (episodes/ 계층 없음)")
+ap.add_argument("--scene-graph", default="", help="scene_graph.json 이 배치에 없을 때 쓸 파일(방 기하는 같은 장면이면 동일). 3차분은 scenes/ 가 빠져 왔다")
+ap.add_argument("--scan", default="", help="스캔 에피소드 디렉터리 이름(예: 11_ego_coverage_scan). 지정하면 그 프레임을 map 으로 쓴다")
+ap.add_argument("--scan-step", type=int, default=30, help="스캔 프레임 솎기(30fps → 30이면 1초마다)")
 a = ap.parse_args()
 CM = 100.0
 def P(v):
@@ -42,14 +46,24 @@ def parse_objs(rec):
             import ast
             o = ast.literal_eval(o)
     return o or []
-eps = sorted(glob.glob(os.path.join(a.root, "episodes/*/*/*/")))
+eps = sorted(glob.glob(os.path.join(a.root, "*/*/*/" if a.flat else "episodes/*/*/*/")))
+if a.scan: eps = [e for e in eps if ("/%s/" % a.scan) not in e]
+_SCANS = {}      # 장면 → 스캔 디렉터리
+if a.scan:
+    for sd in sorted(glob.glob(os.path.join(a.root, "*/%s/*/" % a.scan if a.flat else "episodes/*/%s/*/" % a.scan))):
+        _SCANS[sd.split("/")[-4 if a.flat else -4]] = sd
+    print("스캔 에피소드:", {k: v.split("/")[-2] for k, v in _SCANS.items()})
 if a.max_eps: eps = eps[:a.max_eps]
 os.makedirs(a.out, exist_ok=True)
 stat = collections.Counter(); checks = []
 for i, e in enumerate(eps):
     hn = "house_%04d" % i; hd = os.path.join(a.out, hn)
     os.makedirs(hd, exist_ok=True); os.makedirs(hd + "/live", exist_ok=True); os.makedirs(hd + "/map", exist_ok=True)
-    sg = json.load(open(e + "scene_graph.json"))
+    _sgp = e + "scene_graph.json"
+    if not os.path.exists(_sgp):
+        if not a.scene_graph: stat["장면그래프 없음"] += 1; continue
+        _sgp = a.scene_graph          # 같은 장면이면 방 기하가 동일하다(2차분 10개 파일이 전부 같았다)
+    sg = json.load(open(_sgp))
     ent = json.load(open(e + "entities.json"))["entities"]
     ev = json.load(open(e + "evidence.json"))["events"]
     ann = [json.loads(l) for l in open(e + "annotations.jsonl")]
@@ -105,9 +119,41 @@ for i, e in enumerate(eps):
                      "box": box, "apos": [round(ap_[0], 3), round(ap_[2], 3)], "yaw": round(yaw, 2),
                      "pitch": round(pitch, 2)})
     # ── map : 기록 프레임 = 각 사건의 before_window (스캔 에피소드가 없다)
+    # map = 스캔 에피소드(있으면). 없으면 각 사건의 before_window 로 후퇴한다.
     mp = []
+    _scene = e.split("/")[-4 if a.flat else -4]
+    _sd = _SCANS.get(_scene)
+    if _sd:
+        _sann = [json.loads(l) for l in open(_sd + "annotations.jsonl")]
+        _scam = {}
+        for r in (json.loads(l) for l in open(_sd + "observed_graph_updates.jsonl")):
+            cs = r.get("cameras") or []
+            if cs: _scam[int(r["t"])] = cs[0]
+        _sent = json.load(open(_sd + "entities.json"))["entities"]
+        _siid = {}
+        for x in _sent:
+            for oid, v in gt0.items():
+                if v.get("_actor") and (x.get("actor_name") or "").strip() == v["_actor"].strip(): _siid[x["instance_id"]] = oid
+        for r in _sann:
+            t = int(r["frame"])
+            if t % a.scan_step: continue
+            c = _scam.get(t)
+            if c is None: continue
+            _ap = P(c["location"]); _yaw = yaw_of(c["rotation_pyr_deg"])
+            _rm = next((rr for rr, pl in polys.items() if pip([_ap[0], _ap[2]], pl)), None)
+            _ctr, _dist, _box = {}, {}, {}
+            for o in parse_objs(r):
+                oid = _siid.get(o.get("instance_id"))
+                b = o.get("bbox")
+                if oid is None or not b: continue
+                _ctr[oid] = [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0]; _box[oid] = b
+                gp = np.array(gt0[oid]["pos"], float)
+                _dist[oid] = round(float(np.hypot(gp[0] - _ap[0], gp[2] - _ap[2])), 3)
+            mp.append({"room": _rm, "yaw": round(_yaw, 2), "apos": [round(_ap[0], 3), round(_ap[2], 3)],
+                       "box": _box, "ctr": _ctr, "dist": _dist, "_t": t, "_scan": 1})
+        stat["스캔 지도프레임"] += len(mp)
     seen_t = set()
-    for x in ev:
+    for x in ([] if mp else ev):
         bw = x.get("before_window") or []
         for t in range(int(bw[0]), int(bw[1]) + 1) if len(bw) == 2 else []:
             if t in seen_t: continue
