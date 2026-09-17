@@ -1,0 +1,167 @@
+<title>Khronos 9월 셋째 주 결산</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ink:#1a1d21; --ink-2:#565c60; --ink-3:#8a9094;
+  --ground:#f1f2ef; --panel:#fbfbf9; --rule:#d8dad4; --rule-2:#e7e8e3;
+  --signal:#ab3529; --gain:#2c6349; --flat:#8a7a3e; --grid:#e4e6e0;
+  --sans:'Archivo',system-ui,sans-serif; --serif:'Source Serif 4',Georgia,serif; --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ink:#e7e8e4; --ink-2:#a6aba6; --ink-3:#767c78; --ground:#14161a; --panel:#1b1e22; --rule:#31363a; --rule-2:#262a2e;
+  --signal:#e08070; --gain:#6fc09b; --flat:#d6bb6a; --grid:#262a2e;}}
+:root[data-theme="dark"]{
+  --ink:#e7e8e4; --ink-2:#a6aba6; --ink-3:#767c78; --ground:#14161a; --panel:#1b1e22; --rule:#31363a; --rule-2:#262a2e;
+  --signal:#e08070; --gain:#6fc09b; --flat:#d6bb6a; --grid:#262a2e;}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:var(--serif);font-size:16.5px;line-height:1.62;-webkit-font-smoothing:antialiased}
+.wrap{max-width:54rem;margin:0 auto;padding:3.2rem 1.4rem 5rem}
+h1,h2,h3,.lbl{font-family:var(--sans);text-wrap:balance}
+h1{font-size:2.05rem;line-height:1.14;font-weight:700;letter-spacing:-.015em;margin:0 0 .5rem}
+.sub{color:var(--ink-2);font-size:1.02rem;margin:0 0 .4rem}
+.stamp{font-family:var(--mono);font-size:.74rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+h2{font-size:1.14rem;font-weight:600;margin:3rem 0 .2rem;padding-bottom:.42rem;border-bottom:1.5px solid var(--rule)}
+h2 .n{font-family:var(--mono);font-size:.78rem;color:var(--ink-3);margin-right:.6rem;font-weight:500}
+h3{font-size:.95rem;font-weight:600;margin:1.6rem 0 .3rem}
+p{margin:.72rem 0}
+.lead{font-size:1.12rem;line-height:1.55}
+em.q{font-style:normal;color:var(--signal);font-weight:600}
+em.g{font-style:normal;color:var(--gain);font-weight:600}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.scroll{overflow-x:auto;margin:1rem -.2rem 1.2rem;padding:0 .2rem}
+table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:.83rem;font-variant-numeric:tabular-nums;min-width:32rem}
+th,td{text-align:right;padding:.42rem .55rem;border-bottom:1px solid var(--rule-2);white-space:nowrap;vertical-align:top}
+th{font-family:var(--sans);font-weight:600;font-size:.75rem;color:var(--ink-2);border-bottom:1.5px solid var(--rule)}
+th:first-child,td:first-child{text-align:left;font-family:var(--sans);font-size:.83rem;white-space:normal;min-width:9rem}
+td.txt{text-align:left;font-family:var(--serif);font-size:.86rem;white-space:normal;min-width:14rem;line-height:1.45}
+tbody tr:last-child td{border-bottom:1.5px solid var(--rule)}
+td.good{color:var(--gain);font-weight:600} td.bad{color:var(--signal);font-weight:600} td.flat{color:var(--flat)}
+tr.hero td{background:color-mix(in srgb,var(--gain) 9%,transparent);font-weight:600}
+tr.void td{color:var(--ink-3);text-decoration:line-through}
+caption{caption-side:bottom;text-align:left;font-family:var(--sans);font-size:.76rem;color:var(--ink-3);padding-top:.5rem;line-height:1.45;white-space:normal}
+/* 원장 */
+.ledger{margin:1.1rem 0 .3rem;display:flex;flex-direction:column}
+.row{display:grid;grid-template-columns:9.6rem 1fr 4.1rem;align-items:center;gap:.8rem;padding:.44rem 0;border-bottom:1px solid var(--rule-2)}
+.row:last-child{border-bottom:0}
+.row .lbl{font-size:.8rem;font-weight:500;color:var(--ink-2);line-height:1.3}
+.track{position:relative;height:1.1rem;background:repeating-linear-gradient(90deg,var(--grid) 0 1px,transparent 1px 10%)}
+.fill{position:absolute;top:0;bottom:0;left:0;background:var(--ink)}
+.fill.void{background:repeating-linear-gradient(45deg,var(--signal) 0 3px,transparent 3px 6px);border-right:2px solid var(--signal)}
+.fill.now{background:var(--gain)} .fill.proj{background:transparent;border:1.5px dashed var(--gain)}
+.row .val{font-family:var(--mono);font-size:.95rem;font-weight:600;text-align:right}
+.row.strike .val{color:var(--signal);text-decoration:line-through} .row .val.up{color:var(--gain)}
+.scale{display:grid;grid-template-columns:9.6rem 1fr 4.1rem;gap:.8rem;font-family:var(--mono);font-size:.7rem;color:var(--ink-3);margin-top:.3rem}
+.scale div:nth-child(2){display:flex;justify-content:space-between}
+/* 노트 */
+.note{background:var(--panel);border:1px solid var(--rule-2);border-left:2.5px solid var(--flat);padding:.8rem 1rem;margin:1.3rem 0;font-size:.93rem;line-height:1.55}
+.note .h{font-family:var(--sans);font-weight:600;font-size:.85rem;display:block;margin-bottom:.15rem}
+ul.tight{margin:.5rem 0 .8rem 1.1rem;padding:0} ul.tight li{margin:.3rem 0;font-size:.95rem}
+footer{margin-top:3.4rem;padding-top:1rem;border-top:1px solid var(--rule);font-family:var(--mono);font-size:.74rem;color:var(--ink-3);line-height:1.7}
+</style>
+<div class="wrap">
+<div class="stamp">2026-09-10 → 09-17 · HSSD 133채 1,007질의 기준 · 보조 c3set·c2set·OG 24채</div>
+<h1>Khronos 9월 셋째 주 결산</h1>
+<p class="sub">무엇을 붙여서 얼마나 올랐나 — 그리고 ① ② ③ 이 각각 어디까지 왔나</p>
+
+<p class="lead">이번 주는 두 겹이다. 겉으로는 총점이 <span class="mono">0.737</span> 에서 <span class="mono">0.722</span> 로 <em class="q">내려갔다</em>. 속으로는 0.737 이 채점 누수가 만든 값이었고, 정직한 출발점 <span class="mono">0.646</span> 에서 <span class="mono">0.722</span> 까지 <em class="g">+0.076</em> 올렸다. 올린 도구는 <strong>기하 문턱</strong>과 <strong>4B LoRA 판정기 셋</strong>이고, 막힌 길은 <strong>기록방 선택</strong>이다.</p>
+
+<h2><span class="n">§1</span>3+1 최종 — 정직한 기준 대비</h2>
+<div class="scroll">
+<table>
+<caption>133채 · 전 타겟 채점. "정직한 기준" = 주초에 채점 누수를 걷어낸 직후(§166-63). ③ 인계율은 확인 기회가 있었던 건만 분모. ③ 은 133채에 13건뿐이라 c3set(23건)을 병기.</caption>
+<thead><tr><th>측정</th><th>n</th><th>정직한 기준</th><th>지금</th><th>변화</th><th class="txt">무엇이 움직였나</th></tr></thead>
+<tbody>
+<tr><td>① 이동없음 정답</td><td>837</td><td>.679</td><td class="good">.798</td><td class="good">+.119</td><td class="txt">거짓 채택 22.6% → <strong>1.9%</strong>. 기하 문턱이 대부분, 채택 LoRA 필터가 마무리</td></tr>
+<tr><td>　거짓 채택률</td><td>837</td><td>.226</td><td class="good">.019</td><td class="good">−.207</td><td class="txt">정지한 물체 넷 중 하나를 "옮겨졌다" 고 하던 것이 50 중 하나로</td></tr>
+<tr><td>② 이동+재촬영 정답</td><td>137</td><td>.547</td><td class="bad">.394</td><td class="bad">−.153</td><td class="txt">①을 지키느라 치른 값. 채택 정확도는 .68 → <strong>.91</strong> 로 올랐으나 채택률이 .41 → .08. 풀기 설정이면 .474 (① 거짓 .069)</td></tr>
+<tr><td>③ 인계율 (133채)</td><td>13</td><td>.38</td><td class="good">.50</td><td class="good">+.12</td><td class="txt">n=13 — 잡음</td></tr>
+<tr><td>③ 인계율 (c3set)</td><td>23</td><td>.35</td><td class="good">.65</td><td class="good">+.30</td><td class="txt">타임라인 LLM 판정 + 기하. 거짓 인계 1건. 포즈 요구를 풀면 .74</td></tr>
+<tr class="hero"><td>전체</td><td>1,007</td><td>.646</td><td>.722</td><td>+.076</td><td class="txt">같은 파이프라인에 기록방만 정답으로 넣으면 <strong>.871</strong></td></tr>
+</tbody>
+</table>
+</div>
+<div class="note"><span class="h">②는 왜 내려갔나</span>
+채택 결정에는 "이동한 물체를 새 방에서 봤다" 와 "다른 방의 오검출" 을 가르는 신호가 기하적 엄격함밖에 없었다. 문턱을 어느 쪽으로 돌려도 ① 과 ② 가 같은 속도로 반대로 움직인다(§166-69). ① 행이 ② 의 6배라 ① 을 택했다. 채택 LoRA 필터가 이 맞바꿈을 처음 느슨하게 했고(같은 ③ 이득을 거짓 채택 1/3.5 가격에), 그 필터를 <strong>이동 후 표본</strong>으로 재학습하는 것이 다음 주 첫 과제다.</div>
+
+<h2><span class="n">§2</span>점수 원장 — 133채에서 무엇을 바꿨을 때 얼마가 움직였나</h2>
+<div class="ledger">
+  <div class="row strike"><div class="lbl">주초 표<br><span class="stamp">§166-59 · 누수</span></div><div class="track"><div class="fill void" style="width:48.9%"></div></div><div class="val">.737</div></div>
+  <div class="row"><div class="lbl">채점 누수 제거<br><span class="stamp">§166-63</span></div><div class="track"><div class="fill" style="width:16.4%"></div></div><div class="val">.646</div></div>
+  <div class="row"><div class="lbl">기하 문턱 (2장·≤2.5 m)<br><span class="stamp">§166-65</span></div><div class="track"><div class="fill" style="width:34.6%"></div></div><div class="val">.697</div></div>
+  <div class="row"><div class="lbl">후보 8개·방위 10°<br><span class="stamp">§166-72</span></div><div class="track"><div class="fill" style="width:39.3%"></div></div><div class="val">.710</div></div>
+  <div class="row"><div class="lbl">채택 LoRA 필터 (실측)<br><span class="stamp">§166-73</span></div><div class="track"><div class="fill now" style="width:43.6%"></div></div><div class="val up">.722</div></div>
+  <div class="row"><div class="lbl">기록방을 정답으로<br><span class="stamp">같은 파이프라인 · 상한</span></div><div class="track"><div class="fill proj" style="width:96.8%"></div></div><div class="val up">.871</div></div>
+</div>
+<div class="scale"><div></div><div><span>0.60</span><span>0.74</span><span>0.88</span></div><div></div></div>
+<p>0.737 이 무효인 이유: 재목격 검증기가 <em class="q">GT 로 이동한 물체만</em> 채점했다. 정지한 물체는 채점이 없어 오답을 낼 통로가 막혀 있었고 "거짓 채택 0" 이 공짜였다. 전 타겟을 채점하자 837건 중 189건이 거짓 채택이었다.</p>
+
+<h2><span class="n">§3</span>방법별 — 무엇을 써서 무엇이 얼마나</h2>
+<div class="scroll">
+<table>
+<caption>전/후는 그 방법을 넣기 직전과 직후의 같은 데이터셋 값. 절 번호는 docs/RESULTS_OWL_20260819.md.</caption>
+<thead><tr><th>방법</th><th>어디에</th><th>전</th><th>후</th><th>변화</th><th class="txt">비고</th></tr></thead>
+<tbody>
+<tr><td>기하 문턱 (채택 최소 2장 · 거리 ≤2.5 m)</td><td>① 거짓 채택</td><td>.226</td><td class="good">.030</td><td class="good">−.196</td><td class="txt">채택 시 정확도 .68 → .90. 대가: ② .547 → .401. §166-65</td></tr>
+<tr><td>초기맵 후보 3 → 8 · 방위 게이트 25° → 10°</td><td>① 정답</td><td>.766</td><td class="good">.780</td><td class="good">+.014</td><td class="txt">상한은 .895 → .950 으로 올랐지만 선택기가 못 씀. §166-72</td></tr>
+<tr><td><strong>채택 LoRA 필터</strong> (4B · 6,996장 실측)</td><td>총점 / ① 거짓</td><td>.703 / .030</td><td class="good">.722 / .019</td><td class="good">+.019</td><td class="txt">채택 정확도 .76 → <strong>.91</strong>. 통과 순도 .536 → .93. §166-73</td></tr>
+<tr><td><strong>부재 LLM 판정</strong> (4B 타임라인 · 기록+자리 4장)</td><td>③ 인계율 (c3set)</td><td>.35</td><td class="good">.65</td><td class="good">+.30</td><td class="txt">거짓 인계 381건 중 1. 기하와 함께 쓴 값. §166-64</td></tr>
+<tr><td>부재 검증기 포즈 요구 해제</td><td>③ 인계 (c3set 전체)</td><td>16건</td><td class="good">20건</td><td class="good">+4</td><td class="txt">거짓 인계 1건 그대로 — 공짜. 잔여의 95%가 "자리를 본 프레임 없음". §166-74</td></tr>
+<tr><td><strong>도메인 혼합 학습</strong> (HSSD+OG)</td><td>채택 AUC · OG / HSSD</td><td>.760 / .908</td><td class="good">.837 / .918</td><td class="good">+.077 / +.010</td><td class="txt">OG 를 섞어도 HSSD 가 오히려 오름 → 기본 어댑터 교체. 9-42</td></tr>
+<tr><td>LoRA vs 규모 — 채택</td><td>실측 AUC 4B / 9B</td><td colspan="2">.9155 / .9161</td><td class="flat">동률</td><td class="txt">부트스트랩 구간이 0 을 지남. 4B 로 확정, M2 로컬 실행. §166-73</td></tr>
+<tr><td>LoRA vs 규모 — 부재</td><td>오라클 87건</td><td>27B 무학습 .862</td><td class="good">4B LoRA .897</td><td class="good">+.035</td><td class="txt">모델 7배보다 268샘플 적응이 낫다. 9-30</td></tr>
+<tr class="void"><td>기록 자리 LoRA (크롭 진위)</td><td>① 기록방 오류</td><td>.168</td><td>.161~.245</td><td>±0 / 악화</td><td class="txt">AUC .81 에서 포화 — 어댑터 8.6배 확장(비전 포함)·9B 로도 안 움직임. §166-77·82</td></tr>
+<tr class="void"><td>기록방 선택 노브 8종</td><td>① 기록방 오류</td><td>.198</td><td>.191~.250</td><td>≤+6행</td><td class="txt">군집·순위·투영·가중치·방위·미필터 투표·CLIP 재순위 전부. §166-76·78</td></tr>
+<tr class="void"><td>9B 무학습 ② 재식별</td><td>후보 순도</td><td>.135</td><td>.077</td><td>악화</td><td class="txt">진짜 재발견을 오검출보다 더 세게 버림. 9-30</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2><span class="n">§4</span>LLM·LoRA 에서 확정한 것</h2>
+<ul class="tight">
+<li><strong>라벨이 공짜다.</strong> 시뮬레이터 GT 로 채택 4,791 · 부재 2,967 · 기록자리 7,566 · ②중심 채택 2,948 표본을 사람 손 없이 만들었다. 이게 LoRA 를 가능하게 한 조건이다.</li>
+<li><strong>작은 모델 + 적응 &gt; 큰 모델.</strong> 채택은 4B = 9B(실측 6,996장), 부재는 4B LoRA &gt; 27B 무학습. 셋 다 4B 로 M2 에서 돈다 — 채택 질의당 9초(상위 8장), 부재 0.7초.</li>
+<li><strong>판정은 생성 토큰이 아니라 yes/no 로그확률 차이로 읽는다.</strong> 연속값이라 문턱을 최종 점수 기준으로 고른다. 이걸 안 하던 동안 ROC 위 한 점에 묶여 있었다.</li>
+<li><strong>도메인은 섞는 게 맞다.</strong> OG 를 섞으면 OG +.077, HSSD 도 +.010.</li>
+<li><strong>기록 자리는 LoRA 로 안 풀린다.</strong> narrow/llm/full(비전 포함)/9B 가 전부 AUC .81. 한계는 적응 용량이 아니라 "참조 없이 크롭 한 장" 이라는 문제 설정이다.</li>
+<li><strong>참조를 실제로 본다.</strong> 채택 판정기의 참조를 바꿔치기하면 AUC .917 → .777, 마진 중앙 2.0 이동. 다만 참조 없이도 .777 이라 절반은 타입 검출기다.</li>
+</ul>
+
+<h2><span class="n">§5</span>이번 주에 만든 데이터</h2>
+<div class="scroll">
+<table>
+<thead><tr><th>데이터셋</th><th>집</th><th>목적</th><th class="txt">상태</th></tr></thead>
+<tbody>
+<tr><td>c3set</td><td>60</td><td>③ 86건</td><td class="txt">완료 · ③ 인계율 결론의 근거(확인기회O 23건)</td></tr>
+<tr><td>c2set</td><td>69</td><td>② 107건</td><td class="txt">완료 · 133채와 맞먹는 두 번째 ② 표본 · 같은 병목 확인(채택률 .06~.31)</td></tr>
+<tr><td><strong>c3big</strong></td><td>69</td><td>③ 152건 · 확인기회 139</td><td class="txt">생성 완료 · 사슬 8/10단계 — ③ 표본 <strong>10배</strong>. "③은 놓을 자리가 필요 없다" 는 지적으로 생성기에 제거 모드를 넣어 얻음</td></tr>
+<tr><td>newsim2 (AIUE 2차)</td><td>30 에피소드</td><td>①②③ 30/30/30</td><td class="txt">변환 완료 · 좌표 규약 전수탐색(방위 오차 4.3°) · 스캔 에피소드 대기</td></tr>
+<tr><td>LoRA 학습셋 4종</td><td>—</td><td>18,272 표본</td><td class="txt">Drive 에 전부 · 프로 6000 학습 재료</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2><span class="n">§6</span>측정을 바로잡은 것 — 조용히 틀리던 열 가지</h2>
+<p>이번 주 시간의 절반은 여기 들어갔다. 전부 <em class="q">에러 없이 그럴듯한 숫자</em>를 내던 종류다.</p>
+<ul class="tight">
+<li>검증기가 GT 이동 물체만 채점 → ① 거짓 채택이 공짜 0 (0.737 무효)</li>
+<li>임베딩 캐시·지도점·seq 디렉터리가 집 이름만으로 키 → 133채 중 88채가 남의 카메라방 (0.26 vs 0.80)</li>
+<li>val 채점이 앞 300행 = 25채 중 9채 → 보고된 LoRA 수치 전부 재채점</li>
+<li>검증기 점수의 첫 값이 프레임 시각이 아니라 앵커 색인 → "앞단에 신호가 없다" 결론 철회(§166-62)</li>
+<li>기록자리 판정이 후보의 34%에만 붙음 → 등록부 전량 등록으로 91%</li>
+<li>사슬 방 그룹 단계의 OFFSET 기본값 31 → c2set·c3big 방 그룹이 다른 장면으로 계산(39개 중 38개 달랐음)</li>
+<li>트레이너 <span class="mono">parse_args</span> 가 편집 중 주석으로 밀림 → HEAD 가 즉사, grep 필터에 가려 세 번 못 봄</li>
+<li>HSSD 장면 0 은 자산 결함으로 항상 abort → "환경이 깨졌다" 로 오진</li>
+<li>Habitat STATIC 물체는 translation 무시 → 제거 모드가 물체를 원위치에 둔 채 "가시"</li>
+<li>MPS 가 크롭 모양마다 재컴파일 + 고아 프로세스 → 판정 속도 3.75배 저하</li>
+</ul>
+
+<h2><span class="n">§7</span>다음 주</h2>
+<ul class="tight">
+<li><strong>② 채택 재학습 (프로 6000, 9-46).</strong> 이동 후 표본 5배(c2set)를 합쳐 이동 후 참 유지 .62 를 올린다. 이게 ②의 채택률 병목을 직접 때리는 유일한 처방이다.</li>
+<li><strong>③ 결론을 152건 위에서.</strong> c3big 사슬이 오늘 저녁 끝난다. 인계율·거짓 인계율을 처음으로 잡음 없는 표본으로 낸다.</li>
+<li><strong>기록방 194건은 보류.</strong> 열 갈래를 막았다. 후보 생성 쪽(원자료에 있는데 잘린 82건)만 남았고, 그것도 상한 +.02 다. 여기 더 쓰지 않는다.</li>
+<li><strong>새 시뮬레이터 스캔 에피소드</strong>가 오면 newsim2 에 초기맵 군집까지 붙여 세 번째 도메인 표를 낸다.</li>
+</ul>
+
+<footer>khronos · docs/RESULTS_OWL_20260819.md §166-59 ~ §166-82 · docs/rtx/RTX_RESULTS_20260908.md 9-30 ~ 9-46 · docs/RTX_TASKS_20260907.md<br>M2 Max 측정 · LoRA 학습은 RTX PRO 6000 · 전 수치는 전 타겟 채점(§166-60 이후) 기준</footer>
+</div>
