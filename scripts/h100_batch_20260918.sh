@@ -14,12 +14,22 @@ SUM=$KH/h100_summary_0918.txt; : > $SUM
 log(){ echo "[$(date +%H:%M)] $*" | tee -a $SUM; }
 export PYTHONUNBUFFERED=1
 log "=== 0. 재료 ==="
-for Z in lora_adopt_real val_fixed lora_adopt_hn lora_adopt_c2; do
+for Z in lora_adopt_real val_fixed lora_adopt_hn lora_adopt_c2 lora_adopt_v2 lora_presence_v2 adopt_infer_v2; do
   [ -d $KH/$Z ] && continue
   for p in "$DRIVE/$Z.zip" "$DRIVE/${Z}_0917.zip" packs/$Z.zip; do [ -f "$p" ] && { unzip -q "$p" -d $KH/ && log "풀림 $Z"; break; }; done
   [ -d $KH/$Z ] || log "⚠ $Z 없음"
 done
 python scripts/lora_presence_train.py --help 2>&1 | grep -q -- "--val-data" || { log "✗ git pull 안 됨 (--val-data 없음)"; exit 1; }
+log "=== 0.2 OmniGibson 학습셋 (없으면 만든다 — 9-39/40 에서 이 기계에 만들었던 것) ==="
+if [ ! -d $KH/lora_adopt_og ] && [ -d data/hssd_og ]; then
+  python scripts/lora_adopt_data.py data/hssd_og $KH/lora_adopt_og --val-houses 6 2>&1 | tail -1 | tee -a $SUM
+fi
+if [ ! -d $KH/lora_presence_og ] && [ -d data/hssd_og ]; then
+  python scripts/lora_presence_data.py data/hssd_og $KH/lora_presence_og --k 4 --per-target 3 --val-houses 6 2>&1 | tail -1 | tee -a $SUM
+fi
+for Z in lora_adopt_og lora_presence_og; do
+  [ -d $KH/$Z ] || log "ℹ $Z 없음 — **그대로 진행한다**. 모든 판이 똑같이 빠지므로 판 사이 비교는 그대로 유효하다(기준선 절대값만 조금 내려간다)."
+done
 log "=== 0.5 학습셋 합치기 (집 단위 분리 — v2/c2 는 같은 장면이다) ==="
 rm -rf $KH/lora_adopt_all $KH/lora_adopt_allhn $KH/lora_adopt_allreal $KH/lora_presence_mix2 $KH/lora_mt
 python scripts/lora_merge_sets.py $KH/lora_adopt_all     $KH/lora_adopt_v2 $KH/lora_adopt_og $KH/lora_adopt_c2 2>&1 | tail -1 | tee -a $SUM
