@@ -519,6 +519,13 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             # 인스턴스판이 있으면 **첫 목격 프레임의 투영 위치**에 가장 가까운 인스턴스를
             # 고른다(타입당 방 1개로 접지 않는다 — 실제 주거는 같은 타입이 여러 방에).
             record = im.get(v0["type"]); _rec_pos = None        # _rec_pos: 고른 초기맵 인스턴스의 자리 [x, z] (ABS_SPOT=initmap 에서 부재 게이트의 자리로)
+            # 인스턴스 선택 분기(_geo 필요)가 안 돌아도 **고른 인스턴스의 자리는 남겨야** 한다.
+            # 안 그러면 ABS_SPOT=initmap 에서 _spot 이 None 이 되어 부재 게이트가 통째로 꺼지고
+            # ③ 이 전부 "belief대상" 으로 빠진다(4차분에서 10건 전부 그랬다, 2026-09-19).
+            _c0 = (im_inst.get(v0["type"]) or [])
+            if _c0:
+                _m0 = next((c for c in _c0 if c[1] == record), _c0[0])
+                if _m0 and _m0[0] is not None: _rec_pos = list(_m0[0])
             _cands = im_inst.get(v0["type"])
             if _cands and _geo is not None:
                 # VIS_GT=0: 시스템 신호만 — 검출 점수 상위(hits) 중 가장 이른 프레임 + 실물 거리(DA)
@@ -784,6 +791,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         inr = np.where(arm == record)[0]
         fired = False
         _nlate = -1                                 # 부재확인 기회(자리 본 후반 프레임 수)
+        _nlate_any = -1                             # 방 게이트 없이 자리를 본 후반 프레임 (진단용, 2026-09-19 덤프에 포함)
         _spot_src = os.environ.get("ABS_SPOT", "gt")     # gt: GT 물체 원위치(⚠️ GT 재료) · initmap: 고른 초기맵 인스턴스 자리(무GT, 2026-09-07)
         _spot = v0.get("pos") if _spot_src == "gt" else ([_rec_pos[0], 0.0, _rec_pos[1]] if _rec_pos is not None else None)
         if ABS_GEO and _spot is not None:
@@ -922,7 +930,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                                            base_new == tgt, base_pri == tgt))
         if os.environ.get("ROWS_OUT"):        # 물체 단위 진단 덤프(2026-09-06): 경우·분기·답·기록·정답 — 실패 원인 분해용, 채점에는 무영향
             with open(os.path.expanduser(os.environ["ROWS_OUT"]), "a") as _fo:
-                _fo.write(json.dumps(dict(house=hn, oid=oid, type=v0.get("type"), case=_ck, branch=_br, tgt=tgt, ans=ans, record=record0, ok=bool(ans == tgt)), ensure_ascii=False) + "\n")
+                _fo.write(json.dumps(dict(house=hn, oid=oid, type=v0.get("type"), case=_ck, branch=_br, tgt=tgt, ans=ans, record=record0, ok=bool(ans == tgt), nlate=int(_nlate), nlate_any=int(_nlate_any), npose=int(sum(1 for _m in live.values() if _m.get("apos") is not None))), ensure_ascii=False) + "\n")
         # ── 증거 조건부 ② (평가 프로토콜 v2, 2026-09-02): 시나리오가 준 목격 수와 시스템 능력을 분리 ──
         if mv and VSC is not None and (hn, oid) in VSC:
             _t0e = mv[-1]["t"]; _k = 0; _at = 0; _af = 0; _fr = []
