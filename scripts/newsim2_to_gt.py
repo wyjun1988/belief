@@ -229,9 +229,22 @@ for i, e in enumerate(eps):
             if l is None: continue
             mp.append({"room": l["room"], "yaw": l["yaw"], "apos": l["apos"],
                        "box": l["box"], "ctr": l["ctr"], "dist": l["dist"], "_t": t})
+    # scene_meta.static — 방 안에 원래 있는 물체들(질의 대상 아님). 벤치가 방 유형 사전확률
+    # (이 방에 냉장고·레인지후드가 있으니 주방)과 belief 답의 재료로 쓴다. 없으면 eval_online 이
+    # sm["static"] 에서 죽는다(2026-09-18: newsim3·4 가 이것 때문에 벤치가 통째로 빈손이었다).
+    _static = {}
+    for _o in (sg.get("objects") or []):
+        _c = _o.get("category") or _o.get("class") or _o.get("type")
+        _r = _o.get("room_id") or _o.get("room")
+        _lc = ((_o.get("transform") or {}).get("location")) or _o.get("location")
+        if not (_c and _r and _lc): continue
+        _oid = "%s|%s" % (_c, _o.get("id") or len(_static))
+        if _oid in gt0: continue
+        _static[_oid] = {"type": _c, "room": _r, "pos": P(_lc)}
+    stat["정적 물체"] += len(_static)
     g = {"house": hn, "rooms": rooms, "room_types": rtypes, "gt0": gt0, "moves": moves,
          "live": live, "map": mp, "fps": a.fps, "T": len(live),
-         "scene_meta": {"polys": polys, "doors": []},
+         "scene_meta": {"polys": polys, "doors": [], "static": _static},
          "_src": e, "_scene": os.path.basename(os.path.dirname(os.path.dirname(e.rstrip("/")))),
          "_newsim2": True}
     # ── 프레임 추출: 사슬은 live/%06d.jpg · map/%04d.jpg 를 읽는다. 이게 없으면 초기맵부터 못 돈다.

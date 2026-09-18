@@ -186,6 +186,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     _AIDX = {t: vocab.index(t) for t in _ANCH_TYPES if t in vocab[:nT]}
     QT, QS, STx = list(zq["tg"]), zq["si"], zq["st"]
     g = json.load(open(hd + "/gt.json")); sm = g.get("scene_meta")
+    if isinstance(sm, dict) and "static" not in sm: sm["static"] = {}   # 새 시뮬레이터는 정적 물체 목록이 없을 수 있다(2026-09-18)
     if not sm: continue
     live = {m["t"]: m for m in g["live"]}
     if POSE is not None:
