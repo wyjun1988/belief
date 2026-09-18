@@ -8,11 +8,11 @@ import os, json, argparse, random, time, re, collections
 import torch
 from PIL import Image
 from transformers import AutoProcessor, AutoModelForImageTextToText
-ap = argparse.ArgumentParser(); ap.add_argument("--data", required=True); ap.add_argument("--model", default="Qwen/Qwen3.5-4B"); ap.add_argument("--out", required=True)
+ap = argparse.ArgumentParser(); ap.add_argument("--data", required=True); ap.add_argument("--val-data", default="", help="★ 고정 검증셋 경로. 판마다 학습 데이터가 달라도 **같은 잣대**로 채점해야 효과를 가를 수 있다(2026-09-18)"); ap.add_argument("--model", default="Qwen/Qwen3.5-4B"); ap.add_argument("--out", required=True)
 ap.add_argument("--epochs", type=int, default=2); ap.add_argument("--lr", type=float, default=1e-4); ap.add_argument("--r", type=int, default=16); ap.add_argument("--alpha", type=int, default=32)
 ap.add_argument("--max-steps", type=int, default=0); ap.add_argument("--eval-every", type=int, default=200); ap.add_argument("--grad-accum", type=int, default=8); ap.add_argument("--eval-only", action="store_true"); ap.add_argument("--adapter", default="")
 ap.add_argument("--seed", type=int, default=0); ap.add_argument("--val-max", type=int, default=300)
-ap.add_argument("--task", default="presence", choices=["presence", "adopt", "place"])
+ap.add_argument("--task", default="presence", choices=["presence", "adopt", "place", "belief", "multi"])   # belief: 사라진 물체의 행선지 방 · multi: 행마다 _task 로 섞어 학습(2026-09-18)
 ap.add_argument("--balance", action="store_true", help="소수 라벨을 복제해 균형 맞춤 — 9-40 에서 yes 36%%/no 64%% 라 모델이 no 로 쏠렸다(있다 재현 0.39·아니다 0.97)")
 ap.add_argument("--targets", default="narrow", choices=["narrow", "llm", "full"],
                 help="LoRA 가 붙는 모듈. narrow=q/k/v/o(전체 어텐션 8/32층만 · 비전 0, 종전 기본) · llm=선형 어텐션(in_proj_qkv·out_proj)+MLP 포함 · full=llm+비전 타워(attn.qkv/proj·mlp)+merger")
@@ -35,17 +35,37 @@ if a.grad_ckpt and not a.eval_only:
     try: model.enable_input_require_grads()      # 체크포인팅 + 동결 임베딩 조합에서 grad 가 끊기는 것 방지
     except Exception: pass
     print("gradient checkpointing ON", flush=True)
-def load(split): return [json.loads(l) for l in open(os.path.join(a.data, split + ".jsonl"))]
+_VD = os.path.expanduser(a.val_data) if a.val_data else ""
+def _root(split): return _VD if (split == "val" and _VD) else a.data
+def load(split):
+    rs = [json.loads(l) for l in open(os.path.join(_root(split), split + ".jsonl"))]
+    if split == "val" and _VD:
+        for r in rs: r["_imroot"] = _VD                # 이미지도 고정 검증셋 쪽에서 읽는다
+        print("고정 검증셋 %s · %d행" % (_VD, len(rs)), flush=True)
+    return rs
 def article(t): return ("an " if t[:1] in "aeiou" else "a ") + t
-KEY = {"presence": "still_there", "adopt": "same_object", "place": "is_type"}[a.task]
+_KEYS = {"presence": "still_there", "adopt": "same_object", "place": "is_type", "belief": "in_room"}
+KEY = _KEYS.get(a.task, "same_object")
+def _task_of(r): return r.get("_task", a.task) if a.task == "multi" else a.task   # 합본은 행이 자기 과제를 들고 있다
+def _key_of(r): return _KEYS[_task_of(r)]
 def prompt_of(r):
     n = len(r["cands"]) + 1
-    if a.task == "place":
+    _t = _task_of(r)
+    if _t == "belief":
+        # ③ 인계 뒤의 최종 답. 방마다 한 번씩 물어 argmax 를 답으로 쓴다 — 방 이름이 집마다 달라
+        # 생성형 답은 채점이 어렵고, 이러면 기존 마진 기계를 그대로 쓴다.
+        return ("Image 1 shows %s (inside the red box) at the place where it was last recorded, in the %s of a home. "
+                "It is no longer there — someone moved it. The home has these rooms: %s. "
+                "Think about where people usually put %s. Is the %s now in the %s? "
+                "Answer with JSON only: {\"in_room\": \"yes\"|\"no\", \"confidence\": 0-100}"
+                % (article(r["type"]), r.get("from_room", "home"), ", ".join(r.get("rooms") or []),
+                   article(r["type"]), r["type"], r["room"]))
+    if _t == "place":
         # 참조 없음 — 기록을 만드는 단계라 대조할 기준이 없다. 크롭 한 장의 진위만 묻는다(§166-77).
         return ("The image shows part of a room. Inside the red box, an object detector claims to have found %s. "
                 "Ignore everything outside the box. Is the object inside the red box really %s? "
                 "Answer with JSON only: {\"is_type\": \"yes\"|\"no\", \"confidence\": 0-100}" % (article(r["type"]), article(r["type"])))
-    if a.task == "adopt":
+    if _t == "adopt":
         return ("Image 1 shows %s at its recorded place in a house (inside the red box). Image 2 is a later view from elsewhere in the same house, "
                 "where an object detector proposed %s (inside the red box). The object may have been moved, so a different room is possible. "
                 "Judge the object itself, not the room: is the thing in the red box in image 2 the same %s as in image 1? "
@@ -54,13 +74,14 @@ def prompt_of(r):
             "Look carefully: is the %s still at its recorded place in the later images? Answer with JSON only: "
             "{\"still_there\": \"yes\"|\"no\"|\"unsure\", \"seen_in\": [image numbers (2-%d) where the %s is visible], \"confidence\": 0-100}" % (article(r["type"]), n, r["type"], n, r["type"]))
 def answer_of(r):
-    if a.task in ("adopt", "place"): return json.dumps({KEY: r["label"], "confidence": 90})
+    _t = _task_of(r)
+    if _t in ("adopt", "place", "belief"): return json.dumps({_key_of(r): r["label"], "confidence": 90})
     return json.dumps(dict(still_there=r["label"], seen_in=r.get("seen_in", []), confidence=(90 if r["label"] in ("yes", "no") else 50)))
 def _shrink(im):
     if a.img_max and max(im.size) > a.img_max:
         sc = a.img_max / float(max(im.size)); im = im.resize((max(8, int(im.size[0] * sc)), max(8, int(im.size[1] * sc))))
     return im
-def images_of(r): return [_shrink(Image.open(os.path.join(a.data, "images", f)).convert("RGB")) for f in ([r["ref"]] if r.get("ref") else []) + r["cands"]]
+def images_of(r): return [_shrink(Image.open(os.path.join(r.get("_imroot", a.data), "images", f)).convert("RGB")) for f in ([r["ref"]] if r.get("ref") else []) + r["cands"]]
 def chat(r, with_answer):
     msgs = [{"role": "user", "content": [{"type": "image"} for _ in range(len(r["cands"]) + (1 if r.get("ref") else 0))] + [{"type": "text", "text": prompt_of(r)}]}]
     if with_answer: msgs.append({"role": "assistant", "content": [{"type": "text", "text": answer_of(r)}]})
@@ -78,16 +99,17 @@ def parse(txt):
     except Exception: return {}
 @torch.no_grad()
 def evaluate(rows, tag):
-    model.eval(); st = collections.Counter(); pf = '{"%s": "' % KEY
+    model.eval(); st = collections.Counter()
     _tk = getattr(processor, "tokenizer", processor)
     _Y, _N = _tk.encode("yes", add_special_tokens=False)[0], _tk.encode("no", add_special_tokens=False)[0]
     _mg = []   # (log P(yes) - log P(no), 정답) — 작동점 하나가 아니라 ROC 전체를 보려면 연속 점수가 필요하다(2026-09-14)
     # val 은 집 순서대로 쓰여 있다 — 앞에서 자르면 몇 채만 보고 점수를 낸다(9/25채였다, 2026-09-14).
     _rows = list(rows); random.Random(1234).shuffle(_rows)
     for r in _rows[:a.val_max]:
+        pf = '{"%s": "' % _key_of(r)      # 합본은 행마다 키가 다르다(2026-09-18)
         ims = images_of(r); text = chat(r, False) + pf; inp = processor(text=[text], images=ims, return_tensors="pt").to(model.device)
         out = model.generate(**inp, max_new_tokens=80, do_sample=False); txt = pf + processor.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)[0]
-        ans = str(parse(txt).get(KEY, "")).lower(); st[(r["label"], ans)] += 1
+        ans = str(parse(txt).get(_key_of(r), "")).lower(); st[(r["label"], ans)] += 1
         try:
             _lg = model(**inp).logits[0, -1].float(); _lp = torch.log_softmax(_lg, -1)
             _mg.append((float(_lp[_Y] - _lp[_N]), r["label"]))
