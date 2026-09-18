@@ -86,6 +86,13 @@ for hd in sorted(glob.glob(ROOT + "/house_*"))[:HOUSES]:
     mp = sorted(glob.glob(os.path.join(rd, "map", "*.jpg")))
     if len(g["map"]) != len(mp): print("  %s gt.map %d ≠ map %d — 건너뜀" % (hn, len(g["map"]), len(mp))); continue
     mwp = mp[::MWSTRIDE]; mwr = [m["room"] for m in g["map"]][::MWSTRIDE]
+    # 방 다각형 밖에 선 지도 프레임은 room=None 이다(새 시뮬레이터 4%: 문지방·발코니 경계).
+    # 그대로 두면 sorted(set(...)) 이 None 과 문자열을 비교하다 죽는다 — 그 프레임을 뺀다(2026-09-18).
+    _keep = [i for i, r in enumerate(mwr) if r]
+    if len(_keep) < len(mwr):
+        print("  %s 지도 프레임 중 방 라벨 없는 %d장 제외" % (hn, len(mwr) - len(_keep)), flush=True)
+        mwp = [mwp[i] for i in _keep]; mwr = [mwr[i] for i in _keep]
+    if not mwr: print("  %s 방 라벨 있는 지도 프레임 없음 — 건너뜀" % hn); continue
     lv = sorted(glob.glob(os.path.join(rd, "live", "*.jpg")))[::STRIDE]; ts = [int(os.path.basename(p)[:-4]) for p in lv]
     t1 = time.time(); ME = emb(mwp, hn + "_map"); LE = emb(lv, hn + "_live"); dt = time.time() - t1
     rids = sorted(set(mwr))
