@@ -11,7 +11,7 @@
 yaw 는 언리얼 yaw(왼손, +Z 회전) → 우리 yaw(+Y 위, atan2(-dx,-dz) 기준)로 부호 반전 후 오프셋.
 검증은 --check: 가시 물체의 GT 위치를 카메라 포즈로 투영해 주석 박스 중심과 맞는지 본다.
 """
-import argparse, json, glob, os, math, collections
+import argparse, collections, json, glob, os, math, collections
 import numpy as np
 import cv2
 ap = argparse.ArgumentParser(); ap.add_argument("root"); ap.add_argument("out")
@@ -20,6 +20,7 @@ ap.add_argument("--check", action="store_true"); ap.add_argument("--no-frames", 
 ap.add_argument("--flat", action="store_true", help="3차분 배치 구조: <root>/<scene>/<episode>/<run>/ (episodes/ 계층 없음)")
 ap.add_argument("--scene-graph", default="", help="scene_graph.json 이 배치에 없을 때 쓸 파일(방 기하는 같은 장면이면 동일). 3차분은 scenes/ 가 빠져 왔다")
 ap.add_argument("--scan", default="", help="스캔 에피소드 디렉터리 이름(예: 11_ego_coverage_scan). 지정하면 그 프레임을 map 으로 쓴다")
+ap.add_argument("--no-extra-queries", action="store_true", help="① 확대(정지 질의 추가)를 끈다 — 3차분과 같은 구성으로 재현할 때")
 ap.add_argument("--scan-step", type=int, default=30, help="스캔 프레임 솎기(30fps → 30이면 1초마다)")
 a = ap.parse_args()
 CM = 100.0
@@ -74,10 +75,16 @@ stat = collections.Counter(); checks = []
 for i, e in enumerate(eps):
     hn = "house_%04d" % i; hd = os.path.join(a.out, hn)
     os.makedirs(hd, exist_ok=True); os.makedirs(hd + "/live", exist_ok=True); os.makedirs(hd + "/map", exist_ok=True)
+    _scn = e.split("/")[-4 if a.flat else -4]          # 장면 이름
     _sgp = e + "scene_graph.json"
     if not os.path.exists(_sgp):
-        if not a.scene_graph: stat["장면그래프 없음"] += 1; continue
-        _sgp = a.scene_graph          # 같은 장면이면 방 기하가 동일하다(2차분 10개 파일이 전부 같았다)
+        # 4차분부터 배치 루트에 scenes/<장면>/scene_graph.json 으로 동봉된다(우리 요청 §1)
+        for _c in ([os.path.join(a.scene_graph, _scn, "scene_graph.json"),
+                    os.path.join(a.scene_graph, _scn + ".json"), a.scene_graph] if a.scene_graph else []) + \
+                  [os.path.join(a.root, "scenes", _scn, "scene_graph.json"),
+                   os.path.join(os.path.dirname(a.root.rstrip("/")), "scenes", _scn, "scene_graph.json")]:
+            if _c and os.path.isfile(_c): _sgp = _c; break
+        if not os.path.exists(_sgp): stat["장면그래프 없음"] += 1; continue
     sg = json.load(open(_sgp))
     ent = json.load(open(e + "entities.json"))["entities"]
     ev = json.load(open(e + "evidence.json"))["events"]
@@ -103,6 +110,48 @@ for i, e in enumerate(eps):
                           "witness": False, "supported": True,
                           "role": "c3" if x["case"] == "absent" else "c2", "_case": x["case"]})
         stat[x["case"]] += 1
+    # ── ① 확대 (2026-09-18, 4차분): 대본 사건 3개만으로는 ①(안 움직임)이 에피소드당 1건이라
+    #    "안 움직인 걸 움직였다고 오판하는 비율" 을 잴 수 없다(HSSD 는 집당 10건). 벤더가
+    #    `initial_state.json > queryable_initial_state.objects` 에 **물체별 시작 방**을 넣어 줬으므로
+    #    **장면 내 범주가 유일한** 정지 물체를 전부 질의 대상에 올린다(중복 범주는 방 답이 하나로 안 정해져 제외).
+    _moved_actors = {v.get("_actor", "").strip() for v in gt0.values()}
+    _sq = e + "static_queries.json"
+    if os.path.exists(_sq) and not a.no_extra_queries:
+        # 벤더가 우리 요청대로 만들어 준 목록 — 범주가 장면 내 유일하고 대본 사건과 겹치지 않는 정지 물체.
+        # 우리가 직접 고르지 않고 이걸 쓴다(uniqueness 판정이 벤더 쪽 원본 기준이라 더 정확하다).
+        try: _qs = json.load(open(_sq)).get("queries") or []
+        except Exception: _qs = []
+        for q in _qs:
+            ac = (q.get("object") or "").strip(); c = q.get("category"); rm = q.get("answer_room")
+            loc = q.get("initial_location")
+            if not (ac and c and rm and loc) or ac in _moved_actors: continue
+            m = by_actor.get(ac)
+            oid = "%s|%s" % (c, m["instance_id"] if m else ac)
+            if oid in gt0: continue
+            gt0[oid] = {"type": c, "room": rm, "pos": P(loc),
+                        "_actor": ac, "_iid": (m or {}).get("instance_id"), "_extra": 1}
+            stat["①확대(벤더 static_queries)"] += 1
+    elif not a.no_extra_queries:
+        _ist = e + "initial_state.json"
+        _q = []
+        if os.path.exists(_ist):
+            try: _q = (json.load(open(_ist)).get("queryable_initial_state") or {}).get("objects") or []
+            except Exception: _q = []
+        _cat = collections.Counter(o.get("category") for o in _q if o.get("queryable"))
+        for o in _q:
+            if not o.get("queryable") or not o.get("room_id"): continue
+            c = o.get("category")
+            if not c or _cat[c] != 1: continue
+            ac = (o.get("actor") or o.get("id") or "").strip()
+            if ac in _moved_actors: continue
+            loc = ((o.get("transform") or {}).get("location"))
+            if not loc: continue
+            m = by_actor.get(ac)
+            oid = "%s|%s" % (c, m["instance_id"] if m else ac)
+            if oid in gt0: continue
+            gt0[oid] = {"type": c, "room": o["room_id"], "pos": P(loc),
+                        "_actor": ac, "_iid": (m or {}).get("instance_id"), "_extra": 1}
+            stat["①확대(우리 추정)"] += 1
     # ── live : 프레임마다 카메라 포즈 + 가시 물체
     iid2oid = {v["_iid"]: k for k, v in gt0.items() if v.get("_iid") is not None}
     cam = {}
