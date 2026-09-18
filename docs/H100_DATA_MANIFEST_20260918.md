@@ -1,15 +1,12 @@
 # H100 에 필요한 데이터 (2026-09-18, 9-50 배치)
 
-Google Drive `DriveSyncFiles/` 에서 **아래 8개를 `~/khcache/` 에 풀면** 됩니다. 이미 있는 건 건너뛰세요 — 배치가 알아서 확인합니다.
+Google Drive `DriveSyncFiles/` 에 **`h100_data_20260918.tar.gz` (982 MB) 하나**로 올렸습니다. 7개가 다 들어 있습니다.
 
 ```bash
-KH=~/khcache; mkdir -p $KH
-for Z in lora_adopt_v2 lora_adopt_c2_0917 lora_adopt_hn lora_adopt_real lora_presence_v2 val_fixed adopt_infer_v2; do
-  [ -f ~/$Z.zip ] && unzip -q -n ~/$Z.zip -d $KH/
-done
-mv $KH/lora_adopt_c2_0917 $KH/lora_adopt_c2 2>/dev/null   # 이름만 맞춰줍니다
-ls -d $KH/lora_* $KH/val_fixed $KH/adopt_infer_v2
+mkdir -p ~/khcache && tar xzf ~/h100_data_20260918.tar.gz -C ~/khcache/
+ls -d ~/khcache/{lora_adopt_v2,lora_adopt_c2,lora_adopt_hn,lora_adopt_real,lora_presence_v2,val_fixed,adopt_infer_v2}
 ```
+sha256 앞자리 `b8add38804e605747f4132b0` · 심볼릭 링크는 전부 실파일로 풀어 담았으니 그대로 쓰면 됩니다. 이름도 배치가 기대하는 대로 맞춰 뒀습니다(`lora_adopt_c2` 로 개명 불필요).
 
 | 파일 | 크기 | 무엇 | 왜 필요 |
 |---|---|---|---|
