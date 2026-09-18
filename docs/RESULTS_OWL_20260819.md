@@ -9285,3 +9285,22 @@ RTX 9-43·9-45 결과. val 25채 1,301 크롭(yes 581 / no 720), 전부 `--balan
 | all_full 느슨 | 0.740 | 0.792 | 0.540 | 0.42 |
 
 엄격판은 ① 과 ② 가 **같이** 오른다. 채택 필터를 `all_full` 로 교체한다.
+
+### §166-88 후속 — 챔피언 채택 필터 교체 (2026-09-19)
+
+| | 총 | ① | ① 거짓채택 | ② | ③ |
+|---|---|---|---|---|---|
+| 종전 `t1_m0`(mix4b 마진) | 0.726 | 0.800 | 0.016 | 0.401 | 0.33 |
+| **신규 `t1_champ_allfull`** | **0.732** | **0.806** | 0.019 | **0.409** | 0.33 |
+
+통과 프레임 36,494 → 37,655(+3%). **① 과 ② 가 같이 오르고 ③ 은 그대로**라 교체한다.
+
+재생성 방법(어댑터가 바뀌면 이 두 줄):
+```bash
+# 1) H100: 133채 묶음에 어댑터를 꽂아 마진 생성
+PACK=~/khcache/adopt_infer_v2 BACKEND=hf DEVICE=cuda MODEL=Qwen/Qwen3.5-4B ADAPTER=<어댑터> \
+  VERDICT_JSONL=~/khcache/adopt_margin_<이름>.jsonl VERIFY_JSONL=/dev/null A3_PREFIX=/tmp/ python scripts/lora_adopt_infer.py
+# 2) M2: 마진으로 검증기 점수를 거르고 벤치
+python <scratchpad>/apply_margin.py ~/khcache/adopt_margin_<이름>.jsonl 0 ~/khcache/bench-v2full/scores/t1_champ_<이름>.jsonl
+```
+어댑터 원본: `~/khcache/h100_0917/out/lora_adopt_all_full_4b` (v2+og+c2 · `--targets full` · r16 · 1 에폭).
