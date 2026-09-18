@@ -14,7 +14,7 @@ SUM=$KH/h100_summary_0918.txt; : > $SUM
 log(){ echo "[$(date +%H:%M)] $*" | tee -a $SUM; }
 export PYTHONUNBUFFERED=1
 log "=== 0. 재료 ==="
-for Z in lora_adopt_real lora_belief val_fixed lora_adopt_hn lora_adopt_c2; do
+for Z in lora_adopt_real val_fixed lora_adopt_hn lora_adopt_c2; do
   [ -d $KH/$Z ] && continue
   for p in "$DRIVE/$Z.zip" "$DRIVE/${Z}_0917.zip" packs/$Z.zip; do [ -f "$p" ] && { unzip -q "$p" -d $KH/ && log "풀림 $Z"; break; }; done
   [ -d $KH/$Z ] || log "⚠ $Z 없음"
@@ -26,7 +26,8 @@ python scripts/lora_merge_sets.py $KH/lora_adopt_all     $KH/lora_adopt_v2 $KH/l
 python scripts/lora_merge_sets.py $KH/lora_adopt_allhn   $KH/lora_adopt_v2 $KH/lora_adopt_og $KH/lora_adopt_c2 $KH/lora_adopt_hn 2>&1 | tail -1 | tee -a $SUM
 python scripts/lora_merge_sets.py $KH/lora_adopt_allreal $KH/lora_adopt_v2 $KH/lora_adopt_og $KH/lora_adopt_c2 $KH/lora_adopt_real 2>&1 | tail -1 | tee -a $SUM
 python scripts/lora_merge_sets.py $KH/lora_presence_mix2 $KH/lora_presence_v2 $KH/lora_presence_og 2>&1 | tail -1 | tee -a $SUM
-python scripts/lora_multitask_merge.py $KH/lora_mt adopt=$KH/lora_adopt_allreal presence=$KH/lora_presence_mix2 belief=$KH/lora_belief 2>&1 | tail -1 | tee -a $SUM
+# belief 는 이번 배치에서 뺀다 — 새 과제와 새 데이터를 한꺼번에 넣으면 무엇이 효과인지 못 가른다(9-51 로 미룸).
+python scripts/lora_multitask_merge.py $KH/lora_mt adopt=$KH/lora_adopt_allreal presence=$KH/lora_presence_mix2 2>&1 | tail -1 | tee -a $SUM
 
 VF=$KH/val_fixed
 run(){ # run <GPU> <이름> <과제> <데이터> [추가인자…]
@@ -35,7 +36,7 @@ run(){ # run <GPU> <이름> <과제> <데이터> [추가인자…]
   [ -d $D ] || { log "⚠ 데이터 없음 $D → $NM 건너뜀"; return; }
   CUDA_VISIBLE_DEVICES=$G python scripts/lora_presence_train.py --task $T --data $D --val-data $VF \
     --model $M --out $O --epochs 1 --eval-every 200 --seed 0 "$@" > $OUT/$NM.log 2>&1
-  grep -aE "trainable params|고정 검증셋|EVAL\[final\]|LORA_TRAIN_DONE|OutOfMemory|Traceback" $OUT/$NM.log | tail -4 | sed "s|^|  [$NM] |" | tee -a $SUM; }
+  grep -aE "trainable params|고정 검증셋|EVAL\[final\]|EVALGRP\[final\]|LORA_TRAIN_DONE|OutOfMemory|Traceback" $OUT/$NM.log | tail -4 | sed "s|^|  [$NM] |" | tee -a $SUM; }
 
 log "=== 1. 한 가지씩만 바꾼 판 (효과 분리) ==="
 #     이름            과제   데이터                       바꾼 것 하나
@@ -46,15 +47,14 @@ log "=== 1. 한 가지씩만 바꾼 판 (효과 분리) ==="
 ) > /dev/null 2>&1 &
 ( run $G1 A4_vision    adopt $KH/lora_adopt_all     --targets full --grad-ckpt          # 비전 타워
   run $G1 A5_lr3       adopt $KH/lora_adopt_all     --targets narrow --lr 3e-5          # 학습률
-  run $G1 B0_belief    belief $KH/lora_belief       --targets narrow --balance          # belief 단독 기준
   run $G1 P0_presence  presence $KH/lora_presence_mix2 --targets narrow                 # 부재 단독 기준
 ) > /dev/null 2>&1 &
 wait
 log "=== 2. 조합 (1단계에서 이득 본 것만 합친 판) ==="
 ( run $G0 C1_real_r32  adopt $KH/lora_adopt_allreal --targets narrow --r 32 --alpha 64
-  run $G0 C2_multi     multi $KH/lora_mt            --targets narrow                    # 채택+부재+belief 한 어댑터
+  run $G0 C2_multi     multi $KH/lora_mt            --targets narrow                    # 채택+부재 한 어댑터 (과제 합본 효과만)
 ) > /dev/null 2>&1 &
-( run $G1 C3_multi_r32 multi $KH/lora_mt            --targets narrow --r 32 --alpha 64
+( run $G1 C3_multi_r32 multi $KH/lora_mt            --targets narrow --r 32 --alpha 64   # 채택+부재 (belief 없음)
   run $G1 C4_real_vis  adopt $KH/lora_adopt_allreal --targets full --grad-ckpt
 ) > /dev/null 2>&1 &
 wait

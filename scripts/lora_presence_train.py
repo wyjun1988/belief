@@ -131,6 +131,23 @@ def evaluate(rows, tag):
                     if _y <= _want: _pick = (_th, _t, _f, 0.536 * _t / max(_y, 1e-9), _y); break
                 if _pick: _lines.append("잔량%.0f%%:문턱%.2f 참%.2f 거짓%.2f 순도%.3f" % (100 * _pick[4], _pick[0], _pick[1], _pick[2], _pick[3]))
             print("EVAL[%s] AUC %.3f | %s" % (tag, _auc, " | ".join(_lines)), flush=True)
+    # ── 갈래별 AUC — 고정 검증셋은 채택시뮬·채택실사·부재·belief 를 섞어 담는다.
+    #    하나로 합친 AUC 는 갈래 비율에 끌려다녀 "무엇이 좋아졌나" 를 못 읽는다(2026-09-18).
+    if _mg and any(r.get("_grp") for r in _rows[:a.val_max]):
+        _g = collections.defaultdict(list)
+        for (m, l), r in zip(_mg, _rows[:len(_mg)]): _g[r.get("_grp") or r.get("_task") or "?"].append((m, l))
+        _out = []
+        for k in sorted(_g):
+            _aa = [m for m, l in _g[k] if l == "yes"]; _bb = [m for m, l in _g[k] if l != "yes"]
+            if not _aa or not _bb: _out.append("%s n=%d(한쪽뿐)" % (k, len(_g[k]))); continue
+            _al = sorted(_aa + _bb); _rk2 = {}; _i = 0
+            while _i < len(_al):
+                _j = _i
+                while _j + 1 < len(_al) and _al[_j + 1] == _al[_i]: _j += 1
+                _rk2[_al[_i]] = (_i + _j) / 2 + 1; _i = _j + 1
+            _u = (sum(_rk2[v] for v in _aa) - len(_aa) * (len(_aa) + 1) / 2) / (len(_aa) * len(_bb))
+            _out.append("%s %.3f(n=%d)" % (k, _u, len(_g[k])))
+        print("EVALGRP[%s] %s" % (tag, " · ".join(_out)), flush=True)
     print("EVAL[%s] yes→yes %d/%d (%.2f) · no→no %d/%d (%.2f) · unsure→unsure|yes %d/%d (%.2f) · %s" % (tag, yy, y, yy / max(1, y), nn, n, nn / max(1, n), uu, u, uu / max(1, u), dict(st)), flush=True); model.train(); return yy / max(1, y), nn / max(1, n)
 train, val = load("train"), load("val")
 if a.balance:
