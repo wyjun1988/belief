@@ -37,6 +37,7 @@ FRAME_W = int(os.environ.get("FRAME_W", "768"))
 VTH = float(os.environ.get("VERIFY_TH", "0"))
 VTH2 = float(os.environ.get("VERIFY_TH2", "-1e9"))
 C0_MIN = int(os.environ.get("C0_MIN", "2"))   # c0 최소 수용 장수 — 1이면 단장+depth 투영 허용
+_MOVMIN = float(os.environ.get("MOVABLE_MIN", "0"))   # 질의 대상 이동성 하한 (0=전부 · 0.1=움직일 수 있는 것만, 2026-09-19)
 ABS_GEO = os.environ.get("ABS_GEO", "0") == "1"   # 기하 부재: 기록 좌표가 시야에 든 프레임에서 미검출
 ABS_ANG = float(os.environ.get("ABS_ANG", "35"))
 ABS_DIST = float(os.environ.get("ABS_DIST", "4.0"))
@@ -348,6 +349,10 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         v0 = g["gt0"][oid]
         if oid in _ph: continue                       # 유령 물체(렌더에 없음, §166-25) 는 질의에서 뺀다
         if not v0["room"] or cnt[v0["type"]] > 1 or v0["type"] not in vocab: continue
+        # MOVABLE_MIN: 질의 대상을 **움직일 수 있는 물건**으로 제한한다 (사용자 결정 2026-09-19).
+        # 사용자는 "내 노트북 어디 있지" 를 묻지 "냉장고 어디 있지" 를 묻지 않는다. 종전 ① 837건 중
+        # 812건이 냉장고·욕조·벽난로라 총점이 붙박이에 지배됐다. 0.1 이면 실제로 움직인 11종이 전부 포함된다.
+        if _MOVMIN > 0 and (_MOB.get(v0["type"], 0.0) < _MOVMIN): res["case"]["붙박이제외"] = res["case"].get("붙박이제외", 0) + 1; continue
         if not _roi_ok(oid): continue
         ti = vocab.index(v0["type"])
         mv = [x for x in moves if x["oid"] == oid]
