@@ -15,7 +15,8 @@ export LOC_GEO=${LOC_GEO:-1}
 export LOC_YAW_GT=${LOC_YAW_GT:-1}      # ⚠️ GT 포즈 — 실물 사슬(투표 yaw) 복원 전까지
 export LOC_TRI=${LOC_TRI:-1}
 export ABS_TH=${ABS_TH:-0.100}
-export ABS_GEO=${ABS_GEO:-1}            # 기하 부재 (THOR 챔피언 §115 구성 — 빠져 있었다; v3: ③ 인계율 0.08→0.62)
+export ABS_GEO=${ABS_GEO:-1}
+export MOVABLE_MIN=${MOVABLE_MIN:-0.1}   # ★ 평가 대상 = 움직일 수 있는 물건(이동성 ≥0.1) — 사용자 결정 2026-09-19 (§166-92). 새 시뮬레이터처럼 타입이 이동성 표에 없는 셋은 MOVABLE_MIN=0 을 명시할 것(절반 넘게 걸러지면 eval_online 이 중단한다)            # 기하 부재 (THOR 챔피언 §115 구성 — 빠져 있었다; v3: ③ 인계율 0.08→0.62)
 export ABS_MODE=${ABS_MODE:-both}
 export VERIFY_JSONL=${VERIFY_JSONL:-$B/scores/t1_floor0.8_d40.jsonl}
 export VERIFY_TH=${VERIFY_TH:-2.069}

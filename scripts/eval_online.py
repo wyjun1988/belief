@@ -993,8 +993,9 @@ if _MOVMIN > 0:
     _nex = res["case"].get("붙박이제외", 0); _nkeep = sum(v for k_, v in res["case"].items() if k_ in ("c0", "c2")) + sum(1 for _ in _BRANK) if False else None
     _tot_q = _nex + sum(len(v) for k_, v in res.items() if k_ == "sys2")
     if _tot_q and _nex / _tot_q > 0.5:
-        print("⚠️  MOVABLE_MIN=%.2f 가 질의의 %.0f%% (%d/%d) 를 걸러냈다 — 이동성 표(PRIOR_JSON)에 이 데이터셋 타입이 없어 0 으로 취급됐을 수 있다. "
-              "새 시뮬레이터(벤더가 이미 휴대물품만 골라 준 셋)에는 MOVABLE_MIN 을 쓰지 말 것 (2026-09-20)." % (_MOVMIN, 100.0 * _nex / _tot_q, _nex, _tot_q), flush=True)
+        print("✗ MOVABLE_MIN=%.2f 가 질의의 %.0f%% (%d/%d) 를 걸러냈다 — 이동성 표(PRIOR_JSON)에 이 데이터셋 타입이 없어 0 으로 취급된 것이다. "
+              "새 시뮬레이터(벤더가 이미 휴대물품만 골라 준 셋)는 MOVABLE_MIN=0 을 명시하라. 잘못된 비교를 막기 위해 **중단**한다 (2026-09-20)." % (_MOVMIN, 100.0 * _nex / _tot_q, _nex, _tot_q), flush=True)
+        if os.environ.get("MOVABLE_FORCE", "0") != "1": raise SystemExit(3)
 for c3 in ("①이동없음", "②재촬영", "③belief대상", "③확인기회O", "③확인기회X", "③확인기회X(기록방오류)", "③기록없음",
            "③재방문없음", "④집밖반출"):
     tot = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3)
