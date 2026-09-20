@@ -9301,7 +9301,7 @@ RTX 9-43·9-45 결과. val 25채 1,301 크롭(yes 581 / no 720), 전부 `--balan
 PACK=~/khcache/adopt_infer_v2 BACKEND=hf DEVICE=cuda MODEL=Qwen/Qwen3.5-4B ADAPTER=<어댑터> \
   VERDICT_JSONL=~/khcache/adopt_margin_<이름>.jsonl VERIFY_JSONL=/dev/null A3_PREFIX=/tmp/ python scripts/lora_adopt_infer.py
 # 2) M2: 마진으로 검증기 점수를 거르고 벤치
-python <scratchpad>/apply_margin.py ~/khcache/adopt_margin_<이름>.jsonl 0 ~/khcache/bench-v2full/scores/t1_champ_<이름>.jsonl
+python scripts/apply_adopt_margin.py ~/khcache/adopt_margin_<이름>.jsonl 0 ~/khcache/bench-v2full/scores/t1_champ_<이름>.jsonl   # (2026-09-20 저장소로 이동 — 스크래치패드 원본이 사라져 벤치 4판이 빈손이 됐었다)
 ```
 어댑터 원본: `~/khcache/h100_0917/out/lora_adopt_all_full_4b` (v2+og+c2 · `--targets full` · r16 · 1 에폭).
 
