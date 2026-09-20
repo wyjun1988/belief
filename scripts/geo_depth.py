@@ -21,6 +21,7 @@ z-depth → 수평거리: d = z·sqrt(x̂² + (cosθ − ŷ·sinθ)²), θ=카�
 GT 는 진단 출력 전용 — 정합엔 지도 좌표만 쓴다.
 """
 import glob, json, os
+_HOUSES = set(__import__("os").environ.get("HOUSES", "").split())
 import numpy as np
 from collections import Counter
 from PIL import Image
@@ -58,6 +59,7 @@ else:
 out = open(OUTJ, "w")
 errs = []
 for hd in sorted(glob.glob(ROOT + "/house_*")):
+    if _HOUSES and os.path.basename(os.path.realpath(hd)) not in _HOUSES: continue   # HOUSES="house_0009 …" 로 집 제한 (2026-09-20)
     hn = os.path.basename(os.path.realpath(hd))
     fa, fq = A3P + hn + ".npz", QCP + hn + ".npz"
     if not (os.path.exists(fa) and os.path.exists(fq)): continue

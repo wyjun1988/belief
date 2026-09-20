@@ -9,6 +9,7 @@
 OWL 박스(그 타입 argmax) 크롭 + 넓은 크롭으로 잘라 검증기에 "(A) 타입 (B) 대안 (C) 둘 다 아님" 을 묻는다. s_ac = A − max(B, C).
 산출: {house, oid, type, record, n_map_facing, late:[[t, s_ac_box, s_ac_wide],…], early:[…]} — 판정은 평가기(ABS_VERIFY_JSONL)에서.
 """
+import sys as _s, os as _o; _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__))); from owl_alias import alias   # §166-94
 import glob, json, os, math, collections
 import numpy as np
 from PIL import Image
@@ -32,7 +33,7 @@ def logits(img, q):
     inp = prepare_inputs(processor, images=[img], prompts=[prompt], image_token_index=getattr(cfg, "image_token_index", None))
     out = model(inp["input_ids"], inp["pixel_values"], mask=inp.get("attention_mask"), **{k: v for k, v in inp.items() if k not in ("input_ids", "pixel_values", "attention_mask")})
     lg = out.logits[0, -1]; mx.eval(lg); return lg
-def words(t): return t.replace("_", " ").lower()
+def words(t): return alias(t).replace("_", " ").lower()   # alias: §166-94
 def s_ac(cp, a, b):
     lg = logits(cp, "Which is in this image: (A) %s, (B) %s, or (C) neither? Answer only A, B, or C." % (a, b))
     return float(lg[IDS["A"]] - max(float(lg[IDS["B"]]), float(lg[IDS["C"]])))

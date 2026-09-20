@@ -1,5 +1,7 @@
 # 앵커 국소화를 **실전 검출**로. OWLv2 로 프레임마다 타입별 (최대점수, 패치위치) 를 뽑는다.
 # 기존 캐시는 amax 로 위치를 버려서 앵커를 못 고른다 — 여기서는 argmax 패치도 남긴다.
+import sys as _s, os as _o; _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__))); from owl_alias import alias   # §166-94
+_HOUSES = set(__import__("os").environ.get("HOUSES", "").split())
 import json, glob, os, sys, numpy as np, torch
 from PIL import Image
 from transformers import Owlv2Processor, Owlv2ForObjectDetection
@@ -11,11 +13,12 @@ STRIDE = int(sys.argv[1]) if len(sys.argv) > 1 else 8
 stat = json.load(open("data/thor_static_types.json"))
 tg = set()
 for hd in sorted(glob.glob(ROOT + "/house_*")):
+    if _HOUSES and os.path.basename(os.path.realpath(hd)) not in _HOUSES: continue   # HOUSES="house_0009 …" 로 집 제한 (2026-09-20)
     g = json.load(open(os.path.join(hd, "gt.json")))
     tg |= {v["type"] for v in g["gt0"].values()}
 vocab = sorted(tg) + [s for s in stat if s not in tg]
 nT = len(sorted(tg))
-def sp(t): return "a photo of a " + "".join(" " + c.lower() if c.isupper() else c for c in t).strip()
+def sp(t): return "a photo of a " + "".join(" " + c.lower() if c.isupper() else c for c in alias(t)).strip()   # alias: §166-94 stand→tv stand
 op = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
 on = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to(DEV).eval()
 ti = op(text=[[sp(v) for v in vocab]], images=[Image.new("RGB", (256, 256), (128,)*3)],

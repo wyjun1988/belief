@@ -12,6 +12,8 @@
 이게 ① (안 움직인 물체) 의 **진짜 성적**을 만든다 — SG_INIT=gt 는 초기 기록이
 정답이라 0.99 가 자명하게 나온다(2026-09-01 사용자 지적).
 """
+import sys as _s, os as _o; _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__))); from owl_alias import alias   # §166-94
+_HOUSES = set(__import__("os").environ.get("HOUSES", "").split())
 import glob, json, os
 import numpy as np
 import torch
@@ -40,9 +42,10 @@ op = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
 on = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to(DEV).eval()
 
 def sp(t): return "a photo of a " + "".join(" " + c.lower() if c.isupper() else c
-                                            for c in t).strip()
+                                            for c in alias(t)).strip()
 
 for hd in sorted(glob.glob(ROOT + "/house_*")):
+    if _HOUSES and os.path.basename(os.path.realpath(hd)) not in _HOUSES: continue   # HOUSES="house_0009 …" 로 집 제한 (2026-09-20)
     hn = os.path.basename(os.path.realpath(hd))
     fa = A3P + hn + ".npz"
     if not os.path.exists(fa): continue

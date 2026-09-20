@@ -4,6 +4,7 @@
 지우고(회색) CLIP 으로 검색한 문맥 프레임 + PnP 포즈로 자리를 향한 프레임. 각 프레임에 t·카메라방·확신도·점수를 붙여 jsonl 로 → timeline_verdict_mlx.py 가 영어 서술로 묶어 VLM 에 한 번 묻는다.
   THOR_ROOT=... A3_PREFIX=$B/cache/hs2_a_ QC_PREFIX=$B/cache/hs2_q_ ROOM_JSONL=$B/scores/room_embed_clip.jsonl POSE_JSONL=$B/pnp/pose_all_room.jsonl \\
     INITMAP_FILE=initmap_owl_rc.json OUT_JSONL=$B/scores/timeline_prep.jsonl [SIGHT_TH=0.10 MAX_SIGHT=12 MAX_CTX=10 MAX_OBJ=0 HOUSES=house_0001] python scripts/timeline_prep.py"""
+import sys as _s, os as _o; _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__))); from owl_alias import alias   # §166-94
 import os, sys, json, glob, math, collections, time
 import os as _os_, json as _json_
 _SEL = {}
@@ -25,7 +26,7 @@ DEV = "mps" if torch.backends.mps.is_available() else "cpu"
 from transformers import Owlv2Processor, Owlv2ForObjectDetection, CLIPModel, CLIPProcessor
 opr = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble"); omd = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to(DEV).eval()
 cpr = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16"); cmd = CLIPModel.from_pretrained("openai/clip-vit-base-patch16").to(DEV).eval()
-def words(t): return t.replace("_", " ").lower()
+def words(t): return alias(t).replace("_", " ").lower()   # alias: §166-94
 def owl(img, types, th=0.08):
     inp = opr(text=[["a photo of a " + words(t) for t in types]], images=img, return_tensors="pt").to(DEV)
     with torch.no_grad(): out = omd(**inp)

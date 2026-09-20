@@ -353,6 +353,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         # 사용자는 "내 노트북 어디 있지" 를 묻지 "냉장고 어디 있지" 를 묻지 않는다. 종전 ① 837건 중
         # 812건이 냉장고·욕조·벽난로라 총점이 붙박이에 지배됐다. 0.1 이면 실제로 움직인 11종이 전부 포함된다.
         if _MOVMIN > 0 and (_MOB.get(v0["type"], 0.0) < _MOVMIN): res["case"]["붙박이제외"] = res["case"].get("붙박이제외", 0) + 1; continue
+        # (경고는 집 루프 끝에서 — 아래 _movwarn 참조)
         if not _roi_ok(oid): continue
         ti = vocab.index(v0["type"])
         mv = [x for x in moves if x["oid"] == oid]
@@ -988,6 +989,12 @@ if _BRANK:
     print("  belief 순위(③ 인계 %d건): 1위 %d (%.2f) · 3위 이내 %d (%.2f) · 정답 중앙 순위 %d / 후보 방 중앙 %d · 무작위 1위 기대 %.2f"
           % (_n, _r1, _r1 / _n, _r3, _r3 / _n, sorted(x[0] for x in _BRANK)[_n // 2], sorted(x[1] for x in _BRANK)[_n // 2],
              float(np.mean([1.0 / x[1] for x in _BRANK]))), flush=True)
+if _MOVMIN > 0:
+    _nex = res["case"].get("붙박이제외", 0); _nkeep = sum(v for k_, v in res["case"].items() if k_ in ("c0", "c2")) + sum(1 for _ in _BRANK) if False else None
+    _tot_q = _nex + sum(len(v) for k_, v in res.items() if k_ == "sys2")
+    if _tot_q and _nex / _tot_q > 0.5:
+        print("⚠️  MOVABLE_MIN=%.2f 가 질의의 %.0f%% (%d/%d) 를 걸러냈다 — 이동성 표(PRIOR_JSON)에 이 데이터셋 타입이 없어 0 으로 취급됐을 수 있다. "
+              "새 시뮬레이터(벤더가 이미 휴대물품만 골라 준 셋)에는 MOVABLE_MIN 을 쓰지 말 것 (2026-09-20)." % (_MOVMIN, 100.0 * _nex / _tot_q, _nex, _tot_q), flush=True)
 for c3 in ("①이동없음", "②재촬영", "③belief대상", "③확인기회O", "③확인기회X", "③확인기회X(기록방오류)", "③기록없음",
            "③재방문없음", "④집밖반출"):
     tot = sum(v for (c_, b_, o_), v in ck.items() if c_ == c3)

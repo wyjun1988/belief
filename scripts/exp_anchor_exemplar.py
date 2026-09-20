@@ -17,6 +17,7 @@ exemplar 는 **재생성 없이** 만들 수 있다. live 프레임의 `anch` �
 학습돼 exemplar 에서는 포화한다. 정규화 내적을 그대로 쓴다(§68).
 """
 import glob, json, os, sys
+_HOUSES = set(__import__("os").environ.get("HOUSES", "").split())
 import numpy as np
 import torch
 from PIL import Image
@@ -45,6 +46,7 @@ def feats(ims):
 
 
 for hd in sorted(glob.glob(ROOT + "/house_*")):
+    if _HOUSES and os.path.basename(os.path.realpath(hd)) not in _HOUSES: continue   # HOUSES="house_0009 …" 로 집 제한 (2026-09-20)
     hn = os.path.basename(os.path.realpath(hd))
     out = OUT + hn + ".npz"
     if os.path.exists(out):

@@ -1,6 +1,8 @@
 # **이미지 질의**: 씬그래프를 만들 때 저장해둔 그 물체의 crop 을 exemplar 로 써서
 # 프레임을 고른다. 글자 "머그컵" 이 아니라 **그 머그컵**. 타겟은 사용자 지시대로
 # 집에 같은 타입이 하나뿐인 것만 — 똑같이 생긴 여럿은 우리 타겟이 아니다.
+import sys as _s, os as _o; _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__))); from owl_alias import alias   # §166-94
+_HOUSES = set(__import__("os").environ.get("HOUSES", "").split())
 import json, glob, os, sys, numpy as np, torch
 from PIL import Image
 from collections import Counter
@@ -13,7 +15,7 @@ CK = "google/owlv2-base-patch16-ensemble"
 STRIDE = int(os.environ.get("STRIDE", "8"))
 pr = Owlv2Processor.from_pretrained(CK)
 md = Owlv2ForObjectDetection.from_pretrained(CK).to(DEV).eval()
-def words(t): return "".join(" " + c.lower() if c.isupper() else c for c in t).strip()
+def words(t): return "".join(" " + c.lower() if c.isupper() else c for c in alias(t)).strip()   # alias: §166-94
 
 def feats(ims):
     pv = pr(images=ims, return_tensors="pt")["pixel_values"].to(DEV)
@@ -28,6 +30,7 @@ def feats(ims):
 out = {}
 # 점수는 코사인 유사도(-1..1). 시그모이드 포화 문제로 교체했다.
 for hd in sorted(glob.glob(ROOT + "/house_*")):
+    if _HOUSES and os.path.basename(os.path.realpath(hd)) not in _HOUSES: continue   # HOUSES="house_0009 …" 로 집 제한 (2026-09-20)
     hn = os.path.basename(os.path.realpath(hd))
     g = json.load(open(hd + "/gt.json")); live = {m["t"]: m for m in g["live"]}
     cnt = Counter(v["type"] for v in g["gt0"].values())

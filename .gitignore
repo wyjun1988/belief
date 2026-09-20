@@ -36,3 +36,4 @@ data/thor3
 data/thor3_big
 !packs/*.zip
 scripts/.chain_frozen*.sh
+data/hssd_v2_stand/

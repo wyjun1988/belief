@@ -8,6 +8,8 @@
 타입단일 이동 타겟의 후보(FLOOR 분위 문턱→최신순)를 크롭해 s_ab/s_ac 로짓 기록.
 박스 크롭(bx, BOXES=1 캐시) 우선 — §117. 문턱 판정은 로컬 스윕(§89).
 """
+import sys as _s, os as _o; _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__))); from owl_alias import alias   # §166-94
+_HOUSES = set(__import__("os").environ.get("HOUSES", "").split())
 import glob, json, os
 import numpy as np
 from collections import Counter
@@ -43,10 +45,11 @@ def logits(img_path_or_im, q):
     return lg
 
 
-def words(t): return t.replace("_", " ").lower()
+def words(t): return alias(t).replace("_", " ").lower()   # alias: §166-94 (제로샷 검증기 — 학습 판정기엔 미적용)
 
 out = open(OUTJ, "w")
 for hd in sorted(glob.glob(ROOT + "/house_*")):
+    if _HOUSES and os.path.basename(os.path.realpath(hd)) not in _HOUSES: continue   # HOUSES="house_0009 …" 로 집 제한 (2026-09-20)
     hn = os.path.basename(os.path.realpath(hd))
     fa, fq = A3P + hn + ".npz", QCP + hn + ".npz"
     if not (os.path.exists(fa) and os.path.exists(fq)): continue
