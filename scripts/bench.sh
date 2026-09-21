@@ -22,7 +22,7 @@ export VERIFY_JSONL=${VERIFY_JSONL:-$B/scores/t1_floor0.8_d40.jsonl}
 export VERIFY_TH=${VERIFY_TH:-2.069}
 export VERIFY_TH2=${VERIFY_TH2:-0.887}
 export C0_MIN=${C0_MIN:-2}      # §166-65: 전 타겟 채점에서 ① 거짓 채택 22.6% → 3.0% (1→2)
-export C0_MAXD=${C0_MAXD:-2.5}   # §166-65: 원거리 크롭은 방위 오차가 방을 넘긴다 — 2.5 m 상한
+export C0_MAXD=${C0_MAXD:-4.0}   # 채택 거리 상한 2.5→4.0 (2026-09-21 §166-95 결말: 완화 포즈에서 ② 0.453→0.504 · ① 0.720→0.734 · 해로운 거짓채택 1→1, 합의 2장은 유지)
 export C0_DIVERSE=${C0_DIVERSE:-1}
 export INST_SEL=${INST_SEL:-priorvote}   # 후보 인스턴스 선택: 검증통과 프레임의 방 투표 × 사전확률 (2026-09-20 §166-93 — bearing 대비 HSSD ① +0.014 · c3big +0.039, 두 표본 같은 방향)
 export VIS_GT=${VIS_GT:-0}                # GT 가시성 제거(§152): 인스턴스 선택=검증통과 프레임 투영 다수결 · 부재 분할점=ABS_SPLIT
