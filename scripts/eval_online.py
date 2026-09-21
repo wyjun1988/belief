@@ -141,6 +141,12 @@ if os.environ.get("POSE_JSONL"):
     for _l in open(os.environ["POSE_JSONL"]):
         _d = json.loads(_l); POSE[(_d["house"], int(_d["t"]))] = (_d["apos"], _d["yaw"])
     print("SfM 포즈 %d프레임" % len(POSE), flush=True)
+ABSPOSE = None   # ABS_POSE_JSONL(2026-09-21 §166-102): 부재 자리 확인에만 쓰는 두 번째 포즈 집합(예: 완화 PnP). 기록 선택·채택은 POSE_JSONL 그대로
+if os.environ.get("ABS_POSE_JSONL"):
+    ABSPOSE = {}
+    for _l in open(os.path.expanduser(os.environ["ABS_POSE_JSONL"])):
+        _d = json.loads(_l); ABSPOSE[(_d["house"], int(_d["t"]))] = (_d["apos"], _d["yaw"])
+    print("부재 전용 포즈 %d프레임" % len(ABSPOSE), flush=True)
 if isinstance(PR, dict) and isinstance(PR.get("dest"), dict):
     PR = PR["dest"]          # hssd_move.json 형식 {"dwell","mobility","dest"}
 # ⚠️ 종전엔 thor_prior.json(THOR 어휘)을 HSSD 타입에 적용해 전부 미등록 → 인계분 답이
@@ -205,6 +211,14 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             if _pv: _m["apos"], _m["yaw"] = _pv[0], _pv[1]; _nrep += 1
             else: _m["apos"] = None                   # 포즈 없는 프레임은 기하에서 기권
         print("  %s SfM 포즈 대체 %d/%d" % (hn, _nrep, len(live)), flush=True)
+    _LA = live
+    if ABSPOSE is not None:                       # 부재 경로 전용 포즈: live 를 얕게 복사해 apos·yaw 만 바꾼다
+        _LA = {}
+        for _t, _m in live.items():
+            _m2 = dict(_m); _pv = ABSPOSE.get((hn, int(_t)))
+            if _pv: _m2["apos"], _m2["yaw"] = _pv[0], _pv[1]
+            else: _m2["apos"] = None
+            _LA[_t] = _m2
     _rgf = os.path.join(os.path.realpath(hd), "room_groups.json")
     _gm = json.load(open(_rgf))["groups"] if (os.environ.get("ROOM_GROUPS") == "1" and os.path.exists(_rgf)) else {}
     _grp = lambda r: _gm.get(r, r) if r else r
@@ -816,7 +830,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             spot = _spot
             vis_i = []
             for i in range(len(ts)):
-                m = live[ts[i]]
+                m = _LA[ts[i]]
                 if m.get("yaw") is None or m.get("apos") is None: continue
                 _rg = os.environ.get("ABS_ROOMGATE", "1")     # 1: 임베딩 카메라방 == 기록 방 · pose: PnP 포즈를 평면도 폴리곤에 넣은 방 == 기록 방(포즈 있는 프레임만 이 자리에 오므로 무GT) · 0: 없음
                 if _rg == "1" and arm[i] != record: continue   # 기록=GT 사다리에서 ③ 19건이 여기서 빠졌다(2026-09-07)
@@ -841,7 +855,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
             # 진단: 방 게이트(arm==record) 없이 기하만으로 자리를 본 후반 프레임 — 기록 방이 틀려 X 가 된 경우를 가른다
             _nlate_any = 0
             for i in range(len(ts)):
-                m = live[ts[i]]
+                m = _LA[ts[i]]
                 if ts[i] <= cut or m.get("yaw") is None or m.get("apos") is None: continue
                 dx = spot[0] - m["apos"][0]; dz = spot[2] - m["apos"][1]
                 if np.hypot(dx, dz) > ABS_DIST: continue
@@ -852,7 +866,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 # v4 자리-국소: 프레임 전역 TS 는 오검출 바닥에 묻힌다(진단 §DIAG).
                 # 자리의 예상 화면 x(방위-yaw)와 타겟 패치 위치가 가까우면 "자리에서 잡힘".
                 def _at_spot(i):
-                    m2 = live[ts[i]]
+                    m2 = _LA[ts[i]]
                     dx2 = spot[0] - m2["apos"][0]; dz2 = spot[2] - m2["apos"][1]
                     db2 = (np.degrees(np.arctan2(dx2, dz2)) - m2["yaw"] + 180) % 360 - 180
                     u = FRAME_W / 2 + np.tan(np.radians(np.clip(db2, -80, 80))) * (float(os.environ.get("FRAME_FX", "0")) or FRAME_W / 2)
