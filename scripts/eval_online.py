@@ -61,6 +61,7 @@ if os.environ.get("BUNDLE_JSONL"):
 # 이동성 사전확률(PRIOR_JSON mobility) — 부재 검증기·기하 부재 게이트(ABS_MOB_ALL) 둘 다 쓴다. 2026-09-10 RTX 9-15: ABS_VERIFY_JSONL 없이 ABS_MOB_ALL>0 이면 _MOB 미정의로 죽던 것을 항상 정의
 try: _MOB = json.load(open(os.environ.get("PRIOR_JSON", "data/thor_prior.json"))).get("mobility", {})
 except Exception: _MOB = {}
+_MOB_MISS = set()   # 이동성 표에 없는 질의 타입 — 2026-09-21 §166-97: 표에 없으면 0 처리돼 부재 판정기·MOVABLE_MIN 이 조용히 "붙박이" 로 취급한다
 if not _MOB and float(os.environ.get("ABS_MOB_ALL", "0")) > 0: print("⚠️  PRIOR_JSON mobility 없음 → 이동성 게이트(ABS_MOB_ALL) 비활성", flush=True)
 ABSV = None                                   # ③ 검증기 부재(abs_verify_mlx.py 산출): {(house, oid): {late:[[t, s_box, s_wide, sim, geo]], early:[...]}}
 if os.environ.get("ABS_VERIFY_JSONL"):
@@ -352,6 +353,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         # MOVABLE_MIN: 질의 대상을 **움직일 수 있는 물건**으로 제한한다 (사용자 결정 2026-09-19).
         # 사용자는 "내 노트북 어디 있지" 를 묻지 "냉장고 어디 있지" 를 묻지 않는다. 종전 ① 837건 중
         # 812건이 냉장고·욕조·벽난로라 총점이 붙박이에 지배됐다. 0.1 이면 실제로 움직인 11종이 전부 포함된다.
+        if _MOB and v0["type"] not in _MOB: _MOB_MISS.add(v0["type"])
         if _MOVMIN > 0 and (_MOB.get(v0["type"], 0.0) < _MOVMIN): res["case"]["붙박이제외"] = res["case"].get("붙박이제외", 0) + 1; continue
         # (경고는 집 루프 끝에서 — 아래 _movwarn 참조)
         if not _roi_ok(oid): continue
@@ -992,6 +994,7 @@ if _BRANK:
 if _MOVMIN > 0:
     _nex = res["case"].get("붙박이제외", 0); _nkeep = sum(v for k_, v in res["case"].items() if k_ in ("c0", "c2")) + sum(1 for _ in _BRANK) if False else None
     _tot_q = _nex + sum(len(v) for k_, v in res.items() if k_ == "sys2")
+    if _MOB_MISS: print("⚠️  이동성 표(PRIOR_JSON)에 없는 질의 타입 %d종 → 0 처리(붙박이 취급: MOVABLE_MIN 제외·부재 판정기 건너뜀): %s" % (len(_MOB_MISS), " ".join(sorted(_MOB_MISS))[:200]), flush=True)
     if _tot_q and _nex / _tot_q > 0.5:
         print("✗ MOVABLE_MIN=%.2f 가 질의의 %.0f%% (%d/%d) 를 걸러냈다 — 이동성 표(PRIOR_JSON)에 이 데이터셋 타입이 없어 0 으로 취급된 것이다. "
               "새 시뮬레이터(벤더가 이미 휴대물품만 골라 준 셋)는 MOVABLE_MIN=0 을 명시하라. 잘못된 비교를 막기 위해 **중단**한다 (2026-09-20)." % (_MOVMIN, 100.0 * _nex / _tot_q, _nex, _tot_q), flush=True)
