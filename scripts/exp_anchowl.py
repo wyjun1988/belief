@@ -30,6 +30,7 @@ TX, MK = o.text_embeds, (ti["input_ids"][:, 0] > 0)
 print("어휘 %d (타겟 %d + 정적 %d) · stride %d" % (len(vocab), nT, len(vocab)-nT, STRIDE), flush=True)
 BOXES = os.environ.get("BOXES", "0") == "1"   # 타겟 타입의 argmax 패치 박스 저장 (검증기 박스크롭용)
 for hd in sorted(glob.glob(ROOT + "/house_*")):
+    if _HOUSES and os.path.basename(os.path.realpath(hd)) not in _HOUSES: continue   # HOUSES 집 제한 (2026-09-20, 모든 루프)
     out = OUT + os.path.basename(os.path.realpath(hd)) + ".npz"
     if os.path.exists(out): continue
     lv = sorted(glob.glob(os.path.join(hd, "live", "*.jpg")))[::STRIDE]
