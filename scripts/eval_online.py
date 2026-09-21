@@ -106,6 +106,12 @@ if os.environ.get("GEO_DEPTH"):
         GDEP[(_d["house"], _d["t"], _d["oid"])] = _d["d"]
     print("mono-depth %d표본" % len(GDEP), flush=True)
 IVSC = None      # 인스턴스 선택(방위 투표) 전용 점수 — 채택 필터가 프레임을 1장까지 깎아 투표를 굶긴다(2026-09-16)
+C0VSC = None   # C0_VERIFY_JSONL(2026-09-21 §166-99): 채택(c0) 경로에만 쓰는 검증 파일 — 기록 선택(priorvote)·부재 분할점은 VERIFY_JSONL 그대로
+if os.environ.get("C0_VERIFY_JSONL"):
+    C0VSC = {}
+    for _l in open(os.path.expanduser(os.environ["C0_VERIFY_JSONL"])):
+        _d = json.loads(_l); C0VSC[(_d["house"], _d["oid"])] = _d["scored"]
+    print("채택 경로 검증 파일 분리: %d행" % len(C0VSC), flush=True)
 if os.environ.get("INST_VERIFY_JSONL"):
     IVSC = {}
     for _l in open(os.path.expanduser(os.environ["INST_VERIFY_JSONL"])):
@@ -659,7 +665,7 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                 alt = top                           # 마진 게이트 통과 — 경우 0
         # ── 실검·투영 경로 (있으면 모의 마진 게이트를 대체) ──
         if VSC is not None and _geo is not None:
-            _rr = VSC.get((hn, oid))
+            _rr = (C0VSC if C0VSC is not None else VSC).get((hn, oid))
             if _rr is None:
                 # 실점수 없는 타겟(배포에선 질의 시 채점될 것; 여기선 미채점=대부분 정지).
                 # §104: T4 는 기록이 0.99 로 옳다 — 모의 게이트의 재라우팅은 순손실.
