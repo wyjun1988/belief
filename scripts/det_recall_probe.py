@@ -2,6 +2,7 @@
 """스캔 단계 검출기 재현율 비교 — 지도 프레임의 GT 박스(gt.json map[k].box)마다 텍스트 질의 검출이 IoU≥0.3·점수≥τ 로 맞히는가. 박스 크기별(작은<64px·중간<160·큰).
     THOR_ROOT=data/hssd90_c4e2 DET=owlv2-base FRAMES=40 OUT_JSONL=~/khcache/det_recall_owlb.jsonl python scripts/det_recall_probe.py
 DET: owlv2-base | owlv2-large | gdino-base (transformers). 결과 jsonl + 요약 표. GPU 면 CUDA, 맥이면 MPS."""
+import sys as _s, os as _o; _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__))); from owl_compat import owl_post   # 2026-09-22 API 호환
 import glob, json, os, time, random, collections, re
 import numpy as np, torch
 from PIL import Image
@@ -17,7 +18,7 @@ if DET.startswith("owlv2"):
         inp = proc(text=[["a photo of a " + t for t in types]], images=img, return_tensors="pt").to(dev)
         with torch.no_grad(): out = mdl(**inp)
         W, H = img.size; S = max(W, H)                                   # OWLv2 는 정방 패딩 기준 정규화 박스
-        res = proc.post_process_object_detection(out, threshold=0.0, target_sizes=torch.tensor([[S, S]]).to(dev))[0]
+        res = owl_post(proc, out, threshold=0.0, target_sizes=torch.tensor([[S, S]]).to(dev))[0]
         return [(int(l), float(s), [float(v) for v in b]) for l, s, b in zip(res["labels"].cpu(), res["scores"].cpu(), res["boxes"].cpu())]
 else:
     from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection

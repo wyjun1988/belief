@@ -4,6 +4,7 @@
 **같은 인스턴스일 때만** 문맥 프레임으로 모은다(§166-29). 검증기(abs_verify_mlx.py RETR=anchor)가 이 프레임의 앵커 박스 주변에서 타겟 유무를 묻는다.
   THOR_ROOT=... A3_PREFIX=... ROOM_JSONL=... OUT_JSONL=... [PHANTOM_JSON=...] python scripts/anchor_ctx.py
 행: {house, oid, type, anchor_id, anchor_type, anchor_room, reg_sim, n_room, n_type, frames:[[t, x0,y0,x1,y1, sim], ...]}"""
+import sys as _s, os as _o; _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__))); from owl_compat import owl_post   # 2026-09-22 API 호환
 import os, json, glob, math, time, collections, numpy as np, torch
 from PIL import Image
 from transformers import Owlv2Processor, Owlv2ForObjectDetection, CLIPModel, CLIPProcessor
@@ -22,7 +23,7 @@ for l in open(RJ):
 def owl_multi(im, types):
     inp = op(text=[["a photo of a %s" % t for t in types]], images=[im], return_tensors="pt").to(DEV)
     with torch.no_grad(): out = on(**inp)
-    W, H = im.size; res = op.post_process_object_detection(out, threshold=0.05, target_sizes=torch.tensor([[H, W]]))[0]
+    W, H = im.size; res = owl_post(op, out, threshold=0.05, target_sizes=torch.tensor([[H, W]]))[0]
     by = collections.defaultdict(list)
     for b, s, l in zip(res["boxes"], res["scores"], res["labels"]): by[int(l)].append(([float(v) for v in b], float(s)))
     return {types[l]: sorted(v, key=lambda x: -x[1])[:3] for l, v in by.items()}

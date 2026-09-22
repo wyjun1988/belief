@@ -2,6 +2,7 @@
 """고정 앵커 명부 1단계(kx-venv): 초기맵 인스턴스마다 raw 투영점 중 최고 점수 프레임에서 OWL 박스를 다시 구해 크롭을 저장한다.
   THOR_ROOT=... INITMAP_FILE=initmap_owl_rc.json HOUSES="house_0014" python scripts/anchor_crops.py
 산출: <house>/anchor_crops/NNN.jpg + <house>/anchor_cands.json = [{i, type, pos, room, w, k, box, owl}]. 2단계 anchor_vlm_mlx.py (mlx-venv)."""
+import sys as _s, os as _o; _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__))); from owl_compat import owl_post   # 2026-09-22 API 호환
 import os, json, glob, math, time, numpy as np, torch
 from PIL import Image
 from transformers import Owlv2Processor, Owlv2ForObjectDetection
@@ -12,7 +13,7 @@ op = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble"); on = 
 def owl_box(im, typ):
     inp = op(text=[["a photo of a %s" % typ]], images=[im], return_tensors="pt").to(DEV)
     with torch.no_grad(): out = on(**inp)
-    W, H = im.size; res = op.post_process_object_detection(out, threshold=0.0, target_sizes=torch.tensor([[H, W]]))[0]
+    W, H = im.size; res = owl_post(op, out, threshold=0.0, target_sizes=torch.tensor([[H, W]]))[0]
     if len(res["scores"]) == 0: return None, 0.0
     j = int(res["scores"].argmax()); return [float(v) for v in res["boxes"][j]], float(res["scores"][j])
 def crop(im, b, m=0.25):

@@ -8,6 +8,7 @@ v1(cokey_ctx.py)은 exemplar 캐시(패치 위치 오차 47px·가시성 정밀�
   THOR_ROOT=data/hssd_c3big REC_JSONL=.../rec_sel.jsonl OUT_JSONL=... [HOUSES="house_0001 ..."] [DEVICE=cuda] python scripts/cokey_ctx2.py
 출력: anchor_ctx.jsonl 형식(abs_verify_mlx RETR=anchor). 진단(GT 포즈, 선택엔 미사용): 문맥 프레임 중 자리를 향한 비율.
 """
+import sys as _s, os as _o; _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__))); from owl_compat import owl_post   # 2026-09-22 API 호환
 import os, sys, json, glob, math, time, collections, numpy as np, torch
 from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from owl_alias import alias
@@ -34,7 +35,7 @@ def owl_batch(ims, types, topk=5):
     """이미지 묶음 × 타입 목록 → 각 이미지마다 {type: [(box xyxy px, score), …] 상위 topk}"""
     inp = op(text=[[sp(t) for t in types]] * len(ims), images=ims, return_tensors="pt").to(DEV)
     out = on(**inp); W, H = ims[0].size
-    res = op.post_process_object_detection(out, threshold=OWL_TH, target_sizes=torch.tensor([[H, W]] * len(ims)).to(DEV))
+    res = owl_post(op, out, threshold=OWL_TH, target_sizes=torch.tensor([[H, W]] * len(ims)).to(DEV))
     R = []
     for r in res:
         by = collections.defaultdict(list)
