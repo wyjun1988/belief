@@ -18,6 +18,32 @@ def save(src, dst, box):
         x0, y0, x1, y1 = [max(0, min(W - 1 if i % 2 == 0 else H - 1, int(v))) for i, v in enumerate(box)]
         if x1 > x0 and y1 > y0: ImageDraw.Draw(im).rectangle([x0, y0, x1, y1], outline=(255, 0, 0), width=max(3, W // 150))
     s = W_OUT / float(W); im.resize((W_OUT, max(8, int(H * s)))).save(dst, quality=90); return True
+# ── 장면그래프 문맥(2026-09-22): 기록 자리(INST_SEL_JSONL 의 rec_pos) 반경 CTX_R m 안의 정적 물체 타입 ──
+import math as _math
+_SEL = {}
+if os.environ.get("INST_SEL_JSONL"):
+    for _l in open(os.path.expanduser(os.environ["INST_SEL_JSONL"])):
+        _d = json.loads(_l); _SEL[(_d["house"], _d["oid"])] = _d.get("rec_pos")
+_CTX_R = float(os.environ.get("CTX_R", "2.5")); _CTX_MAX = int(os.environ.get("CTX_MAX", "5"))
+def _words(t): return set(str(t).replace("_", " ").lower().split())
+def _ctx_of(h, oid, typ):
+    if not _SEL or os.environ.get("CTX", "1") == "0": return ""
+    rp = _SEL.get((h, oid))
+    if not rp: return ""
+    st = ((G.get(h) or {}).get("scene_meta") or {}).get("static") or {}
+    tw = _words(typ); near = []
+    for k, v in st.items():
+        p_ = v.get("pos")
+        if not p_ or (_words(v.get("type")) & tw): continue
+        d_ = _math.hypot(p_[0] - rp[0], p_[2] - rp[1])
+        if d_ <= _CTX_R: near.append((d_, str(v.get("type")).replace("_", " ")))
+    if not near: return ""
+    seen = []
+    for _, t_ in sorted(near):
+        if t_ not in seen: seen.append(t_)
+        if len(seen) >= _CTX_MAX: break
+    return "Around the recorded place: " + ", ".join(seen) + "."
+
 G = {}; Z = {}; REF = {}; n = 0
 fo = open(OUT + "/items.jsonl", "w")
 for ln in open(VJ):
@@ -48,5 +74,5 @@ for ln in open(VJ):
         box = [bcx - bw / 2, bcy - bh / 2, bcx + bw / 2, bcy + bh / 2] if (bw > 1 and bh > 1) else None
         f = "%s_c%06d_%s.jpg" % (h, t, oid.replace("|", "_").replace(" ", "_"))
         if not save(src, OUT + "/images/" + f, box): continue
-        fo.write(json.dumps(dict(house=h, oid=oid, type=typ.replace("_", " ").lower(), t=t, i=i, ref=REF[(h, oid)], cand=f)) + "\n"); n += 1
+        fo.write(json.dumps(dict(house=h, oid=oid, type=typ.replace("_", " ").lower(), t=t, i=i, ref=REF[(h, oid)], cand=f, ctx=_ctx_of(h, oid, typ))) + "\n"); n += 1
 fo.close(); print("ADOPT_PACK_DONE %d건 → %s" % (n, OUT))

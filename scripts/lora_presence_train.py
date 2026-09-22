@@ -48,7 +48,11 @@ _KEYS = {"presence": "still_there", "adopt": "same_object", "place": "is_type", 
 KEY = _KEYS.get(a.task, "same_object")
 def _task_of(r): return r.get("_task", a.task) if a.task == "multi" else a.task   # 합본은 행이 자기 과제를 들고 있다
 def _key_of(r): return _KEYS[_task_of(r)]
+_USE_CTX = os.environ.get("USE_CTX", "1") != "0"   # 장면그래프 문맥(ctx) 사용 — 행에 있을 때만 (2026-09-22)
+def _ctx(r): return ((r.get("ctx") or "").strip() + " ") if (_USE_CTX and r.get("ctx")) else ""
 def prompt_of(r):
+    return _ctx(r) + _prompt_body(r)
+def _prompt_body(r):
     n = len(r["cands"]) + 1
     _t = _task_of(r)
     if _t == "belief":

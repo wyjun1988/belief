@@ -21,7 +21,10 @@ MARGIN = float(os.environ.get("MARGIN", "0"))   # log P(yes) - log P(no) 문턱.
 BACKEND = os.environ.get("BACKEND", "hf"); MODEL = os.environ.get("MODEL", "Qwen/Qwen3.5-4B")
 ADAPTER = os.path.expanduser(os.environ.get("ADAPTER", "")); DEV = os.environ.get("DEVICE", "mps")
 def article(t): return ("an " if t[:1] in "aeiou" else "a ") + t
-def prompt_of(typ):
+_USE_CTX = os.environ.get("USE_CTX", "1") != "0"
+def prompt_of(typ, ctx=""):
+    return (((ctx or "").strip() + " ") if (_USE_CTX and ctx) else "") + _prompt_body(typ)
+def _prompt_body(typ):
     return ("Image 1 shows %s at its recorded place in a house (inside the red box). Image 2 is a later view from elsewhere in the same house, "
             "where an object detector proposed %s (inside the red box). The object may have been moved, so a different room is possible. "
             "Judge the object itself, not the room: is the thing in the red box in image 2 the same %s as in image 1? "
@@ -38,10 +41,10 @@ if BACKEND == "hf":
     tok = getattr(proc, "tokenizer", proc)
     _ids = {w: tok.encode(w, add_special_tokens=False) for w in ("yes", "no")}
     YES, NO = _ids["yes"][0], _ids["no"][0]
-    def ask(ims, typ):
+    def ask(ims, typ, ctx=""):
         """생성 대신 **다음 토큰의 yes/no 로그확률**을 읽는다 — 점수가 연속이라 작동점을 나중에 고를 수 있다.
         생성 한 토큰만 받으면 문턱이 모델에 고정돼 ROC 위의 한 점밖에 못 쓴다(2026-09-14)."""
-        msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "image"}, {"type": "text", "text": prompt_of(typ)}]}]
+        msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "image"}, {"type": "text", "text": prompt_of(typ, ctx)}]}]
         try: t = proc.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False, enable_thinking=False)
         except TypeError: t = proc.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
         if "<think>" not in t[-60:]: t = t + ("" if t.endswith("\n") else "\n") + "<think>\n\n</think>\n\n"
@@ -53,8 +56,8 @@ else:
     from mlx_vlm import load, generate
     from mlx_vlm.prompt_utils import apply_chat_template as act
     m, proc = load(MODEL); cfg = m.config
-    def ask(ims, typ):
-        p = act(proc, cfg, prompt_of(typ), num_images=2)
+    def ask(ims, typ, ctx=""):
+        p = act(proc, cfg, prompt_of(typ, ctx), num_images=2)
         return PREFILL + generate(m, proc, p + PREFILL, ims, max_tokens=24, verbose=False)
 def parse(txt):
     m_ = re.search(r"\{.*?\}", txt, re.S)
@@ -65,6 +68,34 @@ def parse(txt):
     if m_: return m_.group(1)
     m_ = re.search(r"\b(yes|no)\b", txt.lower())
     return m_.group(1) if m_ else ""
+# ── 장면그래프 문맥(2026-09-22): INST_SEL_JSONL 의 rec_pos 반경 CTX_R m 안 정적 물체 (PACK 모드는 items 의 ctx 를 쓴다) ──
+import math as _math
+_SEL = {}
+if os.environ.get("INST_SEL_JSONL"):
+    for _l in open(os.path.expanduser(os.environ["INST_SEL_JSONL"])):
+        _d = json.loads(_l); _SEL[(_d["house"], _d["oid"])] = _d.get("rec_pos")
+_CTX_R = float(os.environ.get("CTX_R", "2.5")); _CTX_MAX = int(os.environ.get("CTX_MAX", "5")); _GT = {}
+def _words(t): return set(str(t).replace("_", " ").lower().split())
+def _ctx_of(h, oid, typ):
+    if not _SEL or not _USE_CTX: return ""
+    rp = _SEL.get((h, oid))
+    if not rp: return ""
+    if h not in _GT:
+        _p = os.path.join(ROOT, h, "gt.json"); _GT[h] = json.load(open(_p)) if os.path.exists(_p) else {}
+    st = ((_GT[h] or {}).get("scene_meta") or {}).get("static") or {}
+    tw = _words(typ); near = []
+    for k, v in st.items():
+        p_ = v.get("pos")
+        if not p_ or (_words(v.get("type")) & tw): continue
+        d_ = _math.hypot(p_[0] - rp[0], p_[2] - rp[1])
+        if d_ <= _CTX_R: near.append((d_, str(v.get("type")).replace("_", " ")))
+    if not near: return ""
+    seen = []
+    for _, t_ in sorted(near):
+        if t_ not in seen: seen.append(t_)
+        if len(seen) >= _CTX_MAX: break
+    return "Around the recorded place: " + ", ".join(seen) + "."
+
 def boxed(path, box, w_out=IMG_W):
     im = Image.open(path).convert("RGB"); W, H = im.size
     if box:
@@ -83,7 +114,7 @@ if PACK:
             rf = it["ref"]
             if rf not in _cache: _cache[rf] = Image.open(os.path.join(PACK, "images", rf)).convert("RGB")
             cd = Image.open(os.path.join(PACK, "images", it["cand"])).convert("RGB")
-            margin = ask([_cache[rf], cd], it["type"])
+            margin = ask([_cache[rf], cd], it["type"], it.get("ctx", ""))
         except Exception as ex:
             st["오류"] += 1; fv.write(json.dumps(dict(house=it["house"], oid=it["oid"], t=it["t"], i=it.get("i"), ans="", err=str(ex)[:120])) + "\n"); continue
         a = "yes" if margin >= MARGIN else "no"; st[a] += 1; n += 1
@@ -125,7 +156,7 @@ for ln in open(VJ):
         if not os.path.exists(p): keep.append(e); continue
         W = float(Image.open(p).size[0]); bcx, bcy, bw, bh = [float(x) * W for x in z["bx"][i, ti]]
         box = [bcx - bw / 2, bcy - bh / 2, bcx + bw / 2, bcy + bh / 2] if (bw > 1 and bh > 1) else None
-        try: margin = ask([ref, boxed(p, box)], typ.replace("_", " ").lower())
+        try: margin = ask([ref, boxed(p, box)], typ.replace("_", " ").lower(), _ctx_of(h, oid, typ))
         except Exception as ex:
             st["오류"] += 1; fv.write(json.dumps(dict(house=h, oid=oid, t=t, ans="", err=str(ex)[:120])) + "\n")
             if KEEP_UNJ: keep.append(e)
