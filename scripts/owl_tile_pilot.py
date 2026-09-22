@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OWL 소형 물체 타일 검출 파일럿 (§166-98(c) 4번, 2026-09-21).
+"""OWL 소형 물체 검출 파일럿 — 타일 분할과 더 큰 검출기 (§166-98(c) 4번, 2026-09-21 · OWL_MODEL 추가 2026-09-22).
 
 ② 진짜 손실 중 '게이트 통과 ≤1' 인 물체에 대해, 이동 후 GT 가시 앵커 프레임에서
   전체 프레임(768, OWL 이 960 으로 키움) vs 2×2 타일(448, 겹침 128) vs 3×3 타일(384, 겹침 192)
@@ -12,8 +12,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from owl_alias i
 V = os.path.expanduser(os.environ.get("BENCH_DIR", "~/khcache/bench-v2full")); ROOT = os.environ.get("THOR_ROOT", "data/hssd_v2")
 DEV = "mps" if torch.backends.mps.is_available() else "cpu"
 from transformers import Owlv2Processor, Owlv2ForObjectDetection
-op = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
-on = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to(DEV).eval()
+OWL_MODEL = os.environ.get("OWL_MODEL", "google/owlv2-base-patch16-ensemble")   # large: google/owlv2-large-patch14-ensemble (2026-09-22 9-58)
+op = Owlv2Processor.from_pretrained(OWL_MODEL)
+on = Owlv2ForObjectDetection.from_pretrained(OWL_MODEL).to(DEV).eval()
+print("검출기 %s · 장치 %s" % (OWL_MODEL, DEV), flush=True)
 def sp(t): return "a photo of a " + "".join(" " + c.lower() if c.isupper() else c for c in alias(t)).strip()
 def text_embed(typ):
     ti = op(text=[[sp(typ)]], images=[Image.new("RGB", (256, 256), (128,)*3)], return_tensors="pt").to(DEV)
