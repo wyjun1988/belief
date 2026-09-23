@@ -255,12 +255,19 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
         _stp = {k: ([v["pos"][0], v["pos"][2]] if len(v["pos"]) == 3 else v["pos"])
                 for k, v in sm["static"].items() if v.get("pos")}
         _zx = np.load(AXP + hn + ".npz", allow_pickle=True) if os.path.exists(AXP + hn + ".npz") else None
+        # 2026-09-24 §166-112: 예시(exemplar) 캐시가 없으면 _geo 가 통째로 None 이 되어 채택·투영·삼각측량이 전부 꺼졌다
+        #   (새 시뮬은 라이브에 anch 가 없어 예시 캐시가 안 만들어진다 → 4·5차분 ② 채택 0건). 예시는 앵커 방위 가설에만 쓰이고
+        #   PnP 포즈 경로(LOC_YAW_GT=1)는 쓰지 않으므로, 없으면 빈 배열로 두고 기하는 세운다.
+        if _stp and _zx is None:
+            _axids = []; _XS = np.zeros((len(ts), 0)); _XSc = _XS; _XPp = np.zeros((len(ts), 0), dtype=int)
+            if not globals().get("_WARN_NOAX"): print("⚠️  예시 캐시 없음 → 앵커 방위 가설 없이 기하만 세운다(포즈 경로는 영향 없음)", flush=True); globals()["_WARN_NOAX"] = 1
         if _stp and _zx is not None:
             _axids = [a for a in list(_zx["anch"]) if a in sm["static"]]
             _cols = [k for k, a in enumerate(list(_zx["anch"])) if a in sm["static"]]
             _XS = _zx["s"][:, _cols]
             _XSc = _XS - np.median(_XS, axis=0, keepdims=True)
             _XPp = _zx["p"][:, _cols]
+        if _stp:
             _byt = {}
             for k, v in sm["static"].items():
                 if v.get("pos"): _byt.setdefault(v["type"], []).append(v["pos"])
