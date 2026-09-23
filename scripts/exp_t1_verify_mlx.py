@@ -10,6 +10,7 @@
 """
 import sys as _s, os as _o; _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__))); from owl_alias import alias   # §166-94
 _HOUSES = set(__import__("os").environ.get("HOUSES", "").split())
+_ONLY_TYPES = set(__import__("os").environ.get("ONLY_TYPES", "").split(","))-{""}
 import glob, json, os
 import numpy as np
 from collections import Counter
@@ -66,7 +67,8 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
     for j, oid in enumerate(QT):
         v0 = g["gt0"].get(oid)
         if not v0 or not v0["room"] or cnt[v0["type"]] > 1 or v0["type"] not in vocab: continue
-        if oid not in moves and os.environ.get("ALL_TARGETS", "0") != "1": continue   # 2026-09-13(§166-60): 기본은 GT 이동 타겟만 채점 = ① 은 채택 경로가 구조적으로 못 켜진다(거짓 채택 0 이 공짜). ALL_TARGETS=1 이면 전 타겟 채점(배포 조건)
+        if oid not in moves and os.environ.get("ALL_TARGETS", "0") != "1": continue
+        if _ONLY_TYPES and v0["type"] not in _ONLY_TYPES: continue   # ONLY_TYPES="stand" 등 — 일부 타입만 다시 채점 (2026-09-23 9-65)   # 2026-09-13(§166-60): 기본은 GT 이동 타겟만 채점 = ① 은 채택 경로가 구조적으로 못 켜진다(거짓 채택 0 이 공짜). ALL_TARGETS=1 이면 전 타겟 채점(배포 조건)
         ti = vocab.index(v0["type"])
         TS = QS[:, j] + STx[:, j]
         th = np.quantile(TS, FLOOR)
