@@ -46,3 +46,12 @@ run_newsim4(){ tag=$1; shift; _bench "$tag" $N4 \
   PLACE_JSONL=$HOME/khcache/bench-ns4/place_margin.jsonl PLACE_W=2 VERIFY_JSONL=$N4/scores/t1_floor0.8_d40.jsonl \
   BENCH_DIR=$N4 THOR_ROOT=data/newsim4 A3_PREFIX=$N4/cache/hs2_a_ QC_PREFIX=$N4/cache/hs2_q_ AX_PREFIX=$N4/cache/hs2_x_ \
   GEO_DEPTH=$N4/scores/geo_depth_nogt.jsonl ROOM_GROUPS=1 ROOM_JSONL=$N4/scores/room_embed_clip.jsonl POSE_JSONL=$N4/pnp/pose_all.jsonl "$@"; }
+
+# 새 시뮬 5차분 15채 (3장면 × 5에피) — 4차분 표준 구성과 같음. 캐시·초기맵·기록자리 마진은 프로6000(9-59, CUDA), PnP·검증·거리는 M2
+N5=$HOME/khcache/bench-ns5
+run_newsim5(){ tag=$1; shift; _bench "$tag" $N5 \
+  PRIOR_JSON=data/newsim_move.json MOVABLE_MIN=0.1 FRAME_W=1280 INITMAP_FILE=initmap_owl.json INST_ANG=10 ROI_DIST=0 ROI_BOX=0 \
+  PLACE_JSONL=$N5/place_margin.jsonl PLACE_W=2 VERIFY_JSONL=$N5/scores/t1_floor0.8_d40.jsonl \
+  BENCH_DIR=$N5 THOR_ROOT=data/newsim5 A3_PREFIX=$N5/cache/hs2_a_ QC_PREFIX=$N5/cache/hs2_q_ AX_PREFIX=$N5/cache/hs2_x_ \
+  GEO_DEPTH=$N5/scores/geo_depth_nogt.jsonl ROOM_GROUPS=1 ROOM_JSONL=$N5/scores/room_embed_clip.jsonl POSE_JSONL=$N5/pnp/pose_all.jsonl "$@"; }
+

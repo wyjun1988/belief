@@ -61,7 +61,7 @@ t964(){ log "── 9-64 부재 판정기 재학습"; untar rtx_9_64_pres.tar.gz
     log "  $AD 판정 분포: $($PY -c "import json,collections,sys; print(dict(collections.Counter(json.loads(l).get('at_spot') for l in open('$F'))))" 2>/dev/null)"
   done; }
 
-t960b; t964
+[ "${SKIP_960B:-0}" = 1 ] && log "── 9-60b 건너뜀(SKIP_960B=1)" || t960b; t964
 [ $DRY = 1 ] && { log "=== DRY 끝 — ✗ 줄이 없으면 DRY=0 으로 실행 ==="; exit 0; }
 ( cd $O && tar czf h100_0923_all.tar.gz h100_0923_summary.txt *.log *.jsonl 2>/dev/null )
 log "=== 끝 → $O/h100_0923_all.tar.gz 를 드라이브에 ==="
