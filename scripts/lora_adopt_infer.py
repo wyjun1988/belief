@@ -11,7 +11,7 @@
 import os, json, re, time, glob, collections, numpy as np
 from PIL import Image, ImageDraw
 ROOT = os.environ.get("THOR_ROOT", "data/hssd_v2")
-VJ = os.path.expanduser(os.environ["VERIFY_JSONL"]); A3P = os.path.expanduser(os.environ["A3_PREFIX"])
+VJ = os.path.expanduser(os.environ.get("VERIFY_JSONL", "")); A3P = os.path.expanduser(os.environ.get("A3_PREFIX", ""))   # PACK 모드는 둘 다 안 쓴다 (9/23: PACK 만 준 실행이 KeyError 로 죽었다)
 OUT = os.path.expanduser(os.environ.get("OUT_JSONL", "/tmp/t1_adopt_real.jsonl"))
 VERD = os.path.expanduser(os.environ.get("VERDICT_JSONL", OUT.replace(".jsonl", "_verdict.jsonl")))
 VTH, VTH2 = float(os.environ.get("VERIFY_TH", "2.069")), float(os.environ.get("VERIFY_TH2", "0.887"))
@@ -103,6 +103,7 @@ def boxed(path, box, w_out=IMG_W):
         if x1 > x0 and y1 > y0: ImageDraw.Draw(im).rectangle([x0, y0, x1, y1], outline=(255, 0, 0), width=max(3, W // 150))
     s = w_out / float(W); return im.resize((w_out, max(8, int(H * s))))
 PACK = os.path.expanduser(os.environ.get("PACK", ""))
+if not PACK and not (VJ and A3P): raise SystemExit("✗ PACK 모드가 아니면 VERIFY_JSONL · A3_PREFIX 가 필요하다")
 if PACK:
     # 묶음 모드(GPU 서버용): adopt_pack.py 산출물만 있으면 원본 데이터셋이 필요 없다.
     st = collections.Counter(); t0 = time.time(); n = 0

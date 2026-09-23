@@ -32,12 +32,12 @@ run_c3big(){ tag=$1; shift; _bench "$tag" $C3 \
   BENCH_DIR=$C3 THOR_ROOT=data/hssd_c3big A3_PREFIX=$C3/cache/hs2_a_ QC_PREFIX=$C3/cache/hs2_q_ AX_PREFIX=$C3/cache/hs2_x_ \
   VERIFY_JSONL=$C3/scores/t1_m0.jsonl GEO_DEPTH=$C3/scores/geo_depth_all.jsonl ROOM_GROUPS=1 ROOM_JSONL=$C3/scores/room_embed_clip.jsonl "$@"; }
 
-# c2set 69채 — ② 확인용 (9/22 기준선: k8 재군집 + 완화 PnP)
+# c2set 69채 — ② 확인용 (9/23 기준선: k8 재군집 + 완화 PnP + 9-61 전 프레임 마진으로 만든 필터, 마진 없으면 버림)
 C2=$HOME/khcache/bench-c2set
 run_c2set(){ tag=$1; shift; _bench "$tag" $C2 \
   INITMAP_FILE=initmap_k8.json INST_ANG=10 ROI_DIST=0 ROI_BOX=0 C0_MAXD=4.0 POSE_JSONL=$C2/pnp2/pose_all.jsonl \
   BENCH_DIR=$C2 THOR_ROOT=data/hssd_c2set A3_PREFIX=$C2/cache/hs2_a_ QC_PREFIX=$C2/cache/hs2_q_ AX_PREFIX=$C2/cache/hs2_x_ \
-  VERIFY_JSONL=$C2/scores/t1_champ_allfull.jsonl GEO_DEPTH=$C2/scores/geo_depth_all.jsonl ROOM_GROUPS=1 ROOM_JSONL=$C2/scores/room_embed_clip.jsonl "$@"; }
+  VERIFY_JSONL=$C2/scores/t1_champ_fix.jsonl GEO_DEPTH=$C2/scores/geo_depth_all.jsonl ROOM_GROUPS=1 ROOM_JSONL=$C2/scores/room_embed_clip.jsonl "$@"; }
 
 # 새 시뮬 4차분 10채 — 새 시뮬 이동성 표 · 1280 · 기록자리 판정기 PLACE_W 2
 N4=$HOME/khcache/bench-ns4b
