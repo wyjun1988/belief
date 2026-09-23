@@ -15,6 +15,7 @@ ap.add_argument("margin"); ap.add_argument("th", type=float); ap.add_argument("o
 ap.add_argument("--verify", default=os.path.expanduser("~/khcache/bench-v2full/scores/t1_all.jsonl"))
 ap.add_argument("--cache-prefix", default=os.path.expanduser("~/khcache/bench-v2full/cache/hs2_a_"))
 ap.add_argument("--vth", type=float, default=2.069); ap.add_argument("--vth2", type=float, default=0.887)
+ap.add_argument("--missing", choices=["keep", "drop"], default="keep", help="마진 없는 제로샷 통과 프레임 처리 — keep 은 판정기 없이 통과(종전 동작), drop 은 버림 (2026-09-23 §166-108)")
 a = ap.parse_args()
 mg = {}
 for ln in open(os.path.expanduser(a.margin)):
@@ -33,8 +34,12 @@ with open(os.path.expanduser(a.out), "w") as fo:
             i = int(e[0])
             if i >= len(ts): keep.append(e); continue
             m = mg.get((h, oid, int(ts[i])))
-            if m is None: keep.append(e); st["마진없음"] += 1; continue
+            if m is None:
+                st["마진없음"] += 1
+                if a.missing == "keep": keep.append(e)
+                continue
             if m >= a.th: keep.append(e); st["통과"] += 1
             else: st["버림"] += 1
         d["scored"] = keep; fo.write(json.dumps(d) + "\n")
+if st.get("마진없음"): print("⚠️  마진 없는 제로샷 통과 프레임 %d장 → %s (판정기를 거치지 않았다 — 마진 파일이 이 검증 파일의 걸은 프레임으로 만들어졌는지 확인)" % (st["마진없음"], "통과시킴" if a.missing == "keep" else "버림"), flush=True)
 print("APPLY_DONE 문턱 %+.2f · %s → %s" % (a.th, dict(st), a.out), flush=True)
