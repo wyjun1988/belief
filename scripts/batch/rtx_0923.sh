@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 프로6000 배치 (2026-09-23) — 추론만, 약 1~1.5시간. 순서: 9-61 → 9-59(나머지) → 9-58
+# 프로6000 배치 (2026-09-23, 9/24 에 9-66 추가) — 추론만. 순서: 9-61 → 9-59(나머지) → 9-58 → 9-66. 끝난 것은 건너뛴다
 #   cd ~/work/khronos && git pull && KC=~/work/khcache bash scripts/batch/rtx_0923.sh          # 실행
 #   DRY=1 KC=~/work/khcache bash scripts/batch/rtx_0923.sh                                      # 입력만 점검(GPU 안 씀)
 # 끝나면 $KC/out_0923/rtx_0923_all.tar.gz 하나만 드라이브에 올리면 된다. 작업별 묶음도 각자 남는다(중간에 끊겨도 됨).
@@ -43,7 +43,18 @@ t958(){ log "── 9-58 OWLv2-large"; untar rtx_9_54_tile.tar.gz $KC/rtx_9_54_t
     $PY scripts/owl_tile_pilot.py > $O/owl_large_0923.log 2>&1
   log "  $(grep -E '합계|물체 단위' $O/owl_large_0923.log | tr '\n' ' ' | cut -c1-160)"; }
 
-t961; t959; t958
+# ── 9-66 새 시뮬 4·5차분 채택 판정 마진 (걸은 프레임 전부 · 챔피언 어댑터) ──
+#   새 시뮬에서 채택 기하를 되살렸더니(§166-112) ② 는 +0.17 오르지만 ① 해로운 채택이 쏟아진다(판정기 필터가 없어서).
+t966(){ log "── 9-66 새 시뮬 채택 판정"; untar rtx_9_66_adopt_pack_newsim.tar.gz $KC/adopt_pack_ns5
+  need $KC/adopt_pack_ns4/items.jsonl $KC/adopt_pack_ns5/items.jsonl $KC/lora_adopt_all_full_4b/adapter_config.json || return
+  [ $DRY = 1 ] && { log "  (DRY) 입력 OK"; return; }
+  for NS in 4 5; do F=$O/adopt_margin_ns${NS}_0924.jsonl; [ -s $F ] && { log "  ns${NS} 이미 있음"; continue; }
+    PACK=$KC/adopt_pack_ns${NS} ADAPTER=$KC/lora_adopt_all_full_4b BACKEND=hf MODEL=Qwen/Qwen3.5-4B DEVICE=cuda USE_CTX=0 \
+      VERDICT_JSONL=$F $PY scripts/lora_adopt_infer.py > $O/infer_ns${NS}_0924.log 2>&1
+    log "  ns${NS}: $(tail -1 $O/infer_ns${NS}_0924.log | cut -c1-110)"; done
+  tar czf $O/rtx_9_66_result.tar.gz -C $O adopt_margin_ns4_0924.jsonl adopt_margin_ns5_0924.jsonl infer_ns4_0924.log infer_ns5_0924.log 2>/dev/null; }
+
+t961; t959; t958; t966
 [ $DRY = 1 ] && { log "=== DRY 끝 — ✗ 줄이 없으면 DRY=0 으로 실행 ==="; exit 0; }
 ( cd $O && tar czf rtx_0923_all.tar.gz rtx_0923_summary.txt *.log *.jsonl rtx_9_59_ns5_out.tar.gz rtx_9_59_ns5_initmap.tar.gz 2>/dev/null )
 log "=== 끝 → $O/rtx_0923_all.tar.gz 를 드라이브에 ==="
