@@ -106,6 +106,12 @@ if os.environ.get("GEO_DEPTH"):
         GDEP[(_d["house"], _d["t"], _d["oid"])] = _d["d"]
     print("mono-depth %d표본" % len(GDEP), flush=True)
 IVSC = None      # 인스턴스 선택(방위 투표) 전용 점수 — 채택 필터가 프레임을 1장까지 깎아 투표를 굶긴다(2026-09-16)
+POLDEC = None   # POLICY_DECISIONS(2026-09-24): 질의별 학습된 판단 결정 파일
+if os.environ.get("POLICY_DECISIONS"):
+    POLDEC = {}
+    for _l in open(os.path.expanduser(os.environ["POLICY_DECISIONS"])):
+        _d = json.loads(_l); POLDEC[(_d["house"], _d["oid"])] = _d
+    print("학습된 판단 결정 %d행" % len(POLDEC), flush=True)
 C0VSC = None   # C0_VERIFY_JSONL(2026-09-21 §166-99): 채택(c0) 경로에만 쓰는 검증 파일 — 기록 선택(priorvote)·부재 분할점은 VERIFY_JSONL 그대로
 if os.environ.get("C0_VERIFY_JSONL"):
     C0VSC = {}
@@ -815,8 +821,23 @@ for hd in sorted(glob.glob(ROOT + "/house_*")):
                     # 투영(포즈+거리)이 없거나 기록 방으로 떨어졌을 때: 검증 통과 프레임의 **카메라방**(임베딩) 다수결이 기록과 다르면 그 방을 채택 (2026-09-07 시험)
                     _cr = Counter(arm[i2] for i2 in _pick if arm[i2]); _top = _cr.most_common(1)
                     if _top and _top[0][1] >= min(2, C0_MIN) and _top[0][0] != record: alt = _top[0][0]
+                if POLDEC is not None and (hn, oid) in POLDEC:
+                    # 학습된 판단(policy_decide.py): 손규칙의 alt 를 모델 결정으로 바꾼다 — 바꿈이면 후보 방, 아니면 기록 유지 (2026-09-24)
+                    _pd = POLDEC[(hn, oid)]; alt = _pd["cand"] if (_pd["switch"] and _pd["cand"] != record) else None
                 if os.environ.get("C0_DIAG") == "1" and "_dg" in dir():
                     _dg.update(alt=alt, geo=_geo is not None); print("C0_DIAG " + json.dumps(_dg, ensure_ascii=False), flush=True)
+                if os.environ.get("POLICY_DUMP"):
+                    # 학습된 판단(정책) 데이터 — 채택 관문을 다 거친 프레임마다 투영 방·거리·카메라방·제로샷 점수·광선 유무 (2026-09-24)
+                    _fr = []
+                    for i2, _s2 in _pas:
+                        _e2 = next((e for e in (_rr or []) if int(e[0]) == i2), None)
+                        _d2 = GDEP.get((hn, int(ts[i2]), oid)) if GDEP is not None else None
+                        _pr2 = _geo_room_d(i2) if _geo is not None else None
+                        _fr.append(dict(t=int(ts[i2]), proj=_pr2, dist=(round(float(_d2), 2) if _d2 is not None else None), cam=(str(arm[i2]) if arm[i2] else None),
+                                        s_ab=(float(_e2[1]) if _e2 else None), s_ac=(float(_e2[2]) if (_e2 and len(_e2) > 2) else None), ray=bool(_geo_ray(i2)) if _geo is not None else False))
+                    with open(os.environ["POLICY_DUMP"], "a") as _pf:
+                        _pf.write(json.dumps(dict(house=hn, oid=oid, type=v0["type"], record=record, alt=alt, n_rr=len(_rr or []),
+                                                  pick=[int(ts[i2]) for i2 in _pick], frames=_fr), ensure_ascii=False) + "\n")
         if record is None:
             record = max(((_prior(v0["type"], rt[r])/max(nrt[rt[r]],1), r)
                           for r in rids))[1]
